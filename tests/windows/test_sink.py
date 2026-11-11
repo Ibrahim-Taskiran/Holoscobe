@@ -54,6 +54,7 @@ def test_epoch_update_releases_and_invalidates(sink):
     (ActionKind.WINDOW_DRAG_MOVE, "windows", "drag_move", (WindowTarget(10, 20), 12, 34)),
     (ActionKind.WINDOW_DRAG_END, "windows", "drag_end", (WindowTarget(10, 20),)),
     (ActionKind.WINDOW_MINIMIZE, "windows", "minimize", (WindowTarget(10, 20),)),
+    (ActionKind.WINDOW_RESTORE, "windows", "restore", (WindowTarget(10, 20),)),
     (ActionKind.WINDOW_TOGGLE_MAXIMIZE, "windows", "toggle_maximize", (WindowTarget(10, 20),)),
     (ActionKind.WINDOW_MOVE_TO_OTHER_MONITOR, "windows", "move_to_other_monitor", (WindowTarget(10, 20),)),
     (ActionKind.WINDOW_CLOSE, "windows", "close_window", (WindowTarget(10, 20),)),

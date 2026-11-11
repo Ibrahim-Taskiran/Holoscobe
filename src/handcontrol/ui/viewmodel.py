@@ -137,6 +137,7 @@ ACTION_KIND_LABELS_TR: dict[ActionKind, str] = {
     ActionKind.WINDOW_DRAG_MOVE: "Pencereyi Taşı",
     ActionKind.WINDOW_DRAG_END: "Pencere Sürüklemeyi Bitir",
     ActionKind.WINDOW_MINIMIZE: "Pencereyi Küçült",
+    ActionKind.WINDOW_RESTORE: "Son Küçültülen Pencereyi Geri Aç",
     ActionKind.WINDOW_TOGGLE_MAXIMIZE: "Pencereyi Büyüt/Geri Yükle",
     ActionKind.WINDOW_MOVE_TO_OTHER_MONITOR: "Pencereyi Diğer Ekrana Taşı",
     ActionKind.WINDOW_CLOSE: "Pencereyi Kapat",

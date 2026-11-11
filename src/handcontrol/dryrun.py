@@ -34,6 +34,8 @@ def describe_action(action: Action) -> str:
         return f"Pencereyi bırak{tgt}"
     if k is ActionKind.WINDOW_MINIMIZE:
         return f"Pencereyi simge durumuna küçült{tgt}"
+    if k is ActionKind.WINDOW_RESTORE:
+        return f"Son küçültülen pencereyi geri aç{tgt}"
     if k is ActionKind.WINDOW_TOGGLE_MAXIMIZE:
         return f"Pencereyi büyüt / geri al{tgt}"
     if k is ActionKind.WINDOW_MOVE_TO_OTHER_MONITOR:

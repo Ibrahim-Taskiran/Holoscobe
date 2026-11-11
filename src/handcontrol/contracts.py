@@ -160,6 +160,7 @@ class ActionKind(Enum):
     WINDOW_DRAG_MOVE = "window_drag_move"           # target, x, y
     WINDOW_DRAG_END = "window_drag_end"             # target
     WINDOW_MINIMIZE = "window_minimize"             # target
+    WINDOW_RESTORE = "window_restore"               # restore a previously minimized target
     WINDOW_TOGGLE_MAXIMIZE = "window_toggle_maximize"
     WINDOW_MOVE_TO_OTHER_MONITOR = "window_move_to_other_monitor"
     WINDOW_CLOSE = "window_close"                   # normal close request only

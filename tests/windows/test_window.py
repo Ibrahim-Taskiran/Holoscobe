@@ -149,6 +149,15 @@ def test_close_only_posts_normal_close(window):
     assert api.calls == [("post", (10, 0x10, 0, 0))]
 
 
+def test_restore_uses_latched_identity(window):
+    adapter, api, target = window
+    assert adapter.restore(target)
+    assert api.calls == [('show', (10, 9))]
+    api.pid = 101
+    assert not adapter.restore(target)
+    assert len(api.calls) == 1
+
+
 def test_drag_end_uses_latest_queued_position(window):
     adapter, api, target = window
     assert adapter.drag_begin(target, -800, 100)

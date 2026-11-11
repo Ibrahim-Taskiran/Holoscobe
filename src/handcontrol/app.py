@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict, replace
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QToolBar
 
 from handcontrol.config import SettingsStore, CalibrationBounds, validate
 from handcontrol.contracts import CameraState, ControlState, Mode
@@ -276,6 +276,21 @@ def main(argv=None) -> int:
     window = QMainWindow()
     window.setWindowTitle('Holoscobe' + (' — Canlı' if args.live else ' — Komutsuz Deneme'))
     window.setCentralWidget(CameraPreviewWidget(bridge))
+    controls = QToolBar('Kontrol', window)
+    controls.setMovable(False)
+    activate = QPushButton('Sürdür')
+    activate.clicked.connect(runtime.toggle_pause)
+    controls.addWidget(activate)
+    status = QLabel('Duraklatıldı')
+    controls.addWidget(status)
+    window.addToolBar(controls)
+    def update_controls(state):
+        activate.setText(state.pause_resume_action_text)
+        status.setText(f'  {state.control_state_label_tr} | {state.mode_label_tr} | {state.camera_state_label_tr}')
+        window.statusBar().showMessage(state.error_text or 'Önce Sürdür. Sağ yumruk: küçült | Sol yumruk: geri aç (350 ms tut).')
+    bridge.state_changed.connect(update_controls)
+    update_controls(bridge.state)
+    window.statusBar().showMessage('Önce Sürdür. Sağ yumruk: küçült | Sol yumruk: son pencereyi geri aç (350 ms tut).')
     tray = HandControlTray(bridge, window)
     overlay = OverlayWindow(bridge)
     toast = FeedbackToast(bridge, auto_show_window=True)

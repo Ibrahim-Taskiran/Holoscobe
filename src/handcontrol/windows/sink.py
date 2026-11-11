@@ -81,6 +81,7 @@ class WindowsActionSink:
                 routes = {
                     ActionKind.WINDOW_DRAG_END: self.windows.drag_end,
                     ActionKind.WINDOW_MINIMIZE: self.windows.minimize,
+                    ActionKind.WINDOW_RESTORE: self.windows.restore,
                     ActionKind.WINDOW_TOGGLE_MAXIMIZE: self.windows.toggle_maximize,
                     ActionKind.WINDOW_MOVE_TO_OTHER_MONITOR: self.windows.move_to_other_monitor,
                     ActionKind.WINDOW_CLOSE: self.windows.close_window,

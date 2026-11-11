@@ -337,6 +337,10 @@ class Controller:
         self._fault_from_camera = False
         self._notice = ""
         self._in_call = 0
+        self._fist_open: dict[int, float] = {}
+        self._fist_ready: set[int] = set()
+        self._fist_candidate: Optional[tuple[int, Handedness, float, Optional[WindowTarget]]] = None
+        self._minimized_history: list[WindowTarget] = []
 
     # ------------------------------------------------------------ public API
 
@@ -539,6 +543,7 @@ class Controller:
         self._dirty = False
 
     def _clear_transient(self) -> None:
+        self._reset_fists()
         self._eng = None
         self._menu = None
         self._need_neutral = True
@@ -604,6 +609,7 @@ class Controller:
 
     def _on_watchdog_timeout(self) -> None:
         with self._lock:
+            self._reset_fists()
             nested = self._in_call > 0  # on_frame/tick notify on their own
             if self._state is ControlState.ACTIVE:
                 self._soft_reset()
@@ -633,6 +639,12 @@ class Controller:
         ok = self._guard.dispatch(Action(kind, self._epoch, capture_ms, x=x, y=y, steps=steps, value=value,
                                          target=target))
         if ok:
+            if kind is ActionKind.WINDOW_MINIMIZE and target is not None:
+                self._minimized_history = [t for t in self._minimized_history if t != target]
+                self._minimized_history.append(target)
+                self._minimized_history = self._minimized_history[-32:]
+            elif kind is ActionKind.WINDOW_RESTORE and target is not None:
+                self._minimized_history = [t for t in self._minimized_history if t != target]
             self._dirty = True
             if self._eng is not None:
                 self._eng.dispatched += 1
@@ -685,6 +697,7 @@ class Controller:
                     self._activate("El çırpma: etkin")
                 return
         if GestureKind.CLAP_CANDIDATE_START in kinds:
+            self._reset_fists()
             self._clap_pending = True
             if self._state is ControlState.ACTIVE:
                 self._soft_reset()
@@ -721,6 +734,11 @@ class Controller:
                 self._need_neutral = False
 
         if self._clap_pending:
+            return
+
+        if self._menu is not None:
+            self._reset_fists()
+        elif self._fist_frame(frame, hands):
             return
 
         if self._eng is not None and not all(h in present for h in self._eng.hands()):
@@ -769,6 +787,7 @@ class Controller:
                 self._pointer = pos
 
     def _tracking_lost(self) -> None:
+        self._reset_fists()
         if self._eng is not None:
             self._soft_reset()
             self._notice = "İz kaybedildi: hareket iptal"
@@ -778,6 +797,72 @@ class Controller:
         self._smoother.reset()
 
     # ------------------------------------------------------------ engagements
+
+    def _reset_fists(self) -> None:
+        self._fist_open.clear()
+        self._fist_ready.clear()
+        self._fist_candidate = None
+
+    def _fist_frame(self, frame: FrameFeatures, hands: Sequence[HandFeatures]) -> bool:
+        """Open 200 ms to arm; closed 350 ms to fire once, in every tool mode."""
+        present = {h.hand_id for h in hands}
+        self._fist_ready.intersection_update(present)
+        self._fist_open = {k: v for k, v in self._fist_open.items() if k in present}
+        fists = []
+        for hand in hands:
+            states = {f.name: f.state for f in hand.fingers}
+            if hand.handedness is Handedness.UNKNOWN or len(states) != 5:
+                self._fist_ready.discard(hand.hand_id)
+                continue
+            opened = all(state is FingerState.EXTENDED for state in states.values())
+            closed = all(state is FingerState.BENT for state in states.values())
+            if opened:
+                since = self._fist_open.setdefault(hand.hand_id, frame.capture_ms)
+                if frame.capture_ms - since >= 200:
+                    self._fist_ready.add(hand.hand_id)
+            else:
+                self._fist_open.pop(hand.hand_id, None)
+            if any(state is FingerState.UNKNOWN for state in states.values()):
+                self._fist_ready.discard(hand.hand_id)
+            if closed:
+                fists.append(hand)
+        if len(fists) != 1:
+            self._fist_candidate = None
+            if len(fists) > 1:
+                self._fist_ready.clear()
+                return True
+            return False
+        hand = fists[0]
+        if hand.hand_id not in self._fist_ready:
+            self._fist_candidate = None
+            return True
+        candidate = self._fist_candidate
+        if candidate is None or candidate[:2] != (hand.hand_id, hand.handedness):
+            self._cancel_engagement(release=True)
+            target = self._windows.foreground_window() if hand.handedness is Handedness.RIGHT else None
+            self._fist_candidate = (hand.hand_id, hand.handedness, frame.capture_ms, target)
+            self._notice = 'Sağ yumruk: küçültmek için tut' if hand.handedness is Handedness.RIGHT else 'Sol yumruk: geri açmak için tut'
+            return True
+        if frame.capture_ms - candidate[2] < 350:
+            return True
+        self._fist_ready.discard(hand.hand_id)
+        self._fist_candidate = None
+        if hand.handedness is Handedness.RIGHT:
+            target = candidate[3]
+            if target is None or self._windows.foreground_window() != target or not self._valid(target):
+                self._notice = 'Küçültülecek pencere yok veya hedef değişti'
+                return True
+            ok = self._dispatch(ActionKind.WINDOW_MINIMIZE, frame.capture_ms, target=target)
+            self._notice = 'Sağ yumruk: pencere küçültüldü' if ok else 'Pencere küçültülemedi'
+        else:
+            while self._minimized_history and not self._valid(self._minimized_history[-1]):
+                self._minimized_history.pop()
+            if not self._minimized_history:
+                self._notice = 'Bu oturumda geri açılacak pencere yok'
+                return True
+            ok = self._dispatch(ActionKind.WINDOW_RESTORE, frame.capture_ms, target=self._minimized_history[-1])
+            self._notice = 'Sol yumruk: pencere geri açıldı' if ok else 'Pencere geri açılamadı'
+        return True
 
     def _palm_uv(self, h: HandFeatures, frame: FrameFeatures) -> Optional[tuple[float, float]]:
         return normalize_camera_point(h.palm_center_px[0], h.palm_center_px[1], frame.width, frame.height,

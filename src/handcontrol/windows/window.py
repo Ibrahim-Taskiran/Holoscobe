@@ -186,6 +186,10 @@ class WindowsWindowQuery:
     def minimize(self, target: WindowTarget) -> bool:
         return self._show(target, 6)
 
+    def restore(self, target: WindowTarget) -> bool:
+        """Restore the latched target; never substitute the foreground window."""
+        return self._show(target, 9)
+
     def toggle_maximize(self, target: WindowTarget) -> bool:
         if not self.is_valid(target):
             return False
