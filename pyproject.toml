@@ -1,0 +1,10 @@
+[project]
+name = "handcontrol"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-m \"not manual\""
+markers = ["manual: needs real hardware or touches the live desktop; skipped by default"]

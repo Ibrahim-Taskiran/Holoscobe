@@ -1,0 +1,222 @@
+"""Shared contracts between all modules. FROZEN: only the project manager edits this file.
+
+Need a change? Write it to Docs/coordination/REQUESTS_<your-name>.md and work around it locally.
+Stdlib only. No camera, Qt, MediaPipe or Win32 imports here.
+
+Units:
+- time: monotonic milliseconds (float).
+- Landmark x/y: normalized [0,1] on the UNMIRRORED camera frame. z: MediaPipe relative depth.
+- *_px: camera pixels (x * width, y * height).
+- "palm units": pixel distance divided by HandFeatures.palm_scale_px.
+- Desktop coordinates: physical virtual-desktop pixels (may be negative).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, Protocol, Sequence
+
+
+class Handedness(Enum):
+    LEFT = "left"
+    RIGHT = "right"
+    UNKNOWN = "unknown"
+
+
+class Quality(Enum):
+    USABLE = "usable"
+    DEGRADED = "degraded"
+    UNKNOWN = "unknown"
+
+
+class FingerName(Enum):
+    THUMB = "thumb"      # landmarks 1-4
+    INDEX = "index"      # 5-8
+    MIDDLE = "middle"    # 9-12
+    RING = "ring"        # 13-16
+    LITTLE = "little"    # 17-20
+
+
+class FingerState(Enum):
+    EXTENDED = "extended"
+    BENT = "bent"
+    UNKNOWN = "unknown"
+
+
+class ControlState(Enum):
+    PAUSED = "paused"
+    ACTIVE = "active"
+    CALIBRATING = "calibrating"
+    FAULT = "fault"
+
+
+class CameraState(Enum):
+    OFF = "off"
+    STARTING = "starting"
+    RUNNING = "running"
+    ERROR = "error"
+
+
+class Mode(Enum):
+    POINTER = "pointer"
+    SCROLL = "scroll"
+    ZOOM = "zoom"
+    VOLUME = "volume"
+    WINDOWS = "windows"
+
+
+# ---------- tracking output (camera.py / tracking.py produce) ----------
+
+@dataclass(frozen=True)
+class Landmark:
+    x: float
+    y: float
+    z: float = 0.0
+
+
+@dataclass(frozen=True)
+class HandSample:
+    handedness: Handedness
+    handedness_score: float                 # classification score, NOT landmark accuracy
+    landmarks: tuple[Landmark, ...]         # exactly 21
+    world_landmarks: Optional[tuple[Landmark, ...]] = None
+
+
+@dataclass(frozen=True)
+class FrameSample:
+    capture_ms: float
+    inference_done_ms: float
+    width: int
+    height: int
+    hands: tuple[HandSample, ...]           # 0..2, no stable identity yet
+
+
+# ---------- features output (features.py produces) ----------
+
+@dataclass(frozen=True)
+class FingerInfo:
+    name: FingerName
+    state: FingerState
+    curl: float                             # 0.0 straight .. 1.0 fully curled
+
+
+@dataclass(frozen=True)
+class HandFeatures:
+    hand_id: int                            # stable across frames while identity is certain
+    handedness: Handedness
+    quality: Quality
+    palm_center_px: tuple[float, float]     # mean of MCP landmarks 5, 9, 13, 17
+    palm_scale_px: float                    # > 0 when quality is USABLE
+    fingers: tuple[FingerInfo, ...]         # 5 items, order: THUMB, INDEX, MIDDLE, RING, LITTLE
+    pinch_distance: float                   # thumb tip to index tip, palm units
+    index_tip_px: tuple[float, float]
+    landmarks: tuple[Landmark, ...]         # the 21 source landmarks
+
+
+@dataclass(frozen=True)
+class FrameFeatures:
+    capture_ms: float
+    inference_done_ms: float
+    width: int
+    height: int
+    hands: tuple[HandFeatures, ...]
+    identity_ambiguous: bool                # True -> consumers reset continuous actions
+
+
+# ---------- gesture output (gestures.py produces) ----------
+
+class GestureKind(Enum):
+    CLAP = "clap"
+    CLAP_CANDIDATE_START = "clap_candidate_start"   # suppress ordinary output
+    CLAP_CANDIDATE_ABORT = "clap_candidate_abort"
+    PINCH_START = "pinch_start"                     # after debounce
+    PINCH_END = "pinch_end"
+    NEUTRAL = "neutral"                             # 200 ms usable, pinches released, no pending clap
+    MENU_DWELL_COMPLETE = "menu_dwell_complete"     # non-dominant open palm held 600 ms
+
+
+@dataclass(frozen=True)
+class GestureEvent:
+    kind: GestureKind
+    t_ms: float                             # capture_ms of the sample that produced it
+    hand_id: Optional[int] = None
+
+
+# ---------- actions (controller.py produces, sinks consume) ----------
+
+@dataclass(frozen=True)
+class WindowTarget:
+    hwnd: int
+    pid: int
+
+
+class ActionKind(Enum):
+    MOVE_POINTER = "move_pointer"                   # x, y
+    LEFT_CLICK = "left_click"                       # x, y latched at pinch start
+    SCROLL = "scroll"                               # steps (+ up), target
+    ZOOM = "zoom"                                   # steps (+ in), target
+    SET_VOLUME = "set_volume"                       # value 0.0..1.0
+    WINDOW_DRAG_BEGIN = "window_drag_begin"         # target, x, y
+    WINDOW_DRAG_MOVE = "window_drag_move"           # target, x, y
+    WINDOW_DRAG_END = "window_drag_end"             # target
+    WINDOW_MINIMIZE = "window_minimize"             # target
+    WINDOW_TOGGLE_MAXIMIZE = "window_toggle_maximize"
+    WINDOW_MOVE_TO_OTHER_MONITOR = "window_move_to_other_monitor"
+    WINDOW_CLOSE = "window_close"                   # normal close request only
+    RELEASE_ALL = "release_all"                     # release every app-owned input
+
+
+@dataclass(frozen=True)
+class Action:
+    kind: ActionKind
+    epoch: int                              # sink drops actions whose epoch is not current
+    capture_ms: float                       # sink drops actions older than 150 ms
+    x: Optional[int] = None
+    y: Optional[int] = None
+    steps: int = 0
+    value: float = 0.0
+    target: Optional[WindowTarget] = None
+
+
+class Clock(Protocol):
+    def now_ms(self) -> float: ...
+
+
+class ActionSink(Protocol):
+    """Dry-run sink and the real Windows sink both implement this."""
+
+    def dispatch(self, action: Action) -> bool: ...   # False = rejected or failed
+    def release_all(self) -> None: ...                # must never raise
+
+
+# ---------- OS adapters (windows/ implements, controller + ui consume) ----------
+
+@dataclass(frozen=True)
+class Rect:
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+
+@dataclass(frozen=True)
+class Monitor:
+    bounds: Rect                            # physical pixels
+    work_area: Rect
+    dpi_scale: float                        # 1.0 = 96 DPI
+    is_primary: bool
+
+
+class DisplayProvider(Protocol):
+    def monitors(self) -> Sequence[Monitor]: ...
+
+
+class WindowQuery(Protocol):
+    def eligible_window_at(self, x: int, y: int) -> Optional[WindowTarget]: ...
+    def foreground_window(self) -> Optional[WindowTarget]: ...
+    def is_valid(self, target: WindowTarget) -> bool: ...
+
+
+class VolumeControl(Protocol):
+    def get_volume(self) -> float: ...                # 0.0..1.0 of current default render endpoint
+    def set_volume(self, value: float) -> bool: ...
