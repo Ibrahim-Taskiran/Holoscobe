@@ -382,10 +382,11 @@ class OverlayWindow(QWidget):
             top_y = header_rect.bottom() + 10.0
             bottom_limit = panel_rect.bottom() - 26.0
             avail_h = max(60.0, bottom_limit - top_y)
-            item_h = min(48.0, (avail_h - (len(items) - 1) * 8.0) / max(1, len(items)))
+            row_h = avail_h / len(items)
+            item_h = max(1.0, row_h - 8.0)
 
             for idx, item in enumerate(items):
-                iy = top_y + idx * (item_h + 8.0)
+                iy = top_y + idx * row_h
                 item_rect = QRectF(
                     panel_rect.left() + 16.0,
                     iy,
@@ -417,7 +418,9 @@ class OverlayWindow(QWidget):
         cursor = self._overlay_state.cursor
         if cursor.visible:
             self._last_drawn_cursor_visible = True
-            self._draw_virtual_cursor(painter, panel_rect, cursor)
+            cursor_bounds = QRectF(panel_rect.left() + 16.0, top_y,
+                                   panel_rect.width() - 32.0, avail_h) if items else panel_rect
+            self._draw_virtual_cursor(painter, cursor_bounds, cursor)
 
     def _draw_menu_item(
         self,

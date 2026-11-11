@@ -2,7 +2,7 @@
 
 Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: geliştirme aşamasında.** Kodun büyük kısmı yazıldı ve birim testleri geçiyor, ancak bu testler sahte veriyle çalışır. Gerçek kamera, gerçek el ve iki monitör doğrulamaları henüz yapılmadı. Gerçek Windows komutları bu doğrulamalar geçene kadar kapalıdır.
+> **Durum: uygulama bağlandı; donanım kabulü bekliyor.** Kamera → pipeline → denetleyici → arayüz zinciri ve güvenlik yaşam döngüsü hazır. Son otomatik takım: **662 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Gerçek kamera, el ve iki monitör doğrulaması henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir.
 
 ## Ne yapar
 
@@ -43,10 +43,32 @@ Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut.
 
 Betik sanal ortamı kurar, sabitlenmiş paketleri yükler, el modelini indirir ve SHA-256 değerini `assets/model_manifest.json` ile karşılaştırır. Model dosyası depoya dahil değildir.
 
+## Çalıştırma
+
+Proje kökünde, hazırlanmış `.venv` ile:
+
+```powershell
+$env:PYTHONPATH = "$PWD\src"
+.venv\Scripts\python.exe -m handcontrol.app          # dry-run, üretilecek komutları gösterir
+.venv\Scripts\python.exe -m handcontrol.app --live   # gerçek Windows komutları
+```
+
+Alternatif: `powershell -ExecutionPolicy Bypass -File scripts\launch.ps1` (dry-run); aynı komuta `--live` eklenebilir. Normal kullanımda `QT_QPA_PLATFORM=offscreen` ayarlı olmamalıdır.
+
+Uygulama Paused başlar. Kamera sağlıklı olduktan sonra tepsiden Sürdür ile veya el çırparak etkinleştirin. Tepsiden kamerayı kapatabilir, ayarları/kalibrasyonu açabilir ve çıkabilirsiniz. Kısayol çakışırsa canlı başlatma reddedilir; dry-run ayarlarından başka bir kısayol seçin. Kamera hatası ve kurtarma otomatik etkinleştirme yapmaz. Gerçek donanım kabulü tamamlanana kadar önce dry-run kullanın.
+
 ## Testler
 
 ```powershell
 .\scripts\run_tests.ps1
+```
+
+Tüm otomatik testler için (kamera/masaüstü açılmaz):
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+.venv\Scripts\python.exe -m pytest -q
+Remove-Item Env:QT_QPA_PLATFORM
 ```
 
 Fareyi oynatan, sesi değiştiren ya da pencere açan testler `manual` olarak işaretlidir ve varsayılan olarak atlanır.

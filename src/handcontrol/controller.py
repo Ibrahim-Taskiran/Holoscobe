@@ -86,6 +86,7 @@ class ControllerConfig:
     # pointer mapping target (config.MonitorMapping): "virtual_desktop" | "primary" | "monitor"
     monitor_mode: str = "virtual_desktop"
     monitor_index: int = 0
+    camera_error_paused: bool = False
 
 
 class MenuKind(Enum):
@@ -407,7 +408,10 @@ class Controller:
             prev, self._camera = self._camera, state
             if state is not prev:
                 if state is CameraState.ERROR:
-                    if self._state is not ControlState.FAULT:
+                    if self._cfg.camera_error_paused:
+                        self._state = ControlState.PAUSED
+                        self._hard_reset("Kamera hatası: duraklatıldı")
+                    elif self._state is not ControlState.FAULT:
                         self._enter_fault("Kamera hatası", camera=True)
                 elif state is CameraState.RUNNING:
                     if self._state is ControlState.FAULT and self._fault_from_camera:

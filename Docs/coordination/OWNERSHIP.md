@@ -46,3 +46,11 @@ Herkes kendi istek dosyasını yazabilir: `Docs/coordination/REQUESTS_<ad>.md`.
 | Claude G (kabul araçları) | `src/handcontrol/tools/**`, `tests/tools/**` |
 
 `windows/**`, `ui/**` ve `contracts.py` bu turda da yalnız kendi sahiplerinindir.
+
+## Yönetici devri (2026-11-12)
+
+Kullanıcı talimatıyla Claude yönetici hakları Codex'e devredildi. Codex uygulama girişini,
+pipeline/test entegrasyonunu ve teslim belgelerini tamamlayabilir; gerekli en küçük Claude
+modülü düzeltmelerini yapabilir, conventional commit oluşturabilir ve main'e push edebilir.
+Paket kurulmaz. UI yalnız zorunlu bağlama düzeltmesiyle değiştirilir. Donanım kapıları insan
+doğrulamasına kadar bekliyor kalır.

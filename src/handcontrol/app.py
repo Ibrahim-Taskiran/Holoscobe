@@ -1,0 +1,316 @@
+﻿"""Desktop composition root. Real OS output requires explicit --live opt-in."""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from dataclasses import asdict, replace
+
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtWidgets import QApplication, QMainWindow
+
+from handcontrol.config import SettingsStore, CalibrationBounds, validate
+from handcontrol.contracts import CameraState, ControlState, Mode
+from handcontrol.controller import MenuKind
+from handcontrol.dryrun import DryRunSink, FakeVolume
+from handcontrol.pipeline import Pipeline, run_camera_pipeline
+from handcontrol.ui import (UiBridge, UiState, OverlayState, OverlayMenuKind,
+    OverlayMenuItem, VirtualCursorState, HandControlTray, CameraPreviewWidget,
+    OverlayWindow, FeedbackToast, DryRunPanel, SettingsDialog, SettingsData, CalibrationWizard)
+from handcontrol.windows import (enable_per_monitor_v2, WindowsDisplayProvider,
+    WindowsWindowQuery, WindowsVolumeControl, WindowsActionSink, WindowsHotkey, WindowsSession)
+from handcontrol.windows.hotkey import HotkeyConflictError
+
+
+class Clock:
+    def now_ms(self) -> float:
+        return time.monotonic() * 1000
+
+
+def hotkey_binding(text: str) -> tuple[int, int]:
+    parts = text.upper().split('+')
+    modifiers = 0
+    for part in parts[:-1]:
+        modifiers |= {'CTRL': 2, 'ALT': 1, 'SHIFT': 4, 'WIN': 8}[part]
+    key = parts[-1]
+    if key.startswith('F') and key[1:].isdigit() and 1 <= int(key[1:]) <= 24:
+        return modifiers, 0x70 + int(key[1:]) - 1
+    if len(key) == 1 and key.isascii() and key.isalnum():
+        return modifiers, ord(key)
+    raise ValueError('Geçersiz acil durdurma kısayolu')
+
+
+def snapshot_to_viewmodel(snapshot, *, dry_run: bool = True, mirrored: bool = True) -> UiState:
+    menu = snapshot.menu
+    overlay = OverlayState()
+    if menu:
+        items = tuple(OverlayMenuItem(item.key, item.label, item.enabled, item.selected,
+            index == menu.hovered, item.key == 'close' and menu.close_armed,
+            menu.hold_progress if item.key == 'close' else 0) for index, item in enumerate(menu.items))
+        overlay = OverlayState(visible=True,
+            kind=OverlayMenuKind.MODE_MENU if menu.kind == MenuKind.MODE else OverlayMenuKind.WINDOW_ACTION_MENU,
+            title='Mod Seçimi' if menu.kind == MenuKind.MODE else 'Pencere Eylemleri', items=items,
+            cursor=VirtualCursorState(*menu.pointer, visible=True, hold_progress=menu.hold_progress),
+            inactivity_ms=max(0, 5000 - menu.remaining_ms))
+    return UiState(control_state=snapshot.state, camera_state=snapshot.camera_state,
+        mode=snapshot.mode, menu_items=overlay.items, virtual_cursor=overlay.cursor,
+        hold_progress=menu.hold_progress if menu else 0, overlay=overlay,
+        error_text=snapshot.last_fault_reason or snapshot.notice, dry_run=dry_run, mirrored=mirrored)
+
+
+class EpochSink:
+    """Synchronize the native sink before dispatch, including same-frame epochs."""
+    def __init__(self, inner, bridge):
+        self.inner, self.bridge = inner, bridge
+
+    def set_epoch(self, epoch):
+        setter = getattr(self.inner, 'set_epoch', None)
+        if setter:
+            setter(epoch)
+
+    def dispatch(self, action):
+        self.set_epoch(action.epoch)
+        result = self.inner.dispatch(action)
+        if isinstance(self.inner, DryRunSink):
+            self.bridge.record_dry_run_action(action)
+        return result
+
+    def release_all(self):
+        self.inner.release_all()
+
+    def close(self):
+        self.release_all()
+        close = getattr(self.inner, 'close', None)
+        if close:
+            close()
+
+
+class Runtime(QObject):
+    """Own services; workers emit data, GUI slots own widget changes."""
+    snapshot_received = Signal(object)
+
+    def __init__(self, bridge, store, *, live=False, displays=None, windows=None,
+                 volume=None, hotkey_factory=WindowsHotkey, session_factory=WindowsSession,
+                 sink_factory=WindowsActionSink, camera_factory=run_camera_pipeline):
+        super().__init__()
+        self.bridge, self.store, self.live = bridge, store, live
+        self.settings = store.load()
+        self.displays = displays if displays is not None else WindowsDisplayProvider()
+        self.windows = windows if windows is not None else WindowsWindowQuery(self.displays)
+        self.volume = volume if volume is not None else (WindowsVolumeControl() if live else FakeVolume())
+        self.camera_factory = camera_factory
+        self.camera = None
+        self.hotkey = self.session = self.pipeline = self.sink = None
+        self.closed = False
+        self.timer = QTimer(self)
+        self.snapshot_received.connect(self._snapshot)
+        try:
+            self.hotkey = hotkey_factory(self._emergency)
+            try:
+                self.hotkey.start(*hotkey_binding(self.settings.emergency_hotkey))
+            except (HotkeyConflictError, ValueError, KeyError) as exc:
+                if live:
+                    raise RuntimeError('Canlı kontrol reddedildi: acil durdurma kısayolu kaydedilemedi') from exc
+                bridge.show_feedback(message='Acil durdurma kısayolu kullanılamıyor; komutsuz deneme sürüyor')
+            inner = sink_factory(displays=self.displays, windows=self.windows, volume=self.volume) if live else DryRunSink(max_history=200)
+            self.sink = EpochSink(inner, bridge)
+            self.pipeline = Pipeline(Clock(), self.sink, self.displays, self.windows, self.volume, self.settings)
+            self.pipeline.controller._cfg = replace(self.pipeline.controller.config, camera_error_paused=True)
+            self.pipeline.controller.add_listener(self._on_snapshot)
+            self.pipeline.start()
+            self.session = session_factory(self._session_event)
+            self.session.start()
+            self.displays.start(lambda _: self.pipeline.controller.on_display_change())
+            self.timer.timeout.connect(self.pipeline.tick)
+            self.timer.start(50)
+            self._connect()
+            self._on_snapshot(self.pipeline.controller.snapshot())
+        except Exception:
+            self.close()
+            raise
+
+    def _connect(self):
+        b, p = self.bridge, self.pipeline
+        b.pause_requested.connect(p.pause)
+        b.resume_requested.connect(p.resume)
+        b.pause_resume_requested.connect(self.toggle_pause)
+        b.mode_selected.connect(p.set_mode)
+        b.camera_start_requested.connect(self.start_camera)
+        b.camera_stop_requested.connect(self.stop_camera)
+        b.camera_toggle_requested.connect(self.toggle_camera)
+        b.settings_saved.connect(self.save_settings)
+        b.calibration_completed.connect(self.calibrated)
+        b.calibration_cancelled.connect(p.controller.end_calibration)
+
+    def _emergency(self):
+        if self.pipeline:
+            self.pipeline.emergency_stop()
+
+    def _session_event(self, event):
+        if self.pipeline:
+            if event == 'suspend':
+                self.pipeline.controller.on_suspend()
+            elif event in ('lock', 'remote_disconnect', 'console_disconnect', 'logoff'):
+                self.pipeline.controller.on_session_lock()
+
+    def _on_snapshot(self, snapshot):
+        self.sink.set_epoch(self.pipeline.controller.current_epoch())
+        self.snapshot_received.emit(snapshot)
+
+    @Slot(object)
+    def _snapshot(self, snapshot):
+        if snapshot.epoch != self.pipeline.controller.current_epoch():
+            return
+        previous = self.bridge.state
+        state = snapshot_to_viewmodel(snapshot, dry_run=not self.live, mirrored=self.settings.mirror_preview)
+        self.bridge.update_state(replace(state, latest_frame=previous.latest_frame,
+            dry_run_command_text=previous.dry_run_command_text))
+        self.bridge.update_overlay(state.overlay)
+
+    def toggle_pause(self):
+        if self.pipeline.controller.snapshot().state == ControlState.ACTIVE:
+            self.pipeline.pause()
+        else:
+            self.pipeline.resume()
+
+    def toggle_camera(self):
+        self.stop_camera() if self.camera else self.start_camera()
+
+    def start_camera(self):
+        if self.camera or self.closed:
+            return
+        try:
+            self.camera = self.camera_factory(self.pipeline, start=False)
+            self.camera.start()
+        except Exception as exc:
+            self.stop_camera()
+            self.pipeline.set_camera_state(CameraState.ERROR)
+            self.bridge.show_feedback(message=f'Kamera başlatılamadı: {exc}')
+
+    def stop_camera(self):
+        camera, self.camera = self.camera, None
+        if camera:
+            camera.loop.stop()
+            camera.camera.stop()
+        if self.pipeline:
+            self.pipeline.set_camera_state(CameraState.OFF)
+
+    def save_settings(self, data):
+        self.pipeline.pause('Ayarlar değiştirildi')
+        values = asdict(self.settings)
+        values.update(mirror_preview=data.mirror, dominant_hand=data.dominant_hand,
+            sensitivity=data.pointer_sensitivity, pinch_on_threshold=data.pinch_on_threshold,
+            pinch_off_threshold=data.pinch_off_threshold, default_mode=data.default_mode,
+            emergency_hotkey=data.emergency_hotkey, overlay_visible=data.show_overlay,
+            mascot_visible=data.show_mascot, scroll_direction='reversed' if data.scroll_direction == 'reverse' else 'normal',
+            zoom_direction='reversed' if data.zoom_direction == 'reverse' else 'normal')
+        values['camera'].update(index=data.camera_index, backend={'media_foundation':'msmf', 'directshow':'dshow'}.get(data.camera_backend, 'auto'))
+        values['monitor_mapping'] = {'mode': 'primary' if data.monitor_mapping == 'primary' else 'monitor' if data.monitor_mapping == 'secondary' else 'virtual_desktop', 'monitor_index': 1 if data.monitor_mapping == 'secondary' else 0}
+        settings = validate(values)
+        try:
+            self.hotkey.reassign(*hotkey_binding(settings.emergency_hotkey))
+            self.store.save(settings)
+            self._replace_pipeline(settings)
+        except Exception as exc:
+            self.bridge.show_feedback(message=f'Ayarlar kaydedilemedi: {exc}')
+
+    def _replace_pipeline(self, settings):
+        from handcontrol.pipeline import controller_config, gesture_config, dominant_of, calibration_rect
+        # Keep controller epoch monotonic; configuration changes happen while paused.
+        self.stop_camera()
+        with self.pipeline._lock, self.pipeline.controller._lock:
+            self.settings = self.pipeline.settings = settings
+            self.pipeline.controller._cfg = replace(controller_config(settings), camera_error_paused=True)
+            self.pipeline.controller.set_calibration(calibration_rect(settings))
+            from handcontrol.gestures import GestureRecognizer
+            self.pipeline.gestures = GestureRecognizer(gesture_config(settings), dominant_of(settings))
+            self.pipeline.request_gesture_reset(full=True)
+            self.pipeline.set_mode(Mode(settings.default_mode))
+
+    def calibrated(self, result):
+        b = result.bounds
+        # Wizard consumes the unmirrored landmark frame.
+        settings = replace(self.settings, calibration=CalibrationBounds(b.left, b.top, b.right, b.bottom),
+            dominant_hand=result.dominant_hand.value, pinch_on_threshold=result.thresholds.pinch_on,
+            pinch_off_threshold=result.thresholds.pinch_off)
+        self.pipeline.controller.end_calibration()
+        self.store.save(settings)
+        self._replace_pipeline(settings)
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.timer.stop()
+        if self.camera:
+            self.camera.loop.stop()
+        if self.pipeline:
+            self.pipeline.emergency_stop()
+            self.pipeline.stop()
+        for service in (self.sink, self.hotkey, self.session, self.displays):
+            if service:
+                try:
+                    service.close()
+                except Exception:
+                    pass
+        if self.camera:
+            self.camera.camera.stop()
+            self.camera = None
+
+
+def main(argv=None) -> int:
+    if not enable_per_monitor_v2():
+        print('Başlatılamadı: per-monitor DPI awareness v2 ayarlanamadı.', file=sys.stderr)
+        return 1
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--live', action='store_true', help='Gerçek Windows komutlarını etkinleştir')
+    args = parser.parse_args(argv)
+    app = QApplication.instance() or QApplication(sys.argv[:1])
+    app.setQuitOnLastWindowClosed(False)
+    bridge = UiBridge()
+    try:
+        runtime = Runtime(bridge, SettingsStore(), live=args.live)
+    except Exception as exc:
+        print(f'Başlatılamadı: {exc}', file=sys.stderr)
+        return 1
+    window = QMainWindow()
+    window.setWindowTitle('Holoscobe' + (' — Canlı' if args.live else ' — Komutsuz Deneme'))
+    window.setCentralWidget(CameraPreviewWidget(bridge))
+    tray = HandControlTray(bridge, window)
+    overlay = OverlayWindow(bridge)
+    toast = FeedbackToast(bridge, auto_show_window=True)
+    panel = DryRunPanel(bridge)
+    def frames():
+        if runtime.pipeline.last_features is not None:
+            bridge.update_frame(runtime.pipeline.last_features)
+    runtime.timer.timeout.connect(frames)
+    bridge.overlay_updated.connect(lambda state: overlay.setVisible(state.visible and runtime.settings.overlay_visible))
+    def settings_dialog():
+        runtime.pipeline.pause('Ayarlar')
+        s = runtime.settings
+        dialog = SettingsDialog(initial=SettingsData(mirror=s.mirror_preview, dominant_hand=s.dominant_hand,
+            camera_index=s.camera.index, emergency_hotkey=s.emergency_hotkey,
+            pinch_on_threshold=s.pinch_on_threshold, pinch_off_threshold=s.pinch_off_threshold,
+            pointer_sensitivity=s.sensitivity, default_mode=s.default_mode), bridge=bridge, parent=window)
+        dialog.exec()
+    def calibration_dialog():
+        if runtime.pipeline.controller.begin_calibration():
+            CalibrationWizard(bridge=bridge, parent=window).exec()
+    bridge.settings_requested.connect(settings_dialog)
+    bridge.calibration_requested.connect(calibration_dialog)
+    bridge.exit_requested.connect(app.quit)
+    app.aboutToQuit.connect(runtime.close)
+    tray.show()
+    window.show()
+    if not args.live:
+        panel.show()
+    runtime.start_camera()
+    try:
+        return app.exec()
+    finally:
+        runtime.close()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
+

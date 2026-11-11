@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+tests/.tmp_*/
+tests/.cache_*/
 build/
 dist/
 *.task
