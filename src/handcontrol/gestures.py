@@ -52,6 +52,10 @@ class GestureConfig:
     clap_velocity_window_ms: float = 80.0
     clap_min_extended_non_thumb: int = 3
     clap_dropout_max_ms: float = 120.0
+    # longest interval between two consecutive samples that keeps a clap trajectory alive. Separate
+    # from the dropout budget (missing hands): the DirectShow fallback delivers ~10 fps with jitter,
+    # so normal sample intervals exceed 120 ms there.
+    clap_max_frame_interval_ms: float = 160.0
     clap_cooldown_ms: float = 900.0
     clap_rebound_abort_pu: float = 0.3           # candidate aborts if distance grows this much before near zone
     # features.py flags identity_ambiguous when palms overlap (< 0.7 pu). During a fast verified approach an
@@ -81,7 +85,7 @@ class GestureConfig:
         for name in (
             "pinch_debounce_ms", "pinch_nonusable_grace_ms", "neutral_hold_ms", "clap_arm_hold_ms",
             "clap_approach_max_ms", "clap_separate_max_ms", "clap_velocity_window_ms",
-            "clap_dropout_max_ms", "clap_cooldown_ms", "menu_dwell_ms", "max_frame_gap_ms",
+            "clap_dropout_max_ms", "clap_max_frame_interval_ms", "clap_cooldown_ms", "menu_dwell_ms", "max_frame_gap_ms",
             "timestamp_rewind_reset_ms",
         ):
             if getattr(self, name) < 0:
@@ -196,7 +200,7 @@ class GestureRecognizer:
                 prev_t = None
         self._last_t = t
 
-        gap_ok = prev_t is None or t - prev_t <= cfg.clap_dropout_max_ms
+        gap_ok = prev_t is None or t - prev_t <= cfg.clap_max_frame_interval_ms
         ids = [h.hand_id for h in frame.hands]
         if frame.identity_ambiguous or len(ids) != len(set(ids)):
             if self._candidate:
@@ -239,6 +243,7 @@ class GestureRecognizer:
         self._near_ms = 0.0
         self._prev_sep_d: Optional[float] = None
         self._missing_since: Optional[float] = None
+        self._arm_vec: Optional[tuple[float, float]] = None   # RIGHT->LEFT palm vector while armed
         self._pair_scale = 0.0                       # last clean pair: average palm scale (px)
         self._last_clean_d = math.inf
         self._last_speed: Optional[float] = None
@@ -340,6 +345,17 @@ class GestureRecognizer:
         scale = (a.palm_scale_px + b.palm_scale_px) / 2.0
         return math.dist(a.palm_center_px, b.palm_center_px) / scale
 
+    @staticmethod
+    def _oriented(usable: list[HandFeatures]) -> Optional[tuple[float, float]]:
+        """RIGHT->LEFT palm vector, or None unless exactly one RIGHT and one LEFT label."""
+        if len(usable) != 2:
+            return None
+        by = {h.handedness: h for h in usable}
+        r, l = by.get(Handedness.RIGHT), by.get(Handedness.LEFT)
+        if r is None or l is None:
+            return None
+        return (l.palm_center_px[0] - r.palm_center_px[0], l.palm_center_px[1] - r.palm_center_px[1])
+
     def _closing_speed(self, t: float, d_now: float) -> Optional[float]:
         """Palm-separation decrease rate (pu/s, positive = approaching) over the velocity window."""
         for t_old, d_old in reversed(self._pair_hist):
@@ -392,6 +408,7 @@ class GestureRecognizer:
                 if t - self._sep_since >= cfg.clap_arm_hold_ms:
                     self._phase = _ClapPhase.ARMED
                     self._last_sep_ms = t
+                    self._arm_vec = self._oriented(usable)
             else:
                 self._sep_since = None
             return ev
@@ -403,6 +420,7 @@ class GestureRecognizer:
                 return ev
             if d > cfg.clap_arm_distance_pu:
                 self._last_sep_ms = t
+                self._arm_vec = self._oriented(usable)
                 return ev
             self._phase = _ClapPhase.APPROACH
             self._approach_start = self._last_sep_ms
@@ -457,6 +475,12 @@ class GestureRecognizer:
         prev = self._prev_sep_d
         self._prev_sep_d = d
         if prev is not None and d > cfg.clap_separate_distance_pu and d > prev:
+            now_vec, arm_vec = self._oriented(usable), self._arm_vec
+            if now_vec is not None and arm_vec is not None and (
+                now_vec[0] * arm_vec[0] + now_vec[1] * arm_vec[1] < 0.0
+            ):
+                self._abort_clap(t, ev)               # hands passed each other (crossing), not a clap
+                return ev
             ev.append(GestureEvent(GestureKind.CLAP, t))
             self._last_clap_ms = t
             self._candidate = False

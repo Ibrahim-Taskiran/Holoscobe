@@ -99,6 +99,10 @@ class FeatureConfig:
     overlap_palm: float = 0.7             # palm centers closer than this (palm units) -> ambiguous
     same_handedness_min_score: float = 0.5
     ambiguity_hold_ms: float = 100.0
+    # a recently seen track that vanishes while a detection is this close to it (palm units) is a
+    # merge (palms overlapping, tracker reports one hand): identity of the remaining hand is ambiguous
+    merge_palm: float = 1.0
+    merge_window_ms: float = 250.0
     track_memory_ms: float = 500.0        # a lost hand may reclaim its ID within this time
     latch_reset_gap_ms: float = 200.0     # finger states restart after an absence this long
 
@@ -225,7 +229,8 @@ class FeatureExtractor:
             dets.append(det)
 
         mapping, assign_ambiguous = self._associate(dets, t, min(w, h))
-        ambiguous = ambiguous or assign_ambiguous or self._pair_ambiguous(dets, min(w, h))
+        ambiguous = (ambiguous or assign_ambiguous or self._pair_ambiguous(dets, min(w, h))
+                     or self._merge_ambiguous(dets, mapping, t, min(w, h)))
 
         latency = sample.inference_done_ms - sample.capture_ms
         slow = not math.isfinite(latency) or latency > cfg.max_processing_ms
@@ -326,6 +331,18 @@ class FeatureExtractor:
                 ref = ref if ref > 0 else 0.1 * frame_min
                 if _dist2(a.center, b.center) / ref < cfg.overlap_palm:
                     return True
+        return False
+
+    def _merge_ambiguous(self, dets: list[_Det], mapping: list[Optional[int]], t: float, frame_min: float) -> bool:
+        """A track seen moments ago is unmatched while a detection sits on top of it: two hands merged."""
+        cfg = self.config
+        matched = {m for m in mapping if m is not None}
+        for j, tr in enumerate(self._tracks):
+            if j in matched or t - tr.last_seen_ms > cfg.merge_window_ms:
+                continue
+            ref = tr.scale if tr.scale > 0 else 0.1 * frame_min
+            if any(_dist2(d.center, tr.center) / ref < cfg.merge_palm for d in dets):
+                return True
         return False
 
     # ---------- temporal ----------

@@ -83,6 +83,9 @@ class ControllerConfig:
     menu_gain: float = 2.0
     # default pointer smoother time constant
     pointer_tau_ms: float = 35.0
+    # pointer mapping target (config.MonitorMapping): "virtual_desktop" | "primary" | "monitor"
+    monitor_mode: str = "virtual_desktop"
+    monitor_index: int = 0
 
 
 class MenuKind(Enum):
@@ -513,6 +516,17 @@ class Controller:
         except Exception:
             return ()
 
+    def _mapping_monitors(self) -> tuple[Monitor, ...]:
+        """Monitors the pointer maps onto (settings monitor_mapping); all monitors as fallback."""
+        mons, mode = self._monitors, self._cfg.monitor_mode
+        if mode == "primary":
+            sel = tuple(m for m in mons if m.is_primary)[:1]
+        elif mode == "monitor":
+            sel = mons[self._cfg.monitor_index:self._cfg.monitor_index + 1]
+        else:
+            sel = mons
+        return sel or mons
+
     def _bump(self) -> None:
         self._epoch += 1
 
@@ -710,19 +724,24 @@ class Controller:
             return
 
         dom = self._dominant(hands)
-        uv = pos = raw = None
+        uv = pos = raw = palm_uv = None
         if dom is not None:
             uv = normalize_camera_point(dom.index_tip_px[0], dom.index_tip_px[1], frame.width, frame.height,
                                         self._calib, self._cfg.mirror)
+            # Move checks (click / window pinch) and the menu pointer use the palm center: the index
+            # tip itself travels while a pinch closes and opens, which cancelled every click and moved
+            # the menu pointer onto a neighbouring item at the selecting pinch.
+            palm_uv = self._palm_uv(dom, frame)
         if uv is not None:
             su = self._smoother.filter(frame.capture_ms, uv[0], uv[1])
-            pos = map_normalized(su[0], su[1], self._monitors)
-            raw = map_normalized(uv[0], uv[1], self._monitors)
+            targets = self._mapping_monitors()
+            pos = map_normalized(su[0], su[1], targets)
+            raw = map_normalized(palm_uv[0], palm_uv[1], targets) if palm_uv is not None else None
         else:
             self._smoother.reset()
 
         if self._menu is not None:
-            self._menu_frame(frame, events, dom, uv, now)
+            self._menu_frame(frame, events, dom, palm_uv, now)
             return
 
         if self._eng is not None:
@@ -730,7 +749,7 @@ class Controller:
             return
 
         if GestureKind.MENU_DWELL_COMPLETE in kinds and not self._need_neutral:
-            self._open_mode_menu(dom, uv, now)
+            self._open_mode_menu(dom, palm_uv, now)
             return
 
         if self._need_neutral or dom is None or pos is None:
@@ -755,6 +774,10 @@ class Controller:
         self._smoother.reset()
 
     # ------------------------------------------------------------ engagements
+
+    def _palm_uv(self, h: HandFeatures, frame: FrameFeatures) -> Optional[tuple[float, float]]:
+        return normalize_camera_point(h.palm_center_px[0], h.palm_center_px[1], frame.width, frame.height,
+                                      self._calib, self._cfg.mirror)
 
     def _palm_y(self, h: HandFeatures, frame: FrameFeatures) -> float:
         return h.palm_center_px[1] / frame.height if frame.height > 0 else 0.0
@@ -1019,10 +1042,7 @@ class Controller:
 
     def _open_window_menu(self, target: WindowTarget, dom: Optional[HandFeatures], frame: FrameFeatures,
                           now: float) -> None:
-        uv = None
-        if dom is not None:
-            uv = normalize_camera_point(dom.index_tip_px[0], dom.index_tip_px[1], frame.width, frame.height,
-                                        self._calib, self._cfg.mirror)
+        uv = self._palm_uv(dom, frame) if dom is not None else None
         armed = dom is not None and dom.hand_id not in self._pinched
         self._menu = _Menu(MenuKind.WINDOW, self._window_items(False), target, now, now, armed, anchor=uv)
 
