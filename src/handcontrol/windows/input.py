@@ -1,0 +1,132 @@
+"""SendInput adapter with explicit ownership and best-effort release retry."""
+from __future__ import annotations
+
+import ctypes as C
+import logging
+import threading
+from collections.abc import Callable
+
+from ..contracts import DisplayProvider
+from ._win32 import INPUT, KEYBDINPUT, MOUSEINPUT, last_error, user32
+from .placement import normalize_pointer
+
+log = logging.getLogger(__name__)
+MOVE, LEFTDOWN, LEFTUP, WHEEL = 0x1, 0x2, 0x4, 0x800
+VIRTUALDESK, ABSOLUTE, KEYUP = 0x4000, 0x8000, 0x2
+VK_CONTROL = 0x11
+
+
+def mouse(flags: int, x: int = 0, y: int = 0, data: int = 0) -> INPUT:
+    event = INPUT(type=0)
+    event.mi = MOUSEINPUT(x, y, data & 0xFFFFFFFF, flags, 0, 0)
+    return event
+
+
+def key(vk: int, up: bool = False) -> INPUT:
+    event = INPUT(type=1)
+    event.ki = KEYBDINPUT(vk, 0, KEYUP if up else 0, 0, 0)
+    return event
+
+
+class WindowsInput:
+    def __init__(self, displays: DisplayProvider, *, api=None,
+                 on_error: Callable[[str], None] | None = None) -> None:
+        self.displays = displays
+        self.api = api if api is not None else user32()
+        self.on_error = on_error
+        self._ledger: list[tuple[str, int]] = []
+        self._lock = threading.RLock()
+
+    @property
+    def ledger(self) -> tuple[tuple[str, int], ...]:
+        with self._lock:
+            return tuple(self._ledger)
+
+    def _report(self, message: str) -> None:
+        log.warning(message)
+        if self.on_error:
+            try:
+                self.on_error(message)
+            except Exception:
+                log.exception("Input error callback failed")
+
+    def _send(self, event: INPUT) -> bool:
+        try:
+            count = int(self.api.SendInput(1, C.byref(event), C.sizeof(INPUT)))
+            if count == 1:
+                return True
+            self._report(f"SendInput rejected input (count={count}, error={last_error()}); UIPI may block it")
+        except Exception as exc:
+            self._report(f"SendInput failed: {exc}")
+        return False
+
+    def _press(self, token: tuple[str, int], event: INPUT) -> bool:
+        if token in self._ledger:
+            return False
+        if not self._send(event):
+            return False
+        self._ledger.append(token)
+        return True
+
+    def _release(self, token: tuple[str, int]) -> bool:
+        if token not in self._ledger:
+            return True
+        event = mouse(LEFTUP) if token[0] == "mouse" else key(token[1], up=True)
+        if not self._send(event):
+            return False
+        self._ledger.remove(token)
+        return True
+
+    def move_pointer(self, x: int, y: int) -> bool:
+        with self._lock:
+            nx, ny = normalize_pointer(x, y, self.displays.monitors())
+            return self._send(mouse(MOVE | ABSOLUTE | VIRTUALDESK, nx, ny))
+
+    def left_click(self, x: int, y: int) -> bool:
+        with self._lock:
+            if not self.move_pointer(x, y):
+                return False
+            token = ("mouse", 1)
+            if not self._press(token, mouse(LEFTDOWN)):
+                return False
+            return self._release(token)
+
+    def scroll(self, steps: int) -> bool:
+        with self._lock:
+            delta = int(steps) * 120
+            if not -(2 ** 31) <= delta < 2 ** 31:
+                return False
+            return self._send(mouse(WHEEL, data=delta)) if delta else True
+
+    def modifiers_down(self) -> bool:
+        # Include generic and left/right Shift, Ctrl and Alt. Never take ownership
+        # of a modifier that was down before our chord.
+        return any(self.api.GetAsyncKeyState(vk) & 0x8000
+                   for vk in (0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5))
+
+    def zoom(self, steps: int) -> bool:
+        with self._lock:
+            if self.modifiers_down() or self._ledger:
+                self._report("Synthetic Ctrl chord skipped: a modifier is already down or cleanup is pending")
+                return False
+            token = ("key", VK_CONTROL)
+            if not self._press(token, key(VK_CONTROL)):
+                return False
+            success = False
+            try:
+                success = self.scroll(steps)
+            finally:
+                released = self._release(token)
+            return success and released
+
+    def release_all(self) -> None:
+        """Never raise; retain failed releases so the next cleanup can retry them."""
+        try:
+            with self._lock:
+                for token in reversed(tuple(self._ledger)):
+                    try:
+                        self._release(token)
+                    except Exception:
+                        log.exception("Owned input release failed")
+        except Exception:
+            log.exception("Input cleanup failed")
