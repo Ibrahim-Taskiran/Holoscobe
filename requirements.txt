@@ -1,0 +1,11 @@
+# Top-level runtime + dev dependencies (Phase 0, tested on Windows 11 x64, Python 3.11.18).
+# Exact, hashed, transitive pins live in requirements.lock (install from that file).
+# OpenCV: mediapipe depends on opencv-contrib-python; installing opencv-python as well puts two
+# distributions into the same cv2/ folder, so only the contrib build is used.
+mediapipe==1.2.2
+opencv-contrib-python==5.0.0.93
+PySide6-Essentials==6.12.0
+pycaw==20260927
+comtypes==1.5.0
+pyinstaller==6.22.3
+pytest==9.2.0

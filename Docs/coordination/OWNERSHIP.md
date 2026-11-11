@@ -11,7 +11,7 @@ Bu dosya bağlayıcıdır. Yalnız Claude yöneticisi günceller.
 | Claude A (temel) | `pyproject.toml`, `requirements*.txt`, `assets/**`, `scripts/**`, `THIRD_PARTY_NOTICES.md`, `Docs/reports/phase0_*` |
 | Claude B (özellikler) | `src/handcontrol/features.py`, `src/handcontrol/filters.py`, `tests/features/**` |
 | Claude C (jestler) | `src/handcontrol/gestures.py`, `tests/gestures/**` |
-| Claude D (denetleyici) | `src/handcontrol/controller.py`, `src/handcontrol/safety.py`, `src/handcontrol/dryrun.py`, `tests/controller/**` |
+| Claude D (denetleyici) | `src/handcontrol/controller.py`, `src/handcontrol/mapping.py`, `src/handcontrol/safety.py`, `src/handcontrol/dryrun.py`, `tests/controller/**` |
 | Claude E (kamera) | `src/handcontrol/camera.py`, `src/handcontrol/tracking.py`, `src/handcontrol/config.py`, `tests/camera/**`, `tests/config/**` |
 | Codex | `src/handcontrol/windows/**`, `tests/windows/**`, `Docs/reports/windows_*` |
 | Antigravity | `src/handcontrol/ui/**`, `tests/ui/**`, `Docs/reports/ui_*` |

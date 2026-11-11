@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "models": [
+    {
+      "id": "hand_landmarker",
+      "name": "MediaPipe HandLandmarker (full), float16 model bundle",
+      "local_path": "assets/models/hand_landmarker.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      "url_immutable": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task?generation=1682480004222387",
+      "url_docs_latest_alias": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+      "version": "float16/1",
+      "gcs_generation": "1682480004222387",
+      "gcs_last_modified": "Wed, 26 Apr 2023 03:33:24 GMT",
+      "size_bytes": 7819105,
+      "sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
+      "sha256_status": "computed at retrieval, independent review pending",
+      "sha256_notes": [
+        "No independently published SHA-256 for this exact file was found.",
+        "google-ai-edge/mediapipe third_party/external_files.bzl pins a DIFFERENT file (mediapipe-assets testdata hand_landmarker.task, sha256 32d1eab97e80a9a20edb29231e15301ce65abfd0fa9d41cf1757e0ecc8078a4e); not usable as a reference.",
+        "Transport integrity only (same source, NOT an independent review): server x-goog-hash md5=FTGEMOo4UWcP6ZFBFqnPrQ== (hex 15318430ea3851670fe9914116a9cfad) matches the downloaded bytes; the docs 'latest' alias returns the same ETag/MD5/size.",
+        "To close: a human reviewer re-downloads on another machine/network, compares SHA-256, and sets sha256_status to 'independently reviewed <date> by <reviewer>'."
+      ],
+      "license": "Apache-2.0",
+      "license_source": "Official model card 'MediaPipe Hands (Lite/Full)', page 2 'LICENSED UNDER: Apache License, Version 2.0': https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Hand%20Tracking%20(Lite_Full)%20with%20Fairness%20Oct%202021.pdf (retrieved PDF sha256 43127ff8a92e22717f0d8c30dab3efef4641a29cbf50b15ae3de001be94ab76b)",
+      "license_link_evidence": "Official docs https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker, 'Models' table: row 'HandLandmarker (full) | 192 x 192, 224 x 224 | float 16' links that model card and the float16 bundle download.",
+      "license_caveat": "The model card is dated Oct 2021 and describes the Lite/Full hand pipeline; the 2023 .task bundle is tied to it only through the official docs table. The docs page text itself is CC BY 4.0 (page content), which is NOT the model license. The MediaPipe repository license (Apache-2.0) is recorded separately in THIRD_PARTY_NOTICES.md.",
+      "intended_use_notes": "Model card lists 'Gesture recognition' and 'Hand control' as intended domains; surveillance/identity recognition out of scope.",
+      "redistribution_status": "permitted by license evidence (Apache-2.0: ship LICENSE text + attribution); bundling in a release HELD until sha256_status is independently reviewed. Until then setup downloads the model from the official URL.",
+      "retrieved": "2026-11-12"
+    }
+  ]
+}

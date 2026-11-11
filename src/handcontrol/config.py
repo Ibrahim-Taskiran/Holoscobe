@@ -1,0 +1,222 @@
+"""Versioned settings stored as JSON under %LOCALAPPDATA%\\Holoscobe\\settings.json.
+
+Validation clamps ranges, ignores unknown keys, migrates by schema_version, saves atomically and
+recovers from corrupt files by keeping a diagnostic copy and loading safe defaults.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import tempfile
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+SCHEMA_VERSION = 1
+APP_DIR_NAME = "Holoscobe"
+SETTINGS_FILE = "settings.json"
+
+BACKENDS = ("msmf", "dshow", "auto")
+HANDS = ("right", "left")
+DIRECTIONS = ("normal", "reversed")
+MODES = ("pointer", "scroll", "zoom", "volume", "windows")
+MONITOR_MODES = ("primary", "virtual_desktop", "monitor")
+DEFAULT_HOTKEY = "Ctrl+Alt+Shift+F12"
+
+
+@dataclass
+class CameraSettings:
+    index: int = 0
+    backend: str = "msmf"
+    width: int = 640
+    height: int = 480
+    fps: int = 30
+
+
+@dataclass
+class MonitorMapping:
+    mode: str = "primary"
+    monitor_index: int = 0
+
+
+@dataclass
+class CalibrationBounds:
+    """Active region of the camera frame (normalized, unmirrored) mapped to the screen."""
+    left: float = 0.15
+    top: float = 0.15
+    right: float = 0.85
+    bottom: float = 0.85
+
+
+@dataclass
+class Settings:
+    schema_version: int = SCHEMA_VERSION
+    camera: CameraSettings = field(default_factory=CameraSettings)
+    mirror_preview: bool = True
+    dominant_hand: str = "right"
+    pinch_on_threshold: float = 0.30      # palm units: pinch starts below this
+    pinch_off_threshold: float = 0.45     # palm units: pinch ends above this (hysteresis)
+    sensitivity: float = 1.0
+    scroll_direction: str = "normal"
+    zoom_direction: str = "normal"
+    default_mode: str = "pointer"
+    emergency_hotkey: str = DEFAULT_HOTKEY
+    overlay_visible: bool = True
+    mascot_visible: bool = True
+    monitor_mapping: MonitorMapping = field(default_factory=MonitorMapping)
+    calibration: CalibrationBounds = field(default_factory=CalibrationBounds)
+    start_with_windows: bool = False
+
+
+# ---------- validation helpers ----------
+
+def _num(v: Any, default: float, lo: float, hi: float) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return default
+    return min(hi, max(lo, float(v)))
+
+
+def _int(v: Any, default: int, lo: int, hi: int) -> int:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return default
+    return int(min(hi, max(lo, round(v))))
+
+
+def _bool(v: Any, default: bool) -> bool:
+    return v if isinstance(v, bool) else default
+
+
+def _choice(v: Any, options: tuple[str, ...], default: str) -> str:
+    if isinstance(v, str) and v.lower() in options:
+        return v.lower()
+    return default
+
+
+def _dict(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
+def validate(data: Any) -> Settings:
+    """Build a valid Settings from arbitrary data; bad values fall back to defaults, ranges clamp."""
+    d = _dict(data)
+    s = Settings()
+    c, cd = s.camera, _dict(d.get("camera"))
+    c.index = _int(cd.get("index"), c.index, 0, 16)
+    c.backend = _choice(cd.get("backend"), BACKENDS, c.backend)
+    c.width = _int(cd.get("width"), c.width, 160, 3840)
+    c.height = _int(cd.get("height"), c.height, 120, 2160)
+    c.fps = _int(cd.get("fps"), c.fps, 5, 120)
+
+    s.mirror_preview = _bool(d.get("mirror_preview"), s.mirror_preview)
+    s.dominant_hand = _choice(d.get("dominant_hand"), HANDS, s.dominant_hand)
+    on = _num(d.get("pinch_on_threshold"), s.pinch_on_threshold, 0.05, 1.5)
+    off = _num(d.get("pinch_off_threshold"), s.pinch_off_threshold, 0.05, 2.0)
+    if off <= on:  # hysteresis must be real
+        off = min(2.0, on + 0.05)
+        if off <= on:
+            on = off - 0.05
+    s.pinch_on_threshold, s.pinch_off_threshold = on, off
+    s.sensitivity = _num(d.get("sensitivity"), s.sensitivity, 0.2, 3.0)
+    s.scroll_direction = _choice(d.get("scroll_direction"), DIRECTIONS, s.scroll_direction)
+    s.zoom_direction = _choice(d.get("zoom_direction"), DIRECTIONS, s.zoom_direction)
+    s.default_mode = _choice(d.get("default_mode"), MODES, s.default_mode)
+    hk = d.get("emergency_hotkey")
+    s.emergency_hotkey = hk.strip() if isinstance(hk, str) and 0 < len(hk.strip()) <= 64 else DEFAULT_HOTKEY
+    s.overlay_visible = _bool(d.get("overlay_visible"), s.overlay_visible)
+    s.mascot_visible = _bool(d.get("mascot_visible"), s.mascot_visible)
+    s.start_with_windows = _bool(d.get("start_with_windows"), False)
+
+    m, md = s.monitor_mapping, _dict(d.get("monitor_mapping"))
+    m.mode = _choice(md.get("mode"), MONITOR_MODES, m.mode)
+    m.monitor_index = _int(md.get("monitor_index"), m.monitor_index, 0, 15)
+
+    b, bd = s.calibration, _dict(d.get("calibration"))
+    left = _num(bd.get("left"), b.left, 0.0, 0.9)
+    top = _num(bd.get("top"), b.top, 0.0, 0.9)
+    right = _num(bd.get("right"), b.right, 0.1, 1.0)
+    bottom = _num(bd.get("bottom"), b.bottom, 0.1, 1.0)
+    if right - left < 0.1 or bottom - top < 0.1:  # degenerate region -> defaults
+        left, top, right, bottom = b.left, b.top, b.right, b.bottom
+    b.left, b.top, b.right, b.bottom = left, top, right, bottom
+    return s
+
+
+# ---------- migration ----------
+
+# Maps a stored schema_version to a function upgrading its dict to version + 1.
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+
+
+def migrate(data: dict[str, Any]) -> dict[str, Any]:
+    version = data.get("schema_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        version = 1
+    while version < SCHEMA_VERSION:
+        step = MIGRATIONS.get(version)
+        if step is not None:
+            data = step(dict(data))
+        version += 1
+        data["schema_version"] = version
+    return data
+
+
+# ---------- storage ----------
+
+def default_settings_path() -> Path:
+    base = os.environ.get("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / "AppData" / "Local"
+    return root / APP_DIR_NAME / SETTINGS_FILE
+
+
+class SettingsStore:
+    def __init__(self, path: Optional[str | os.PathLike[str]] = None, *, clock: Optional[Callable[[], float]] = None) -> None:
+        self.path = Path(path) if path else default_settings_path()
+        self._time = clock or time.time
+        self.last_recovery: Optional[Path] = None   # diagnostic copy made by the last load, if any
+
+    def load(self) -> Settings:
+        """Load settings; missing file -> defaults. Corrupt/unreadable -> diagnostic copy + defaults."""
+        self.last_recovery = None
+        if not self.path.exists():
+            return Settings()
+        try:
+            raw = self.path.read_bytes()
+            data = json.loads(raw.decode("utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("settings root is not an object")
+        except (OSError, ValueError):  # JSONDecodeError and UnicodeDecodeError are ValueErrors
+            self._keep_diagnostic_copy()
+            return Settings()
+        return validate(migrate(data))
+
+    def _keep_diagnostic_copy(self) -> None:
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(self._time()))
+        ms = int((self._time() % 1) * 1000)
+        target = self.path.with_name(f"settings.corrupt-{stamp}-{ms:03d}.json")
+        try:
+            shutil.copy2(self.path, target)
+            self.last_recovery = target
+        except OSError:
+            self.last_recovery = None
+
+    def save(self, settings: Settings) -> None:
+        """Atomic write: temp file in the same directory, fsync, os.replace."""
+        valid = validate(asdict(settings))
+        valid.schema_version = SCHEMA_VERSION
+        payload = json.dumps(asdict(valid), indent=2, ensure_ascii=False).encode("utf-8")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".settings-", suffix=".tmp", dir=self.path.parent)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
