@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from handcontrol.config import Settings
 from handcontrol.contracts import ActionKind as A, Handedness
@@ -32,6 +33,7 @@ def _last_move_before(rig: Rig, idx: int):
 
 
 def test_pinch_release_clicks_once_at_latched_point(rig):
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False)  # Legacy pinch regression.
     rig.activate(_point(250))
     rig.run(150, [hand(PINCH, DOM_C)])
     rig.run(400, _point(250))
@@ -43,6 +45,7 @@ def test_pinch_release_clicks_once_at_latched_point(rig):
 
 
 def test_pinch_onset_drift_of_latched_point_is_bounded(rig):
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False)  # Legacy pinch regression.
     """The index tip moves while the pinch closes; the click latches the pointer at PINCH_START.
     Synthetic pose change (index curl 0 -> 0.65) is a worst case; this measures, not proves, drift."""
     rig.activate(_point(250))
@@ -70,6 +73,7 @@ def test_pinch_with_motion_does_not_click(rig):
 
 
 def test_pointer_frozen_while_pinched(rig):
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False)  # Legacy pinch regression.
     rig.activate(_point(250))
     rig.run(120, [hand(PINCH, DOM_C)])
     n = rig.count(A.MOVE_POINTER)
@@ -100,30 +104,45 @@ def test_calibration_bounds_are_unmirrored_settings():
     assert 0.1 < tip_u - 0.5 < 0.4 and abs(x - expected) < 20                # unconverted rect clamps to 1919
 
 
-def test_left_dominant_hand_drives_pointer():
+def test_right_hand_drives_pointer_even_when_dominant_setting_is_left():
     s = Settings()
     s.dominant_hand = "left"
     rig = Rig(s)
     rig.activate([hand(POINT, (450, 300), side="left")])
     rig.run(500, lambda u: [hand(POINT, (lerp(450, 300, u), 300), side="left"),
-                            hand(POINT, (150, 300), side="right")])
+                            hand(POINT, (lerp(150, 250, u), 300), side="right")])
     assert rig.count(A.MOVE_POINTER) > 5
+
     rig.sink.clear()
-    rig.run(500, lambda u: [hand(POINT, (lerp(150, 300, u), 300), side="right")])   # right hand only
+    rig.run(500, lambda u: [hand(POINT, (lerp(300, 450, u), 300), side="left")])
     assert rig.count(A.MOVE_POINTER) == 0
 
 
-def test_left_dominant_pinch_clicks_with_left_hand():
+def test_depth_tap_through_real_feature_pipeline(rig):
+    from handcontrol.contracts import Landmark
+    rig.activate(_point(250))
+    rig.run(500, _point(250))
+    for depth in (0.14, 0.26, 0.38, 0.32, 0.17, 0.03):
+        h = hand(POINT, (250, 300))
+        points = list(h.landmarks)
+        for index in (6, 7, 8):
+            old = points[index]
+            points[index] = Landmark(old.x, old.y, old.z - depth * 100 / 640 * (index - 5) / 3)
+        rig.frame([replace(h, landmarks=tuple(points))])
+    assert rig.count(A.LEFT_CLICK) == 1
+
+
+def test_pinch_no_longer_clicks_with_either_hand():
     s = Settings()
     s.dominant_hand = "left"
     rig = Rig(s)
     rig.activate([hand(POINT, (450, 300), side="left")])
     rig.run(150, [hand(PINCH, (450, 300), side="left")])
     rig.run(300, [hand(POINT, (450, 300), side="left")])
-    assert rig.count(A.LEFT_CLICK) == 1
+    assert rig.count(A.LEFT_CLICK) == 0
     rig.run(150, [hand(PINCH, (150, 300), side="right")])
     rig.run(300, [hand(POINT, (150, 300), side="right")])
-    assert rig.count(A.LEFT_CLICK) == 1
+    assert rig.count(A.LEFT_CLICK) == 0
 
 
 def test_primary_monitor_mapping_keeps_pointer_on_primary():

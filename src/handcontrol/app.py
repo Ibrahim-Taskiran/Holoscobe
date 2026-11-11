@@ -290,7 +290,7 @@ def main(argv=None) -> int:
         window.statusBar().showMessage(state.error_text or 'Önce Sürdür. Sağ yumruk: küçült | Sol yumruk: geri aç (350 ms tut).')
     bridge.state_changed.connect(update_controls)
     update_controls(bridge.state)
-    window.statusBar().showMessage('Önce Sürdür. Sağ yumruk: küçült | Sol yumruk: son pencereyi geri aç (350 ms tut).')
+    window.statusBar().showMessage('Sürdür → sağ işaret: imleç; kısa öne/geri: tık. Sağ/sol yumruk: küçült/geri aç.')
     tray = HandControlTray(bridge, window)
     overlay = OverlayWindow(bridge)
     toast = FeedbackToast(bridge, auto_show_window=True)

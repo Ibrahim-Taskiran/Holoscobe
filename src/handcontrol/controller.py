@@ -39,6 +39,7 @@ from handcontrol.contracts import (
 )
 from handcontrol.mapping import CalibrationRect, map_normalized, normalize_camera_point, threshold_physical_px
 from handcontrol.safety import GuardedSink, Watchdog
+from handcontrol.index_tap import IndexTapRecognizer
 
 
 # ---------------------------------------------------------------- config / snapshot
@@ -87,6 +88,7 @@ class ControllerConfig:
     monitor_mode: str = "virtual_desktop"
     monitor_index: int = 0
     camera_error_paused: bool = False
+    index_tap_click: bool = True
 
 
 class MenuKind(Enum):
@@ -341,6 +343,7 @@ class Controller:
         self._fist_ready: set[int] = set()
         self._fist_candidate: Optional[tuple[int, Handedness, float, Optional[WindowTarget]]] = None
         self._minimized_history: list[WindowTarget] = []
+        self._index_tap = IndexTapRecognizer()
 
     # ------------------------------------------------------------ public API
 
@@ -543,6 +546,7 @@ class Controller:
         self._dirty = False
 
     def _clear_transient(self) -> None:
+        self._index_tap.reset()
         self._reset_fists()
         self._eng = None
         self._menu = None
@@ -597,6 +601,7 @@ class Controller:
 
     def _soft_reset(self, cancel_menu_hold: bool = True) -> None:
         """Loss / clap-candidate reset: freeze, drop engagement, need fresh neutral."""
+        self._index_tap.reset()
         had = self._eng is not None
         self._cancel_engagement(release=True)
         if cancel_menu_hold and self._menu is not None:
@@ -671,7 +676,8 @@ class Controller:
     # ------------------------------------------------------------ frame processing
 
     def _dominant(self, hands: Sequence[HandFeatures]) -> Optional[HandFeatures]:
-        doms = [h for h in hands if h.handedness is self._cfg.dominant]
+        # The OS pointer and its click gestures always belong to the right hand.
+        doms = [h for h in hands if h.handedness is Handedness.RIGHT]
         return doms[0] if len(doms) == 1 else None
 
     def _frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...]) -> None:
@@ -738,7 +744,9 @@ class Controller:
 
         if self._menu is not None:
             self._reset_fists()
+            self._index_tap.reset()
         elif self._fist_frame(frame, hands):
+            self._index_tap.reset()
             return
 
         if self._eng is not None and not all(h in present for h in self._eng.hands()):
@@ -775,18 +783,29 @@ class Controller:
             return
 
         if self._need_neutral or dom is None or pos is None:
+            self._index_tap.reset()
             return
+
+        if self._mode is Mode.POINTER and self._cfg.index_tap_click:
+            latched = self._pointer if self._pointer is not None else pos
+            suppress, click = self._index_tap.update(dom, frame.capture_ms, frame.width, latched)
+            if click is not None:
+                self._dispatch(ActionKind.LEFT_CLICK, frame.capture_ms, x=click[0], y=click[1])
+                self._notice = 'Sağ işaret parmağı: sol tık'
+            if suppress:
+                return
 
         for ev in events:
             if ev.kind is GestureKind.PINCH_START and ev.hand_id is not None:
                 if self._start_engagement(ev, events, frame, hands, dom, pos, raw):
                     return
 
-        if dom.hand_id not in self._pinched and _index_extended(dom) and pos != self._pointer:
+        if (dom.hand_id not in self._pinched or (self._mode is Mode.POINTER and self._cfg.index_tap_click)) and _index_extended(dom) and pos != self._pointer:
             if self._dispatch(ActionKind.MOVE_POINTER, frame.capture_ms, x=pos[0], y=pos[1]):
                 self._pointer = pos
 
     def _tracking_lost(self) -> None:
+        self._index_tap.reset()
         self._reset_fists()
         if self._eng is not None:
             self._soft_reset()
@@ -889,6 +908,8 @@ class Controller:
             return False
         latched = self._pointer if self._pointer is not None else pos
         if mode is Mode.POINTER:
+            if self._cfg.index_tap_click:
+                return False
             self._eng = _Eng(_EngKind.CLICK, dom.hand_id, ev.t_ms, latched=latched, raw_start=raw)
         elif mode is Mode.SCROLL:
             e = _Eng(_EngKind.SCROLL, dom.hand_id, ev.t_ms, latched=latched, base=self._palm_y(dom, frame),

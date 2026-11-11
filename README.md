@@ -2,7 +2,7 @@
 
 Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: uygulama bağlandı; donanım kabulü bekliyor.** Kamera → pipeline → denetleyici → arayüz zinciri ve güvenlik yaşam döngüsü hazır. Son otomatik takım: **680 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Gerçek kamera, el ve iki monitör doğrulaması henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir.
+> **Durum: uygulama bağlandı; donanım kabulü bekliyor.** Kamera → pipeline → denetleyici → arayüz zinciri ve güvenlik yaşam döngüsü hazır. Son otomatik takım: **695 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Gerçek kamera, el ve iki monitör doğrulaması henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir.
 
 ## Ne yapar
 
@@ -11,8 +11,8 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 | Hepsi | İki elle bir kez el çırpma | Kontrolü açar ya da duraklatır |
 | Hepsi (etkin) | Sağ eli yumruk yapıp 350 ms tut | Ön plandaki uygulama penceresini küçültür |
 | Hepsi (etkin) | Sol eli yumruk yapıp 350 ms tut | Bu oturumda son küçültülen pencereyi geri açar |
-| İşaretçi | Baskın elin işaret parmağı | İmleci hareket ettirir |
-| İşaretçi | Kısa başparmak–işaret pinch | Sol tık |
+| İşaretçi | Sağ elin işaret parmağı | İmleci hareket ettirir |
+| İşaretçi | Sağ elde yalnız işaret açık; parmağı kısa ve hızlı öne itip geri çek | Sol tık |
 | Kaydırma | Pinch + dikey hareket | Dikey kaydırma |
 | Yakınlaştırma | İki elle pinch, elleri aç/kapat | Ctrl + tekerlek |
 | Ses | Pinch + dikey hareket | Sistem sesi |
@@ -20,6 +20,14 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 | Pencereler | Kısa pinch | Küçült, büyüt, diğer monitöre taşı, kapat menüsü |
 
 Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut.
+
+Tıklama için sağ elinde başparmak, orta, yüzük ve serçe bükülü; yalnız işaret parmağı
+açık olsun. Önce yaklaşık 200 ms sabit tut, ardından işaret parmağını kameraya doğru
+kısa bir hareketle itip hemen başlangıç konumuna getir (en fazla 450 ms). Avucunu
+yerinde tut. Tıklama başlangıcındaki imleç konumu sabitlenir. Pinch artık varsayılan
+İmleç modunda tıklamaz. Sol el, baskın el ayarı ne olursa olsun imleci/tıklamayı
+yönetmez; sol yumrukla pencere geri açma korunur. Kamera z tahmini gerçek mesafe
+ölçümü değildir; bu hareketin gerçek kamera hassasiyeti henüz doğrulanmadı.
 
 Yumruk komutundan önce elini en az 200 ms açık göster; tekrar komut için yeniden aç.
 Beş parmağın da bükük algılanması gerekir. İki yumruk aynı anda komut üretmez. Sağ yumruk
