@@ -37,3 +37,12 @@ Herkes kendi istek dosyasını yazabilir: `Docs/coordination/REQUESTS_<ad>.md`.
 - Şartname: `Docs/Windows_Hand_Gesture_Control_Spec.md` (154 satır, bölüm numaraları §1–§10)
 - Yol haritası: `Docs/ROADMAP_TR.md`
 - Sözleşmeler: `src/handcontrol/contracts.py`
+
+## Ek sahiplik (2. tur, 2026-11-12)
+
+| Sahip | Yazabileceği yollar |
+|---|---|
+| Claude F (birleştirme) | `src/handcontrol/pipeline.py`, `tests/integration/**`; ayrıca birleştirme hatası için Claude A–E dosyalarında en küçük düzeltme |
+| Claude G (kabul araçları) | `src/handcontrol/tools/**`, `tests/tools/**` |
+
+`windows/**`, `ui/**` ve `contracts.py` bu turda da yalnız kendi sahiplerinindir.
