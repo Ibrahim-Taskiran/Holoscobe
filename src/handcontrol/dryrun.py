@@ -18,6 +18,14 @@ def describe_action(action: Action) -> str:
         return f"İmleci taşı → ({action.x}, {action.y})"
     if k is ActionKind.LEFT_CLICK:
         return f"Sol tık ({action.x}, {action.y})"
+    if k is ActionKind.RIGHT_CLICK:
+        return f"Sağ tık ({action.x}, {action.y})"
+    if k is ActionKind.DOUBLE_CLICK:
+        return f"Çift tık ({action.x}, {action.y})"
+    if k is ActionKind.LEFT_DOWN:
+        return f"Sol tuşa bas ve tut ({action.x}, {action.y})"
+    if k is ActionKind.LEFT_UP:
+        return f"Sol tuşu bırak ({action.x}, {action.y})"
     if k is ActionKind.SCROLL:
         yon = "yukarı" if action.steps > 0 else "aşağı"
         return f"Kaydır {yon} {abs(action.steps)} adım{tgt}"

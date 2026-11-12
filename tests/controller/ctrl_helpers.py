@@ -66,7 +66,8 @@ EventSpec = Union[GestureEvent, tuple]
 
 
 def tcfg(**kw) -> ControllerConfig:
-    base = dict(mirror=False, calibration=CalibrationRect(), index_tap_click=False)  # Legacy pinch regression fixtures.
+    # Legacy pinch regression fixtures: pinch-release click, no pinch mouse, no index depth tap.
+    base = dict(mirror=False, calibration=CalibrationRect(), index_tap_click=False, pinch_mouse=False)
     base.update(kw)
     return ControllerConfig(**base)
 

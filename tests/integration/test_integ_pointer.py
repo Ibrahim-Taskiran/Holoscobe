@@ -33,7 +33,7 @@ def _last_move_before(rig: Rig, idx: int):
 
 
 def test_pinch_release_clicks_once_at_latched_point(rig):
-    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False)  # Legacy pinch regression.
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False)  # Legacy pinch regression.
     rig.activate(_point(250))
     rig.run(150, [hand(PINCH, DOM_C)])
     rig.run(400, _point(250))
@@ -45,7 +45,7 @@ def test_pinch_release_clicks_once_at_latched_point(rig):
 
 
 def test_pinch_onset_drift_of_latched_point_is_bounded(rig):
-    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False)  # Legacy pinch regression.
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False)  # Legacy pinch regression.
     """The index tip moves while the pinch closes; the click latches the pointer at PINCH_START.
     Synthetic pose change (index curl 0 -> 0.65) is a worst case; this measures, not proves, drift."""
     rig.activate(_point(250))
@@ -73,7 +73,7 @@ def test_pinch_with_motion_does_not_click(rig):
 
 
 def test_pointer_frozen_while_pinched(rig):
-    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False)  # Legacy pinch regression.
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False)  # Legacy pinch regression.
     rig.activate(_point(250))
     rig.run(120, [hand(PINCH, DOM_C)])
     n = rig.count(A.MOVE_POINTER)
@@ -120,6 +120,7 @@ def test_right_hand_drives_pointer_even_when_dominant_setting_is_left():
 
 def test_depth_tap_through_real_feature_pipeline(rig):
     from handcontrol.contracts import Landmark
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=True)  # depth tap is off by default now
     rig.activate(_point(250))
     rig.run(500, _point(250))
     for depth in (0.14, 0.26, 0.38, 0.32, 0.17, 0.03):

@@ -37,7 +37,7 @@ def test_clap_toggles_at_rate(fps, jitter, seed):
 @pytest.mark.parametrize("seed", SEEDS)
 def test_legacy_pinch_click_at_rate(fps, jitter, seed):
     rig = _rig(fps, jitter, seed)
-    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False)
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False)
     rig.activate([hand(POINT, R0)])
     rig.run(200, [hand(PINCH, R0)])
     rig.run(400, [hand(POINT, R0)])
