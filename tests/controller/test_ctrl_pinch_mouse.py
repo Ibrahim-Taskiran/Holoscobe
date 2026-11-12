@@ -170,6 +170,10 @@ CANCELS = {
 def test_every_cancel_path_releases_the_left_button(cancel):
     r = _dragging()
     CANCELS[cancel](r)
+    if cancel == "degraded":
+        # Same-ID degraded samples freeze a drag; the unchanged 200 ms watchdog still releases it.
+        assert not released_after_down(r)
+        r.ctl.watchdog.check(r.ctl.watchdog.last_usable_ms + 200.0)
     assert released_after_down(r), r.kinds()
     # the pinch release afterwards never re-presses or clicks
     for _ in range(3):
@@ -235,10 +239,10 @@ def test_middle_finger_entering_already_pinched_does_not_fire():
     assert r.count(K.RIGHT_CLICK) == 0
 
 
-def test_both_pinches_together_never_click():
+def test_decided_pinches_ignore_other_contact_until_release():
     r = rig()
     pointer_at(r)
-    # thumb+middle first, then thumb+index just as close: ambiguous, neither clicks
+    # A late overlapping index contact does not replace the already decided right session.
     for _ in range(4):
         r.frame(mh(mid=0.1))
     r.frame(mh(mid=0.1, idx=0.12), events=[(G.PINCH_START, RIGHT)])
@@ -246,6 +250,7 @@ def test_both_pinches_together_never_click():
     r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)])
     for _ in range(8):
         r.frame(mh(mid=1.2))
+    assert r.count(K.RIGHT_CLICK) == 1 and r.count(K.LEFT_CLICK) == 0
     # thumb+index first, then thumb+middle: index wins, still a single tap
     r.frame(mh(idx=0.1), events=[(G.PINCH_START, RIGHT)])
     for _ in range(4):
@@ -253,11 +258,11 @@ def test_both_pinches_together_never_click():
     r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)])
     for _ in range(4):
         r.frame(mh(mid=1.2))
-    assert r.count(K.RIGHT_CLICK) == 0
+    assert r.count(K.RIGHT_CLICK) == 1
     assert r.count(K.LEFT_CLICK) == 1 and r.count(K.LEFT_DOWN) == 0
 
 
-def test_same_frame_start_with_equal_distances_prefers_left_click():
+def test_same_frame_equal_distances_without_decisive_states_do_not_guess():
     r = rig()
     pointer_at(r)
     r.frame(mh(mid=0.1, idx=0.1))
@@ -266,7 +271,8 @@ def test_same_frame_start_with_equal_distances_prefers_left_click():
     r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)])
     for _ in range(4):
         r.frame(mh(mid=1.2))
-    assert r.count(K.RIGHT_CLICK) == 0 and r.count(K.LEFT_CLICK) == 1
+    assert r.count(K.RIGHT_CLICK) == 0 and r.count(K.LEFT_CLICK) == 0
+    assert r.count(K.LEFT_DOWN) == 0
 
 
 @FPS
@@ -286,9 +292,10 @@ def test_closest_finger_wins_regardless_of_arrival_order(dt):
     for _ in range(4):
         r.frame(mh(), dt=dt)
     for _ in range(3):
-        r.frame(mh(mid=0.3, idx=0.4), dt=dt)                                 # middle pinch starts first
-    r.frame(mh(mid=0.3, idx=0.05), events=[(G.PINCH_START, RIGHT)], dt=dt)
-    r.frame(mh(mid=0.3, idx=0.05), dt=dt)
+        # Finger states select left inside the decision window, even if middle debounce starts first.
+        r.frame(mh(mid=0.3, idx=0.4, bent="i"), dt=dt)
+    r.frame(mh(mid=0.3, idx=0.05, bent="i"), events=[(G.PINCH_START, RIGHT)], dt=dt)
+    r.frame(mh(mid=0.3, idx=0.05, bent="i"), dt=dt)
     r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)], dt=dt)
     for _ in range(4):
         r.frame(mh(mid=1.2), dt=dt)

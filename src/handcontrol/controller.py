@@ -98,7 +98,8 @@ class ControllerConfig:
     pinch_mouse: bool = True
     mouse_hold_ms: float = 480.0            # thumb+index pinch held closed this long -> LEFT_DOWN (drag)
     double_click_window_ms: float = 500.0   # a tap starting this soon after a click reuses its point
-    mouse_drag_move_palm: float = 0.45      # palm travel (palm units) that turns a tap into a drag
+    mouse_drag_move_palm: float = 0.45      # palm travel that starts a left drag
+    right_cancel_move_palm: float = 0.6    # recorded right release drift exceeds .45 without a drag
     pinch_latch_open_pu: float = 0.5        # absolute mode: latch the pointer of the last frame the hand was this open
     pinch_latch_lookback_ms: float = 250.0  # ... if that frame is at most this old at pinch start
     right_pinch_on_pu: float = 0.33         # thumb+middle hysteresis (palm units), same as thumb+index
@@ -106,9 +107,16 @@ class ControllerConfig:
     right_pinch_debounce_ms: float = 70.0
     # one physical pinch = one click: after a pinch ends, a new pinch of the same finger only counts
     # once the fingers were this far apart (palm units) or apart for this long (threshold flicker)
-    pinch_rearm_open_pu: float = 0.6
-    pinch_rearm_ms: float = 300.0
-    pinch_resolve_margin_pu: float = 0.08   # thumb+middle wins only when this much closer than thumb+index
+    pinch_rearm_open_pu: float = 0.9        # observed bounce peaks .776/.899; clear opening is about 1 pu
+    pinch_rearm_ms: float = 700.0          # narrow recontacts within this window are one physical pinch
+    # Left/right decision. A pinch onset (first thumb+index or thumb+middle start) opens a window of
+    # pinch_decide_ms; at its end (or at a release inside it) the last contact frame decides: finger
+    # states when they are decisive, else the clearly nearer tip (by pinch_resolve_margin_pu). A tie
+    # remains unresolved when both tips touch. Once decided the other pinch is ignored
+    # until both are released. The decided finger's own pinch must start within pinch_decide_max_ms.
+    pinch_resolve_margin_pu: float = 0.02
+    pinch_decide_ms: float = 60.0           # 3 frames at 30 FPS (onset frame + 2)
+    pinch_decide_max_ms: float = 300.0
     right_open_lookback_ms: float = 500.0   # right click tolerates unsure fingers if the hand was open this recently
     # a closed hand with thumb+index tips this close and the index not fully curled is a pinch, not a fist
     pinch_not_fist_pu: float = 0.45
@@ -240,15 +248,17 @@ class _EngKind(Enum):
     VOLUME = "volume"
     WIN_PINCH = "win_pinch"
     DRAG = "drag"
+    MOUSE_PENDING = "mouse_pending"   # pinch onset: left or right not decided yet (pointer held)
     MOUSE_TAP = "mouse_tap"      # thumb+index pinch: tap candidate (pointer held at the latch)
     MOUSE_DRAG = "mouse_drag"    # left button held, pointer follows the hand
     RIGHT_TAP = "right_tap"      # thumb+middle pinch: right click candidate
     BLOCKED = "blocked"      # cancelled or refused; waits for the pinch release
 
 
-_MOUSE_KINDS = (_EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG, _EngKind.RIGHT_TAP)
+_MOUSE_KINDS = (_EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG, _EngKind.RIGHT_TAP)
 
 _ENG_TEXT = {
+    _EngKind.MOUSE_PENDING: "Tıklama bekleniyor",
     _EngKind.MOUSE_TAP: "Tıklama bekleniyor",
     _EngKind.MOUSE_DRAG: "Sürükleniyor (sol tuş basılı)",
     _EngKind.RIGHT_TAP: "Sağ tık bekleniyor",
@@ -282,7 +292,14 @@ class _Eng:
     last_pos: Optional[tuple[int, int]] = None
     palm0: Optional[tuple[float, float]] = None   # palm center (camera px) at pinch start
     pos0: Optional[tuple[int, int]] = None        # mapped fingertip at pinch start (drag reference)
-    middle: bool = False                          # thumb+middle engagement (BLOCKED waits for its release)
+    # pinch-mouse session: a BLOCKED engagement with middle=True waits until neither the thumb+index
+    # nor the thumb+middle pinch is held any more
+    middle: bool = False
+    vote: Optional[str] = None                    # MOUSE_PENDING: "left"/"right" from the last contact frame
+    state_vote: Optional[str] = None              # ... from finger states, when they were decisive
+    decision_done: bool = False                  # freeze the side after the short decision window
+    index_armed: bool = True                     # re-arm state at onset, before this session releases
+    middle_armed: bool = True
     anchor0: Optional[tuple[float, float]] = None  # relative mode: filtered hand anchor at pinch start
     fpos: Optional[tuple[float, float]] = None     # relative mode: float position of a window drag
 
@@ -341,17 +358,27 @@ def _index_extended(h: HandFeatures) -> bool:
     return False
 
 
-def _right_pose(h: HandFeatures, strict: bool) -> bool:
-    """Thumb+middle right-click pose: index extended and ring or little not curled. The pointing
-    pose (thumb tucked over the curled middle finger, ring and little curled) also brings the thumb
-    tip near the middle tip and must never right click. strict (at pinch start): index EXTENDED and
-    ring or little EXTENDED; otherwise (while held) only a clearly BENT index or ring+little cancel."""
+def _outer_curled(h: HandFeatures) -> bool:
+    """Ring and little both BENT: the pointing pose (thumb tucked over the curled middle finger brings
+    the thumb tip next to the middle tip, recorded thumb-middle median 0.33 pu, minimum 0.02) or a
+    fist. Never a right click. The user's real right pinch keeps ring and little EXTENDED; the index
+    may read BENT there (recording 2026-11-12, right repeat 6), so the index does not veto."""
     s = {f.name: f.state for f in h.fingers}
-    if strict:
-        return s.get(FingerName.INDEX) is FingerState.EXTENDED and FingerState.EXTENDED in (
-            s.get(FingerName.RING), s.get(FingerName.LITTLE))
-    return s.get(FingerName.INDEX) is not FingerState.BENT and not (
-        s.get(FingerName.RING) is FingerState.BENT and s.get(FingerName.LITTLE) is FingerState.BENT)
+    return s.get(FingerName.RING) is FingerState.BENT and s.get(FingerName.LITTLE) is FingerState.BENT
+
+
+def _state_vote(h: HandFeatures) -> Optional[str]:
+    """Left/right from finger states alone, or None. Right: middle BENT, index EXTENDED and ring or
+    little EXTENDED (index EXTENDED + middle BENT alone is also the pointing pose, which the state
+    latch still reports for 100-300 ms after the hand changes). Left: index BENT, middle EXTENDED."""
+    s = {f.name: f.state for f in h.fingers}
+    idx, mid = s.get(FingerName.INDEX), s.get(FingerName.MIDDLE)
+    if (mid is FingerState.BENT and idx is FingerState.EXTENDED
+            and FingerState.EXTENDED in (s.get(FingerName.RING), s.get(FingerName.LITTLE))):
+        return "right"
+    if idx is FingerState.BENT and mid is FingerState.EXTENDED:
+        return "left"
+    return None
 
 
 def _pointing_pose(h: HandFeatures) -> bool:
@@ -423,8 +450,10 @@ class Controller:
         self._fist_candidate: Optional[tuple[int, Handedness, float, Optional[WindowTarget]]] = None
         self._minimized_history: list[WindowTarget] = []
         self._index_tap = IndexTapRecognizer()
+        # frames skipped during a tolerated tracking gap must not cancel a held thumb+middle pinch; the
+        # watchdog bounds the gap at loss_timeout_ms
         self._middle = MiddlePinchRecognizer(config.right_pinch_on_pu, config.right_pinch_off_pu,
-                                             config.right_pinch_debounce_ms)
+                                             config.right_pinch_debounce_ms, max_gap_ms=config.loss_timeout_ms)
         # (release ms, point, palm center px) of the last pinch left click
         self._last_tap: Optional[tuple[float, tuple[int, int], tuple[float, float]]] = None
         # "index" / "middle": (capture ms, pointer) of the last frame that pinch was open
@@ -807,7 +836,9 @@ class Controller:
             r[2] = max(r[2], distance)
 
     def _pinch_ended(self, key: str, hand_id: int, t: float) -> None:
-        self._rearm[key] = [float(hand_id), t, 0.0]
+        # Rejected/unresolved contacts have produced no input and must not disarm a later real tap.
+        if key in self._rearm:
+            self._rearm[key] = [float(hand_id), t, 0.0]
 
     def _armed(self, key: str, hand_id: int, t: float) -> bool:
         """False for a re-close right after a release that never opened clearly (threshold flicker)."""
@@ -815,21 +846,34 @@ class Controller:
         if r is None or r[0] != hand_id:
             return True
         cfg = self._cfg
-        return t - r[1] >= cfg.pinch_rearm_ms or r[2] >= cfg.pinch_rearm_open_pu
+        return r[2] >= cfg.pinch_rearm_open_pu or t - r[1] >= cfg.pinch_rearm_ms
 
-    def _middle_closer(self, dom: HandFeatures) -> bool:
-        """Thumb is clearly nearer the middle tip than the index tip (ties go to the left click)."""
-        return self._middle.distance + self._cfg.pinch_resolve_margin_pu < dom.pinch_distance
+    def _pinch_vote(self, dom: HandFeatures) -> tuple[Optional[str], Optional[str]]:
+        """(vote, state vote) of one frame, (None, None) when neither tip touches the thumb. Vote:
+        decisive finger states, else the clearly nearer tip; ties retain the onset vote."""
+        di, dm = dom.pinch_distance, self._middle.distance
+        on = self._cfg.right_pinch_on_pu
+        if not (min(di, dm) <= on):
+            return None, None
+        sv = _state_vote(dom)
+        if sv is not None:
+            return sv, sv
+        m = self._cfg.pinch_resolve_margin_pu
+        if di + m < dm:
+            return "left", None
+        if dm + m < di:
+            return "right", None
+        return None, None
 
     def _right_start_ok(self, dom: HandFeatures, t: float) -> bool:
-        """Thumb+middle start pose. Never the pointing pose (ring and little curled), never a bent
-        index. Index EXTENDED with ring or little EXTENDED always passes; unsure fingers pass when
-        the hand was fully open just before."""
+        """Thumb+middle pose. Never the pointing pose or a fist (ring and little curled). Index
+        EXTENDED or BENT with ring or little EXTENDED passes; unsure fingers pass when the hand was
+        fully open just before."""
         s = {f.name: f.state for f in dom.fingers}
         idx, ring, lit = s.get(FingerName.INDEX), s.get(FingerName.RING), s.get(FingerName.LITTLE)
-        if idx is FingerState.BENT or (ring is FingerState.BENT and lit is FingerState.BENT):
+        if _outer_curled(dom):
             return False
-        if idx is FingerState.EXTENDED and FingerState.EXTENDED in (ring, lit):
+        if idx in (FingerState.EXTENDED, FingerState.BENT) and FingerState.EXTENDED in (ring, lit):
             return True
         o = self._open_seen
         return o is not None and o[0] == dom.hand_id and 0.0 <= t - o[1] <= self._cfg.right_open_lookback_ms
@@ -843,7 +887,8 @@ class Controller:
         if not curl < self._cfg.pinch_not_fist_index_curl:
             return False
         e = self._eng
-        running = e is not None and e.hand_id == h.hand_id and e.kind in (_EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG)
+        running = e is not None and e.hand_id == h.hand_id and e.kind in (
+            _EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG)
         return running or h.pinch_distance <= self._cfg.pinch_not_fist_pu
 
     def _soft_reset(self, cancel_menu_hold: bool = True) -> None:
@@ -967,6 +1012,8 @@ class Controller:
         self._expire_menu(now)
 
         stale = now - frame.capture_ms > self._cfg.stale_ms
+        if not stale and not frame.identity_ambiguous and self._mouse_gap_frame(frame, events, now):
+            return
         hands = [h for h in frame.hands if h.quality is Quality.USABLE and h.palm_scale_px > 0]
         if stale or frame.identity_ambiguous or not hands:
             self._tracking_lost()
@@ -1079,18 +1126,12 @@ class Controller:
 
         for ev in events:
             if ev.kind is GestureKind.PINCH_START and ev.hand_id is not None:
-                if self._mouse_on() and ev.hand_id == dom.hand_id and self._middle_closer(dom):
-                    # the thumb is on the middle tip: this is a right click, the index pinch never clicks
-                    if mid_ev == MID_START:
-                        self._start_right(dom, frame, pos)
-                    return
                 if self._start_engagement(ev, events, frame, hands, dom, pos, raw):
                     return
 
-        # thumb+middle right click; a thumb+index pinch in the same frame already won above unless
-        # the thumb is clearly nearer the middle tip
-        if mid_ev == MID_START and (dom.hand_id not in self._pinched or self._middle_closer(dom)):
-            self._start_right(dom, frame, pos)
+        # a thumb+middle start opens the same left/right decision; never from the pointing pose
+        if mid_ev == MID_START and self._mouse_on() and self._right_start_ok(dom, frame.capture_ms):
+            self._start_pending(dom, frame.capture_ms, pos)
             return
 
         if rel:
@@ -1232,18 +1273,91 @@ class Controller:
                 return op[1]
         return self._pointer if self._pointer is not None else pos
 
-    def _start_right(self, dom: HandFeatures, frame: FrameFeatures, pos: tuple[int, int]) -> None:
-        t = frame.capture_ms
-        if dom.pinch_distance + self._cfg.pinch_resolve_margin_pu < self._middle.distance:
-            return                                    # thumb is on the index tip: not a right click
-        if not self._right_start_ok(dom, t):
+    def _start_pending(self, dom: HandFeatures, t: float, pos: tuple[int, int]) -> None:
+        """Pinch onset (thumb+index or thumb+middle start): hold the pointer, decide left/right."""
+        e = _Eng(_EngKind.MOUSE_PENDING, dom.hand_id, t, palm0=dom.palm_center_px, pos0=pos,
+                 anchor0=self._anchor_now, middle=True)
+        e.vote, e.state_vote = self._pinch_vote(dom)
+        e.index_armed = self._armed("index", dom.hand_id, t)
+        e.middle_armed = self._armed("middle", dom.hand_id, t)
+        if e.vote is None and self._middle.distance > self._cfg.right_pinch_on_pu:
+            e.vote = "left" if dom.hand_id in self._pinched else "right"
+        self._eng = e
+
+    def _session_block(self, e: _Eng, notice: str) -> None:
+        """No click from this physical pinch: wait until both pinches are released."""
+        self._eng = _Eng(_EngKind.BLOCKED, e.hand_id, e.t0, middle=True)
+        self._notice = notice
+
+    def _decide_pinch(self, e: _Eng, dom: HandFeatures, t: float, pos: Optional[tuple[int, int]],
+                      index_ended: bool, mid_ev: Optional[str]) -> None:
+        """MOUSE_PENDING -> MOUSE_TAP / RIGHT_TAP / BLOCKED / nothing (stays pending)."""
+        cfg = self._cfg
+        index_on = dom.hand_id in self._pinched
+        middle_on = self._middle.pinched
+        released = index_ended or mid_ev in (MID_END, MID_CANCEL)
+        if not e.decision_done:
+            v, sv = self._pinch_vote(dom)
+            if v is not None:
+                e.vote = v
+            if sv is not None:
+                e.state_vote = sv
+            if not released and t - e.t0 < cfg.pinch_decide_ms:
+                return
+            e.decision_done = True
+        side = e.state_vote or e.vote
+        if side is None:
+            self._session_block(e, "Parmak kararı belirsiz: tıklama yok")
             return
-        if not self._armed("middle", dom.hand_id, t):
-            self._eng = _Eng(_EngKind.BLOCKED, dom.hand_id, t, middle=True)
-            self._notice = "Tek sağ tık: önce parmakları açın"
+        ref = e.pos0 if e.pos0 is not None else pos
+        if side == "left" and (index_on or index_ended) and ref is not None:
+            if not e.index_armed:
+                self._session_block(e, "Tek tık: önce parmakları açın")     # threshold flicker
+                return
+            e.kind = _EngKind.MOUSE_TAP
+            e.latched = self._mouse_latch(e.t0, ref, dom, left=True)
             return
-        self._eng = _Eng(_EngKind.RIGHT_TAP, dom.hand_id, t, latched=self._mouse_latch(t, pos, dom, left=False),
-                         palm0=dom.palm_center_px, middle=True)
+        if side == "right" and (middle_on or mid_ev == MID_END) and ref is not None:
+            if not self._right_start_ok(dom, t):
+                self._session_block(e, "Sağ tık iptal edildi")
+            elif not e.middle_armed:
+                self._session_block(e, "Tek sağ tık: önce parmakları açın")
+            else:
+                e.kind = _EngKind.RIGHT_TAP
+                e.latched = self._mouse_latch(e.t0, ref, dom, left=False)
+                if self._middle.start_ms is not None:
+                    e.t0 = self._middle.start_ms
+            return
+        # the decided finger's own pinch has not started (yet)
+        if not index_on and not middle_on:
+            self._eng = None
+            self._notice = "Tıklama iptal edildi"
+        elif t - e.t0 >= cfg.pinch_decide_max_ms:
+            self._session_block(e, "Tıklama iptal edildi")
+
+    def _mouse_gap_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], now: float) -> bool:
+        """True: this frame is a short tracking gap inside a pinch-mouse engagement and is skipped,
+        keeping the pending tap, the held left button or the right tap. Only the same hand id, present
+        and DEGRADED (identity certain, the caller checked ambiguity and staleness), no second right
+        hand, no pinch event of that hand, and only while the watchdog has not expired (last usable
+        capture less than loss_timeout_ms ago; the watchdog then releases everything as before). A
+        missing hand or an ambiguous frame still cancels: continuity of identity is unproven there."""
+        e = self._eng
+        if e is None or not (e.kind in _MOUSE_KINDS or (e.kind is _EngKind.BLOCKED and e.middle)):
+            return False
+        last = self.watchdog.last_usable_ms
+        if last is None or not self.watchdog.armed or now - last >= self._cfg.loss_timeout_ms:
+            return False
+        mine = [h for h in frame.hands if h.hand_id == e.hand_id]
+        if len(mine) != 1 or mine[0].quality is not Quality.DEGRADED or mine[0].handedness is not Handedness.RIGHT:
+            return False
+        if any(h.hand_id != e.hand_id and h.handedness is not Handedness.LEFT for h in frame.hands):
+            return False
+        if any(ev.hand_id == e.hand_id for ev in events):
+            return False
+        self._smoother.reset()
+        self._rel.reset()   # re-anchor on recovery; never replay movement across an invisible interval
+        return True
 
     def _left_up(self, e: _Eng, capture_ms: float) -> None:
         p = e.last_pos if e.last_pos is not None else self._pointer
@@ -1257,8 +1371,7 @@ class Controller:
             return
         if e.kind is _EngKind.MOUSE_DRAG:
             self._left_up(e, self._clock.now_ms())
-        middle = e.kind is _EngKind.RIGHT_TAP
-        self._eng = _Eng(_EngKind.BLOCKED, e.hand_id, e.t0, middle=middle)
+        self._eng = _Eng(_EngKind.BLOCKED, e.hand_id, e.t0, middle=True)
         self._last_tap = None
         self._notice = notice
 
@@ -1287,8 +1400,10 @@ class Controller:
         cfg = self._cfg
         t = frame.capture_ms
         same = dom is not None and dom.hand_id == e.hand_id
-        if e.kind is _EngKind.BLOCKED:   # thumb+middle refused: wait for its release
-            if not same or not self._middle.pinched:
+        if e.kind is _EngKind.BLOCKED:   # pinch-mouse session refused: wait until both pinches are released
+            # The guarded pointing pose tucks the thumb against the middle tip indefinitely;
+            # that geometric contact is not a right pinch and must not block deliberate left doubles.
+            if not same or ((not self._middle.pinched or _pointing_pose(dom)) and dom.hand_id not in self._pinched):
                 self._eng = None
             return
         if not same:
@@ -1299,44 +1414,56 @@ class Controller:
                  and math.dist(dom.palm_center_px, e.palm0) / dom.palm_scale_px > cfg.mouse_drag_move_palm)
         ends = [ev for ev in events if ev.kind is GestureKind.PINCH_END and ev.hand_id == e.hand_id]
 
-        if e.kind is _EngKind.RIGHT_TAP:
-            starts = [ev for ev in events if ev.kind is GestureKind.PINCH_START and ev.hand_id == e.hand_id]
-            if starts and dom.pinch_distance + cfg.pinch_resolve_margin_pu < self._middle.distance:
-                # the thumb went on to the index tip: this was a left click all along (nothing sent yet)
-                self._eng = _Eng(_EngKind.MOUSE_TAP, e.hand_id, starts[0].t_ms, latched=e.latched,
-                                 palm0=dom.palm_center_px, pos0=pos, anchor0=self._anchor_now)
+        if e.kind is _EngKind.MOUSE_PENDING:
+            self._decide_pinch(e, dom, t, pos, bool(ends), mid_ev)
+            if self._eng is not e or e.kind is _EngKind.MOUSE_PENDING:
                 return
-            # a thumb+index pinch only counts when the thumb is not clearly nearer the middle tip
-            index_pinch = (dom.hand_id in self._pinched or bool(starts)) and not self._middle_closer(dom)
+            # decided: the chosen tap handles this frame too (a release inside the window clicks)
+
+        if e.kind is _EngKind.RIGHT_TAP:
+            # decided: the thumb+index pinch is ignored until release
+            right_moved = (e.palm0 is not None and math.dist(dom.palm_center_px, e.palm0)
+                           / dom.palm_scale_px > cfg.right_cancel_move_palm)
             if mid_ev == MID_CANCEL or (mid_ev is None and not self._middle.pinched):
                 self._eng = None
                 self._notice = "Sağ tık iptal edildi"
-            elif index_pinch:
-                self._mouse_interrupt("İki parmak birden: tıklama yok")
-            elif not _right_pose(dom, strict=False):
+            elif _outer_curled(dom):
                 self._mouse_interrupt("Sağ tık iptal edildi")
             elif mid_ev == MID_END:
                 self._eng = None
-                if not moved and t - e.t0 < cfg.mouse_hold_ms and e.latched is not None:
+                if not right_moved and t - e.t0 < cfg.mouse_hold_ms and e.latched is not None:
                     if self._dispatch(ActionKind.RIGHT_CLICK, t, x=e.latched[0], y=e.latched[1]):
                         self._set_pointer(e.latched)
+                        self._rearm["middle"] = [float(e.hand_id), t, self._middle.distance]
                     self._notice = "Sağ tık"
                 else:
                     self._notice = "Sağ tık iptal edildi"
-            elif moved or t - e.t0 >= cfg.mouse_hold_ms:
+                if dom.hand_id in self._pinched:
+                    self._session_block(e, self._notice)
+            elif right_moved or t - e.t0 >= cfg.mouse_hold_ms:
                 self._mouse_interrupt("Sağ tık iptal edildi")
             return
 
         if e.kind is _EngKind.MOUSE_TAP:
             if ends:
                 self._eng = None
-                if not moved and ends[0].t_ms - e.t0 < cfg.mouse_hold_ms and e.latched is not None:
+                if (moved or ends[0].t_ms - e.t0 >= cfg.mouse_hold_ms) and e.latched is not None:
+                    self._eng = e
+                    self._begin_drag(e, t)
+                    self._eng = None
+                    self._left_up(e, t)
+                    if e.dispatched:
+                        self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
+                elif ends[0].t_ms - e.t0 < cfg.mouse_hold_ms and e.latched is not None:
                     if self._dispatch(ActionKind.LEFT_CLICK, t, x=e.latched[0], y=e.latched[1]):
                         self._set_pointer(e.latched)
                         self._last_tap = (ends[0].t_ms, e.latched, e.palm0 or dom.palm_center_px)
+                        self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
                     self._notice = "Sol tık"
                 else:
                     self._notice = "Tıklama iptal edildi"
+                if self._middle.pinched and not _pointing_pose(dom):
+                    self._session_block(e, self._notice)
             elif moved:
                 self._begin_drag(e, t)          # keep the travel made during the candidate
                 if cfg.pointer_relative and self._eng is e and e.anchor0 is not None:
@@ -1352,6 +1479,7 @@ class Controller:
         if ends:
             self._eng = None
             self._left_up(e, t)
+            self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
             self._notice = "Sürükleme bitti"
             return
         if cfg.pointer_relative:
@@ -1380,14 +1508,8 @@ class Controller:
             if self._cfg.index_tap_click:
                 return False
             if self._mouse_on():
-                # thumb+index vs thumb+middle is resolved by distance in _frame, not by arrival order
-                if not self._armed("index", dom.hand_id, ev.t_ms):
-                    self._eng = _Eng(_EngKind.BLOCKED, dom.hand_id, ev.t_ms)   # threshold flicker
-                    self._notice = "Tek tık: önce parmakları açın"
-                else:
-                    self._eng = _Eng(_EngKind.MOUSE_TAP, dom.hand_id, ev.t_ms,
-                                     latched=self._mouse_latch(ev.t_ms, pos, dom, left=True),
-                                     palm0=dom.palm_center_px, pos0=pos, anchor0=self._anchor_now)
+                # left or right is decided over the next frames (_decide_pinch), not by arrival order
+                self._start_pending(dom, ev.t_ms, pos)
                 return True
             self._eng = _Eng(_EngKind.CLICK, dom.hand_id, ev.t_ms, latched=latched, raw_start=raw)
         elif mode is Mode.SCROLL:
