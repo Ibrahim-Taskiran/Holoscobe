@@ -80,3 +80,15 @@ Sözleşme istisnası: `contracts.py` içinde `ActionKind`'a yalnız şu dört �
 
 Codex'e ek yollar: `src/handcontrol/windows/startup.py` (yeni), `scripts/build.ps1` (yeni), `packaging/**` (yeni),
 `Docs/reports/windows_startup_packaging.md`. `app.py` ve `ui/**` bağlaması Claude tarafındadır; Codex dokunmaz.
+
+## 4. tur — göreli imleç, debriyaj, tıklama iyileştirme (2026-11-12)
+
+Kullanıcı kamera denemesi: tek sol tık zor, ikinci ekrana geçilemiyor, el çok geniş hareket etmeli, sağ tık kararsız.
+
+| Sahip | Yazabileceği yollar |
+|---|---|
+| Claude H (imleç + tıklama) | `controller.py`, `mapping.py`, `filters.py`, `features.py`, `gestures.py`, `middle_pinch.py`, `index_tap.py`, `dryrun.py`, `safety.py`, `config.py`, `pipeline.py`, `src/handcontrol/` altında yeni stdlib modülleri, `tests/controller/**`, `tests/integration/**`, `tests/features/**`, `tests/gestures/**`, `tests/config/**` |
+| Codex (ölçüm araçları) | `src/handcontrol/tools/click_record.py` (yeni), `src/handcontrol/tools/pointer_probe.py` (yeni), `tests/tools/test_tools_click_record.py`, `tests/tools/test_tools_pointer_probe.py` (yeni), `scripts/click_record.ps1`, `scripts/pointer_probe.ps1` (yeni), `Docs/reports/windows_measure_tools.md`, `Docs/coordination/REQUESTS_codex.md` |
+| Claude I (arayüz, H bitince) | `src/handcontrol/ui/**`, `tests/ui/**`, `app.py`, `tests/app/**`, `README.md`, `Docs/reports/*` (`windows_*` hariç) |
+
+`contracts.py` bu turda değişmez. `Pipeline`, `DryRunSink` ve `tools/common.py` genel adları yeniden adlandırılmaz (Codex aracı bunlara bağlı).
