@@ -92,3 +92,9 @@ Kullanıcı kamera denemesi: tek sol tık zor, ikinci ekrana geçilemiyor, el ç
 | Claude I (arayüz, H bitince) | `src/handcontrol/ui/**`, `tests/ui/**`, `app.py`, `tests/app/**`, `README.md`, `Docs/reports/*` (`windows_*` hariç) |
 
 `contracts.py` bu turda değişmez. `Pipeline`, `DryRunSink` ve `tools/common.py` genel adları yeniden adlandırılmaz (Codex aracı bunlara bağlı).
+
+## Geçici devir — Claude kotası (2026-11-12)
+
+Claude kotası bittiği sürece Codex, 4. turdaki Claude H işini (tıklama kararı, sektirme, takip kopması, kayıt tekrar testi)
+tamamlayabilir: Claude H yollarına yazabilir, tam test takımını çalıştırabilir, conventional commit atabilir. Push yok.
+`contracts.py` değişmez, paket kurulmaz. Claude döndüğünde yönetim yine Claude'dadır.
