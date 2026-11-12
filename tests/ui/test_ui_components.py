@@ -245,6 +245,8 @@ def test_settings_dialog_dataclass_and_dict_roundtrip() -> None:
         "camera_backend": "directshow",
         "mirror": False,
         "dominant_hand": "left",
+        "pointer_mode": "absolute",
+        "pointer_speed": 1.3,
         "pointer_sensitivity": 1.75,
         "smoothing_factor": 0.35,
         "pinch_on_threshold": 0.25,

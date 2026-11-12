@@ -17,7 +17,7 @@ def test_settings_dialog_receives_every_stored_value() -> None:
 def test_settings_dialog_defaults_round_trip() -> None:
     d = settings_to_dialog_data(validate({}))
     assert (d.scroll_direction, d.zoom_direction, d.camera_backend) == ('natural', 'natural', 'media_foundation')
-    assert d.monitor_mapping == 'primary'
+    assert d.monitor_mapping == 'all'   # schema v2 default: virtual desktop
 
 
 def test_status_hint_describes_pinch_clicks() -> None:

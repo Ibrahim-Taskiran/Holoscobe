@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import sys
 import time
 from dataclasses import asdict, replace
+from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QToolBar
@@ -41,8 +43,24 @@ def hotkey_binding(text: str) -> tuple[int, int]:
     raise ValueError('Geçersiz acil durdurma kısayolu')
 
 
-STATUS_HINT_TR = ('Önce Sürdür. Sağ işaret: imleç | Kısa pinch: tık, iki kez: çift tık, tut: sürükle | '
-    'Başparmak+orta: sağ tık | Sağ/sol yumruk (350 ms): küçült/geri aç. Tümü: tepside Hareket Rehberi.')
+STATUS_HINT_TR = ('Önce Sürdür. İşaret açık: imleç (hızlı = uzak, yavaş = hassas) | El açık: imleç durur | '
+    'Kısa pinch: sol tık, iki hızlı pinch: çift tık, ~yarım sn tut: sürükle | Başparmak+orta: sağ tık | '
+    'Sağ/sol yumruk: küçült/geri aç. Tümü: tepside Hareket Rehberi.')
+
+
+CursorSource = Callable[[], Optional[tuple[int, int]]]
+
+
+def read_os_cursor(*, api: Any = None) -> Optional[tuple[int, int]]:
+    """Real OS cursor in physical px via GetCursorPos; None ("unknown") on any failure."""
+    try:
+        from handcontrol.windows._win32 import POINT, user32
+        point = POINT()
+        if not (api if api is not None else user32()).GetCursorPos(ctypes.byref(point)):
+            return None
+        return int(point.x), int(point.y)
+    except Exception:
+        return None
 
 
 STARTUP_SOURCE_TR = 'Windows ile başlatma yalnızca paketlenmiş sürümde kullanılabilir'
@@ -62,6 +80,7 @@ def settings_to_dialog_data(s, *, startup_enabled: bool | None = None) -> Settin
         pinch_off_threshold=s.pinch_off_threshold, pointer_sensitivity=s.sensitivity, default_mode=s.default_mode,
         scroll_direction='reverse' if s.scroll_direction == 'reversed' else 'natural',
         zoom_direction='reverse' if s.zoom_direction == 'reversed' else 'natural',
+        pointer_mode=s.pointer_mode, pointer_speed=s.pointer_speed,
         show_overlay=s.overlay_visible, show_mascot=s.mascot_visible, monitor_mapping=monitor,
         start_with_windows=s.start_with_windows if startup_enabled is None else startup_enabled)
 
@@ -118,9 +137,12 @@ class Runtime(QObject):
     def __init__(self, bridge, store, *, live=False, displays=None, windows=None,
                  volume=None, hotkey_factory=WindowsHotkey, session_factory=WindowsSession,
                  sink_factory=WindowsActionSink, camera_factory=run_camera_pipeline,
-                 startup=windows_startup, packaged: bool | None = None):
+                 startup=windows_startup, packaged: bool | None = None,
+                 cursor_source: CursorSource | None = None):
         super().__init__()
         self.bridge, self.store, self.live = bridge, store, live
+        # Relative pointer starts from, and re-syncs to, the real cursor; injected in tests.
+        self.cursor_source: CursorSource = cursor_source if cursor_source is not None else read_os_cursor
         # startup provides is_enabled()/set_enabled(); injected so tests never touch the registry.
         self.startup = startup
         self.packaged = getattr(sys, 'frozen', False) if packaged is None else packaged
@@ -144,7 +166,8 @@ class Runtime(QObject):
                 bridge.show_feedback(message='Acil durdurma kısayolu kullanılamıyor; komutsuz deneme sürüyor')
             inner = sink_factory(displays=self.displays, windows=self.windows, volume=self.volume) if live else DryRunSink(max_history=200)
             self.sink = EpochSink(inner, bridge)
-            self.pipeline = Pipeline(Clock(), self.sink, self.displays, self.windows, self.volume, self.settings)
+            self.pipeline = Pipeline(Clock(), self.sink, self.displays, self.windows, self.volume, self.settings,
+                cursor_source=self.cursor_source)
             self.pipeline.controller._cfg = replace(self.pipeline.controller.config, camera_error_paused=True)
             self.pipeline.controller.add_listener(self._on_snapshot)
             self.pipeline.start()
@@ -231,6 +254,7 @@ class Runtime(QObject):
         values.update(mirror_preview=data.mirror, dominant_hand=data.dominant_hand,
             sensitivity=data.pointer_sensitivity, pinch_on_threshold=data.pinch_on_threshold,
             pinch_off_threshold=data.pinch_off_threshold, default_mode=data.default_mode,
+            pointer_mode=data.pointer_mode, pointer_speed=data.pointer_speed,
             emergency_hotkey=data.emergency_hotkey, overlay_visible=data.show_overlay,
             mascot_visible=data.show_mascot, scroll_direction='reversed' if data.scroll_direction == 'reverse' else 'normal',
             zoom_direction='reversed' if data.zoom_direction == 'reverse' else 'normal')
@@ -269,6 +293,8 @@ class Runtime(QObject):
         with self.pipeline._lock, self.pipeline.controller._lock:
             self.settings = self.pipeline.settings = settings
             self.pipeline.controller._cfg = replace(controller_config(settings), camera_error_paused=True)
+            # Pipeline and controller are reused, not rebuilt: keep the real-cursor reader wired.
+            self.pipeline.controller._cursor_source = self.cursor_source
             self.pipeline.controller.set_calibration(calibration_rect(settings))
             from handcontrol.gestures import GestureRecognizer
             self.pipeline.gestures = GestureRecognizer(gesture_config(settings), dominant_of(settings))

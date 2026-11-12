@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Optional, Sequence
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -18,14 +18,25 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from handcontrol.contracts import Handedness, Mode
 from handcontrol.ui.viewmodel import MODE_LABELS_TR, UiBridge
+
+
+POINTER_MODES: tuple[str, ...] = ("relative", "absolute")
+POINTER_MODE_LABELS_TR: dict[str, str] = {
+    "relative": "Göreli (dokunmatik yüzey gibi)",
+    "absolute": "Mutlak (kamera alanı = ekran)",
+}
+POINTER_SPEED_MIN, POINTER_SPEED_MAX = 0.5, 2.0
+_SPEED_STEPS = 10  # slider ticks per 1.0 of speed -> step 0.1
 
 
 @dataclass(frozen=True)
@@ -38,8 +49,10 @@ class SettingsData:
     dominant_hand: str = "right"                # "right" or "left"
     pointer_sensitivity: float = 1.0            # 0.1 .. 3.0
     smoothing_factor: float = 0.50              # 0.0 .. 1.0
-    pinch_on_threshold: float = 0.28            # 0.10 .. 0.60
-    pinch_off_threshold: float = 0.42           # 0.15 .. 0.85
+    pointer_mode: str = "relative"              # "relative" (touchpad-like) or "absolute"
+    pointer_speed: float = 1.0                  # 0.5 .. 2.0, step 0.1 (relative mode)
+    pinch_on_threshold: float = 0.33            # 0.10 .. 0.60
+    pinch_off_threshold: float = 0.48           # 0.15 .. 0.85
     detection_threshold: float = 0.55           # 0.10 .. 0.95
     tracking_threshold: float = 0.55            # 0.10 .. 0.95
     scroll_direction: str = "natural"           # "natural" or "reverse"
@@ -91,6 +104,18 @@ class SettingsData:
         if mon_map not in ("all", "primary", "secondary"):
             mon_map = defaults.monitor_mapping
 
+        pointer_mode = str(data.get("pointer_mode", defaults.pointer_mode)).lower()
+        if pointer_mode not in POINTER_MODES:
+            pointer_mode = defaults.pointer_mode
+
+        try:
+            speed = float(data.get("pointer_speed", defaults.pointer_speed))
+        except (TypeError, ValueError):
+            speed = defaults.pointer_speed
+        if speed != speed:  # NaN
+            speed = defaults.pointer_speed
+        pointer_speed = round(max(POINTER_SPEED_MIN, min(POINTER_SPEED_MAX, speed)), 1)
+
         backend = str(data.get("camera_backend", defaults.camera_backend)).lower()
         if backend not in ("media_foundation", "directshow"):
             backend = defaults.camera_backend
@@ -121,6 +146,8 @@ class SettingsData:
                 max(0.00, min(1.00, float(data.get("smoothing_factor", defaults.smoothing_factor)))),
                 2,
             ),
+            pointer_mode=pointer_mode,
+            pointer_speed=pointer_speed,
             pinch_on_threshold=pinch_on,
             pinch_off_threshold=pinch_off,
             detection_threshold=round(
@@ -170,7 +197,7 @@ class SettingsDialog(QDialog):
         )
 
         self.setWindowTitle("Holoscobe — Ayarlar")
-        self.resize(520, 640)
+        self.resize(520, 700)
 
         self._build_ui()
 
@@ -212,16 +239,39 @@ class SettingsDialog(QDialog):
         thresh_group = QGroupBox("Eşikler ve Hassasiyet")
         thresh_form = QFormLayout(thresh_group)
 
+        self.combo_pointer_mode = QComboBox()
+        for mode_key in POINTER_MODES:
+            self.combo_pointer_mode.addItem(POINTER_MODE_LABELS_TR[mode_key], mode_key)
+        thresh_form.addRow("İmleç Türü:", self.combo_pointer_mode)
+
+        speed_row = QWidget()
+        speed_layout = QHBoxLayout(speed_row)
+        speed_layout.setContentsMargins(0, 0, 0, 0)
+        self.slider_pointer_speed = QSlider(Qt.Orientation.Horizontal)
+        self.slider_pointer_speed.setRange(round(POINTER_SPEED_MIN * _SPEED_STEPS),
+                                           round(POINTER_SPEED_MAX * _SPEED_STEPS))
+        self.slider_pointer_speed.setSingleStep(1)
+        self.slider_pointer_speed.setPageStep(1)
+        self.slider_pointer_speed.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.slider_pointer_speed.setTickInterval(5)
+        self.label_pointer_speed = QLabel()
+        self.label_pointer_speed.setMinimumWidth(40)
+        self.slider_pointer_speed.valueChanged.connect(self._update_speed_label)
+        speed_layout.addWidget(self.slider_pointer_speed, 1)
+        speed_layout.addWidget(self.label_pointer_speed)
+        thresh_form.addRow("İmleç Hızı:", speed_row)
+        self.set_pointer_speed(1.0)
+
         self.spin_sensitivity = self._make_double_spin(0.10, 3.00, 0.05, 1.00)
         thresh_form.addRow("İmleç Hassasiyeti:", self.spin_sensitivity)
 
         self.spin_smoothing = self._make_double_spin(0.00, 1.00, 0.05, 0.50)
         thresh_form.addRow("Yumuşatma Oranı:", self.spin_smoothing)
 
-        self.spin_pinch_on = self._make_double_spin(0.10, 0.60, 0.01, 0.28)
+        self.spin_pinch_on = self._make_double_spin(0.10, 0.60, 0.01, 0.33)
         thresh_form.addRow("Pinch Başlatma Eşiği (avuç birimi):", self.spin_pinch_on)
 
-        self.spin_pinch_off = self._make_double_spin(0.15, 0.85, 0.01, 0.42)
+        self.spin_pinch_off = self._make_double_spin(0.15, 0.85, 0.01, 0.48)
         thresh_form.addRow("Pinch Bırakma Eşiği (avuç birimi):", self.spin_pinch_off)
 
         self.spin_detection = self._make_double_spin(0.10, 0.95, 0.05, 0.55)
@@ -314,6 +364,19 @@ class SettingsDialog(QDialog):
         spin.setValue(value)
         return spin
 
+    def pointer_speed(self) -> float:
+        """Current slider value as a speed multiplier (0.5 .. 2.0, step 0.1)."""
+        return round(self.slider_pointer_speed.value() / _SPEED_STEPS, 1)
+
+    def set_pointer_speed(self, speed: float) -> None:
+        clamped = max(POINTER_SPEED_MIN, min(POINTER_SPEED_MAX, float(speed)))
+        self.slider_pointer_speed.setValue(round(clamped * _SPEED_STEPS))
+        self._update_speed_label()
+
+    @Slot()
+    def _update_speed_label(self, *_: Any) -> None:
+        self.label_pointer_speed.setText(f"{self.pointer_speed():.1f}×")
+
     def _set_combo_by_data(self, combo: QComboBox, data_value: Any) -> None:
         idx = combo.findData(data_value)
         if idx >= 0:
@@ -333,6 +396,8 @@ class SettingsDialog(QDialog):
         self._set_combo_by_data(self.combo_backend, cfg.camera_backend)
         self.chk_mirror.setChecked(cfg.mirror)
         self._set_combo_by_data(self.combo_dominant_hand, cfg.dominant_hand)
+        self._set_combo_by_data(self.combo_pointer_mode, cfg.pointer_mode)
+        self.set_pointer_speed(cfg.pointer_speed)
         self.spin_sensitivity.setValue(cfg.pointer_sensitivity)
         self.spin_smoothing.setValue(cfg.smoothing_factor)
         self.spin_pinch_on.setValue(cfg.pinch_on_threshold)
@@ -358,6 +423,8 @@ class SettingsDialog(QDialog):
             camera_backend=str(self.combo_backend.currentData() or "media_foundation"),
             mirror=bool(self.chk_mirror.isChecked()),
             dominant_hand=str(self.combo_dominant_hand.currentData() or "right"),
+            pointer_mode=str(self.combo_pointer_mode.currentData() or "relative"),
+            pointer_speed=self.pointer_speed(),
             pointer_sensitivity=round(float(self.spin_sensitivity.value()), 2),
             smoothing_factor=round(float(self.spin_smoothing.value()), 2),
             pinch_on_threshold=round(float(self.spin_pinch_on.value()), 2),

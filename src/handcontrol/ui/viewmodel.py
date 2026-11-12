@@ -152,14 +152,16 @@ ACTION_KIND_LABELS_TR: dict[ActionKind, str] = {
 # User-facing gesture guide (gesture, result). Mirrors README "Ne yapar"; keep both in sync.
 GESTURE_GUIDE_TR: tuple[tuple[str, str], ...] = (
     ("İki elle bir kez el çırp", "Kontrolü aç / duraklat"),
-    ("Sağ işaret parmağını gezdir (İşaretçi)", "İmleci taşı"),
-    ("Sağ el: başparmak + işaret kısa pinch", "Sol tık (imleç pinch başındaki yerde kalır)"),
-    ("Kısa pinch'i 500 ms içinde iki kez yap", "Çift tık"),
-    ("Pinch'i ~350 ms tut, taşı, bırak", "Sürükle bırak (sol tuş basılı)"),
-    ("İşaret açıkken başparmak + orta parmak kısa pinch", "Sağ tık"),
-    ("Sağ yumruk 350 ms tut", "Ön plandaki pencereyi küçült"),
-    ("Sol yumruk 350 ms tut", "Son küçültülen pencereyi geri aç"),
+    ("İşaret açık, diğer parmaklar kapalı", "İmleç hareket eder (hızlı hareket uzağa, yavaş hareket hassas gider)"),
+    ("Eli aç ya da kadrajdan çıkar", "İmleç yerinde kalır; eli geri getirip yeniden işaret et, kaldığı yerden devam eder"),
+    ("Kısa başparmak + işaret pinch", "Sol tık (imleç pinch sırasında durur)"),
+    ("İki hızlı pinch (arada parmakları belirgin aç)", "Çift tık"),
+    ("Pinch'i yaklaşık yarım saniye tut, taşı, bırak", "Sürükle bırak (sol tuş basılı)"),
+    ("Açık elden kısa başparmak + orta parmak pinch", "Sağ tık"),
+    ("Sağ yumruk tut (önce el açık olmalı)", "Ön plandaki pencereyi küçült"),
+    ("Sol yumruk tut (önce el açık olmalı)", "Son küçültülen pencereyi geri aç"),
     ("Baskın olmayan elin açık avucunu 600 ms sabit tut", "Mod menüsü"),
+    ("Kalibrasyon dikdörtgeni", "Yalnız mutlak imleç türünde geçerli"),
 )
 
 

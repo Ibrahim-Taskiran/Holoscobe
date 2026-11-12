@@ -2,20 +2,21 @@
 
 Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: uygulama bağlandı; donanım kabulü bekliyor.** Kamera → pipeline → denetleyici → arayüz zinciri ve güvenlik yaşam döngüsü hazır. Son otomatik takım: **867 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Gerçek kamera, el ve iki monitör doğrulaması henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir.
+> **Durum: uygulama bağlandı; donanım kabulü bekliyor.** Kamera → pipeline → denetleyici → arayüz zinciri ve güvenlik yaşam döngüsü hazır. Son otomatik takım: **1039 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Gerçek kamera, el ve iki monitör doğrulaması henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir.
 
 ## Ne yapar
 
 | Mod | Hareket | Sonuç |
 |---|---|---|
 | Hepsi | İki elle bir kez el çırpma | Kontrolü açar ya da duraklatır |
-| Hepsi (etkin) | Sağ eli yumruk yapıp 350 ms tut | Ön plandaki uygulama penceresini küçültür |
-| Hepsi (etkin) | Sol eli yumruk yapıp 350 ms tut | Bu oturumda son küçültülen pencereyi geri açar |
-| İşaretçi | Sağ elin işaret parmağı | İmleci hareket ettirir |
-| İşaretçi | Sağ el: başparmak + işaret kısa pinch | Sol tık |
-| İşaretçi | Sağ el: iki kısa pinch (ikincisi ~500 ms içinde) | Çift tık |
-| İşaretçi | Sağ el: pinch'i ~350 ms tut, taşı, bırak | Sürükle bırak |
-| İşaretçi | Sağ el: işaret ve yüzük/serçe açıkken başparmak + orta parmak kısa pinch | Sağ tık |
+| Hepsi (etkin) | Sağ yumruk tut (önce el açık olmalı) | Ön plandaki uygulama penceresini küçültür |
+| Hepsi (etkin) | Sol yumruk tut (önce el açık olmalı) | Bu oturumda son küçültülen pencereyi geri açar |
+| İşaretçi | İşaret açık, diğer parmaklar kapalı | İmleç hareket eder. Hızlı hareket uzağa, yavaş hareket hassas gider |
+| İşaretçi | Eli aç (ya da kadrajdan çıkar) | İmleç yerinde kalır. Eli geri getir, yeniden işaret et: kaldığı yerden devam eder |
+| İşaretçi | Kısa başparmak + işaret pinch | Sol tık. İmleç pinch sırasında durur |
+| İşaretçi | İki hızlı pinch (arada parmakları belirgin aç) | Çift tık |
+| İşaretçi | Pinch'i yaklaşık yarım saniye tut, taşı, bırak | Sürükle bırak |
+| İşaretçi | Açık elden kısa başparmak + orta parmak pinch | Sağ tık |
 | Kaydırma | Pinch + dikey hareket | Dikey kaydırma |
 | Yakınlaştırma | İki elle pinch, elleri aç/kapat | Ctrl + tekerlek |
 | Ses | Pinch + dikey hareket | Sistem sesi |
@@ -24,17 +25,26 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 
 Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut.
 
-Tıklamalar yalnız sağ elle ve İşaretçi modunda çalışır. Pinch başladığı anda imleç
-o konumda sabitlenir; tık oraya gider. Kısa pinch sol tık, art arda iki kısa pinch çift
-tıktır. Pinch'i tutup eli taşırsan sol tuş basılı kalır, bırakınca bırakılır. İşaret
-parmağı açıkken başparmakla orta parmağı birleştirmek sağ tıktır. Eski "işaret parmağını
+İmleç varsayılan olarak **göreli** çalışır (dokunmatik yüzey gibi). El ekranın tamamını
+taramak zorunda değildir: işaret ederken el hareket ettikçe imleç o kadar kayar. Hızlı
+hareket uzağa, yavaş hareket hassas gider; ikinci ekrana da böyle geçilir. Eli açmak ya da
+kadrajdan çıkarmak debriyajdır: imleç yerinde kalır. Eli geri getirip yeniden işaret edince
+kaldığı yerden devam eder. Gerçek fareyle imleci taşıdıysan oradan devam eder.
+**Ayarlar** içinde **İmleç Türü** (Göreli / Mutlak) ve **İmleç Hızı** (0,5–2,0) seçilir.
+Kalibrasyon dikdörtgeni yalnız **Mutlak** türde geçerlidir (kamera alanı = ekran).
+
+Tıklamalar yalnız sağ elle ve İşaretçi modunda çalışır. Pinch sırasında imleç durur;
+tık pinch başındaki konuma gider. Kısa pinch sol tık, iki hızlı pinch (arada parmakları
+belirgin aç) çift tıktır. Pinch'i yaklaşık yarım saniye tutup eli taşırsan sol tuş basılı
+kalır, bırakınca bırakılır. Açık elden başparmakla orta parmağı kısa birleştirmek sağ tıktır. Eski "işaret parmağını
 kameraya doğru itme" tıklaması varsayılan olarak kapalıdır (kamera z tahmini güvenilir
 değil). Sol el, baskın el ayarı ne olursa olsun imleci/tıklamayı yönetmez. Takip kaybında
 basılı sol tuş en geç 200 ms içinde bırakılır. Tüm hareketler tepsideki **Hareket Rehberi**
 menüsünde listelenir. Ayrıntı ve elle kontrol adımları: [click_controls.md](Docs/reports/click_controls.md).
 Bu hareketlerin gerçek kamera kabulü henüz yapılmadı.
 
-Yumruk komutundan önce elini en az 200 ms açık göster; tekrar komut için yeniden aç.
+Yumruk komutundan önce elini en az 200 ms açık göster, sonra yumruğu yaklaşık 350 ms tut;
+tekrar komut için yeniden aç.
 Beş parmağın da bükük algılanması gerekir. İki yumruk aynı anda komut üretmez. Sağ yumruk
 tutulurken ön plandaki pencere değişirse işlem iptal edilir. Bu özellik tarayıcı içindeki
 tek sekmeyi değil, uygulama penceresini küçültür/geri açar. Dry-run yalnız komut metnini
