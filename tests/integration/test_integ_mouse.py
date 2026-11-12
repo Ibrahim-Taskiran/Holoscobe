@@ -55,7 +55,7 @@ def test_hold_drags_with_the_left_button(fps):
     rig = Rig(fps=fps)
     rig.activate(_r())
     aim = rig.ctl.snapshot().pointer
-    rig.run(600, _r(PINCH))
+    rig.run(700, _r(PINCH))
     assert rig.count(A.LEFT_DOWN) == 1 and rig.count(A.LEFT_UP) == 0
     down = rig.sink.of(A.LEFT_DOWN)[0]
     assert (down.x, down.y) == aim
@@ -75,7 +75,7 @@ def test_hold_drags_with_the_left_button(fps):
 def test_hand_leaving_mid_drag_releases_the_button(fps):
     rig = Rig(fps=fps)
     rig.activate(_r())
-    rig.run(600, _r(PINCH))
+    rig.run(700, _r(PINCH))
     assert rig.count(A.LEFT_DOWN) == 1
     rig.run(300, [])
     ks = rig.kinds(skip_release=False)

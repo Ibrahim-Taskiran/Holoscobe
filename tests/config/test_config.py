@@ -11,7 +11,10 @@ from handcontrol.config import Settings, SettingsStore, validate
 
 def test_defaults():
     s = Settings()
-    assert s.schema_version == 1 and s.emergency_hotkey == "Ctrl+Alt+Shift+F12"
+    assert s.schema_version == C.SCHEMA_VERSION == 2 and s.emergency_hotkey == "Ctrl+Alt+Shift+F12"
+    assert s.pointer_mode == "relative" and s.pointer_speed == 1.0
+    assert s.monitor_mapping.mode == "virtual_desktop"
+    assert (s.pinch_on_threshold, s.pinch_off_threshold) == (0.33, 0.48)
     assert s.start_with_windows is False
     assert (s.camera.width, s.camera.height, s.camera.fps) == (640, 480, 30)
 
@@ -119,6 +122,54 @@ def test_migration_hook(settings_path, monkeypatch):
     settings_path.write_text(json.dumps({"schema_version": 1, "old_sens": 0.75}), encoding="utf-8")
     s = SettingsStore(settings_path).load()
     assert s.sensitivity == 1.5
+
+
+@pytest.mark.parametrize("on,off", [(0.28, 0.42), (0.30, 0.45)])
+def test_v1_file_with_old_defaults_migrates_to_relative_pointer_defaults(settings_path, on, off):
+    """Schema 1 wrote its defaults explicitly; 'primary' kept the pointer off the second monitor."""
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        "schema_version": 1, "monitor_mapping": {"mode": "primary", "monitor_index": 0},
+        "pinch_on_threshold": on, "pinch_off_threshold": off, "sensitivity": 1.4,
+        "calibration": {"left": 0.2, "top": 0.15, "right": 0.85, "bottom": 0.85}}), encoding="utf-8")
+    s = SettingsStore(settings_path).load()
+    assert s.monitor_mapping.mode == "virtual_desktop"
+    assert (s.pinch_on_threshold, s.pinch_off_threshold) == (0.33, 0.48)
+    assert s.sensitivity == 1.4 and s.calibration.left == 0.2 and s.pointer_mode == "relative"
+
+
+def test_v1_migration_keeps_customized_values(settings_path):
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        "schema_version": 1, "monitor_mapping": {"mode": "monitor", "monitor_index": 1},
+        "pinch_on_threshold": 0.25, "pinch_off_threshold": 0.45}), encoding="utf-8")
+    s = SettingsStore(settings_path).load()
+    assert (s.monitor_mapping.mode, s.monitor_mapping.monitor_index) == ("monitor", 1)
+    assert (s.pinch_on_threshold, s.pinch_off_threshold) == (0.25, 0.45)
+
+
+def test_v2_primary_is_kept(settings_path):
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"schema_version": 2, "monitor_mapping": {"mode": "primary"}}),
+                             encoding="utf-8")
+    assert SettingsStore(settings_path).load().monitor_mapping.mode == "primary"
+
+
+def test_pointer_settings_validation_and_round_trip(settings_path):
+    s = validate({"pointer_mode": "ABSOLUTE", "pointer_speed": 9})
+    assert s.pointer_mode == "absolute" and s.pointer_speed == 2.0
+    s = validate({"pointer_mode": "warp", "pointer_speed": 0.1})
+    assert s.pointer_mode == "relative" and s.pointer_speed == 0.5
+    assert validate({"pointer_speed": "fast"}).pointer_speed == 1.0
+    assert validate({"pointer_speed": True}).pointer_speed == 1.0
+    st = SettingsStore(settings_path)
+    s = Settings()
+    s.pointer_speed = 1.6
+    s.pointer_mode = "absolute"
+    st.save(s)
+    loaded = st.load()
+    assert loaded.pointer_speed == 1.6 and loaded.pointer_mode == "absolute"
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["schema_version"] == 2
 
 
 def test_bad_schema_version_treated_as_v1(settings_path):

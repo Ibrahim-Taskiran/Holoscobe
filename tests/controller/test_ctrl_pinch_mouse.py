@@ -17,14 +17,16 @@ SCALE = 60.0
 _ORDER = (FingerName.THUMB, FingerName.INDEX, FingerName.MIDDLE, FingerName.RING, FingerName.LITTLE)
 
 
-def mh(tip=(320.0, 240.0), palm=PALM, *, mid: float = 1.5, hid: int = RIGHT, bent: str = "", **kw):
-    """Right hand with thumb-middle distance `mid` (palm units). `bent`: letters t i m r l."""
+def mh(tip=(320.0, 240.0), palm=PALM, *, mid: float = 1.5, idx: float = 1.0, hid: int = RIGHT, bent: str = "",
+       **kw):
+    """Right hand with thumb-middle distance `mid` and thumb-index distance `idx` (palm units).
+    `bent`: letters t i m r l."""
     h = hand(hid, tip=tip, palm=palm, scale=SCALE, **kw)
-    fingers = tuple(FingerInfo(n, FingerState.BENT if "timrl"[k] in bent else FingerState.EXTENDED, 0.1)
-                    for k, n in enumerate(_ORDER))
+    fingers = tuple(FingerInfo(n, FingerState.BENT, 0.95) if "timrl"[k] in bent else
+                    FingerInfo(n, FingerState.EXTENDED, 0.1) for k, n in enumerate(_ORDER))
     lms = [Landmark(0.5, 0.5)] * 21
     lms[12] = Landmark(0.5 + mid * SCALE / W, 0.5)
-    return replace(h, fingers=fingers, landmarks=tuple(lms))
+    return replace(h, fingers=fingers, landmarks=tuple(lms), pinch_distance=idx)
 
 
 def rig() -> Rig:
@@ -55,7 +57,7 @@ def released_after_down(r: Rig) -> bool:
 def test_defaults_pinch_mouse_on_and_depth_tap_off():
     cfg = ControllerConfig()
     assert cfg.pinch_mouse is True and cfg.index_tap_click is False
-    assert cfg.mouse_hold_ms == 350.0 and cfg.double_click_window_ms == 500.0
+    assert cfg.mouse_hold_ms == 480.0 and cfg.double_click_window_ms == 500.0
 
 
 @FPS
@@ -101,7 +103,7 @@ def test_hold_drags_with_left_button(dt):
     r.sink.clear()
     r.frame(mh(), events=[(G.PINCH_START, RIGHT)], dt=dt)
     t = 0.0
-    while t < 360:
+    while t < 500:
         r.frame(mh(), dt=dt)
         t += dt
     assert r.kinds() == [K.LEFT_DOWN]
@@ -123,8 +125,8 @@ def test_hand_motion_during_tap_starts_a_drag_not_a_click():
     r = rig()
     pointer_at(r)
     r.frame(mh(), events=[(G.PINCH_START, RIGHT)])
-    r.frame(mh((345.0, 240.0), (345.0, 300.0)))      # 25 px palm travel = 0.42 palm units
-    r.frame(mh((350.0, 240.0), (350.0, 300.0)), events=[(G.PINCH_END, RIGHT)])
+    r.frame(mh((350.0, 240.0), (350.0, 300.0)))      # 30 px palm travel = 0.5 palm units
+    r.frame(mh((355.0, 240.0), (355.0, 300.0)), events=[(G.PINCH_END, RIGHT)])
     assert r.count(K.LEFT_CLICK) == 0
     assert K.LEFT_DOWN in r.kinds() and released_after_down(r)
 
@@ -133,7 +135,7 @@ def _dragging(dt: float = 33.4) -> Rig:
     r = rig()
     pointer_at(r, dt=dt)
     r.frame(mh(), events=[(G.PINCH_START, RIGHT)], dt=dt)
-    for _ in range(int(400 / dt) + 1):
+    for _ in range(int(520 / dt) + 1):
         r.frame(mh(), dt=dt)
     assert r.count(K.LEFT_DOWN) == 1
     return r
@@ -236,18 +238,18 @@ def test_middle_finger_entering_already_pinched_does_not_fire():
 def test_both_pinches_together_never_click():
     r = rig()
     pointer_at(r)
-    # thumb+middle first, then thumb+index: neither clicks
+    # thumb+middle first, then thumb+index just as close: ambiguous, neither clicks
     for _ in range(4):
         r.frame(mh(mid=0.1))
-    r.frame(mh(mid=0.1), events=[(G.PINCH_START, RIGHT)])
-    r.frame(mh(mid=0.1))
+    r.frame(mh(mid=0.1, idx=0.12), events=[(G.PINCH_START, RIGHT)])
+    r.frame(mh(mid=0.1, idx=0.12))
     r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)])
-    for _ in range(4):
+    for _ in range(8):
         r.frame(mh(mid=1.2))
-    # thumb+index first, then thumb+middle: index wins deterministically, still a single tap
-    r.frame(mh(), events=[(G.PINCH_START, RIGHT)])
+    # thumb+index first, then thumb+middle: index wins, still a single tap
+    r.frame(mh(idx=0.1), events=[(G.PINCH_START, RIGHT)])
     for _ in range(4):
-        r.frame(mh(mid=0.1))
+        r.frame(mh(mid=0.1, idx=0.1))
     r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)])
     for _ in range(4):
         r.frame(mh(mid=1.2))
@@ -255,16 +257,42 @@ def test_both_pinches_together_never_click():
     assert r.count(K.LEFT_CLICK) == 1 and r.count(K.LEFT_DOWN) == 0
 
 
-def test_same_frame_start_prefers_left_click():
+def test_same_frame_start_with_equal_distances_prefers_left_click():
     r = rig()
     pointer_at(r)
-    r.frame(mh(mid=0.1))
-    r.frame(mh(mid=0.1), events=[(G.PINCH_START, RIGHT)], dt=100.0)   # middle debounce completes here too
-    r.frame(mh(mid=0.1))
+    r.frame(mh(mid=0.1, idx=0.1))
+    r.frame(mh(mid=0.1, idx=0.1), events=[(G.PINCH_START, RIGHT)], dt=100.0)   # middle debounce completes too
+    r.frame(mh(mid=0.1, idx=0.1))
     r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)])
     for _ in range(4):
         r.frame(mh(mid=1.2))
     assert r.count(K.RIGHT_CLICK) == 0 and r.count(K.LEFT_CLICK) == 1
+
+
+@FPS
+def test_closest_finger_wins_regardless_of_arrival_order(dt):
+    """Thumb clearly on the middle tip: an index PINCH_START in the same moment is not a left click."""
+    r = rig()
+    pointer_at(r, dt=dt)
+    r.sink.clear()
+    r.frame(mh(mid=0.1, idx=0.3), events=[(G.PINCH_START, RIGHT)], dt=dt)   # index event first
+    for _ in range(3):
+        r.frame(mh(mid=0.1, idx=0.3), dt=dt)
+    r.frame(mh(mid=1.2, idx=1.0), events=[(G.PINCH_END, RIGHT)], dt=dt)
+    for _ in range(4):
+        r.frame(mh(mid=1.2), dt=dt)
+    assert r.count(K.LEFT_CLICK) == 0 and r.count(K.RIGHT_CLICK) == 1 and r.count(K.LEFT_DOWN) == 0
+    # thumb on the index tip with the middle tip nearby but farther: left click only
+    for _ in range(4):
+        r.frame(mh(), dt=dt)
+    for _ in range(3):
+        r.frame(mh(mid=0.3, idx=0.4), dt=dt)                                 # middle pinch starts first
+    r.frame(mh(mid=0.3, idx=0.05), events=[(G.PINCH_START, RIGHT)], dt=dt)
+    r.frame(mh(mid=0.3, idx=0.05), dt=dt)
+    r.frame(mh(mid=1.2), events=[(G.PINCH_END, RIGHT)], dt=dt)
+    for _ in range(4):
+        r.frame(mh(mid=1.2), dt=dt)
+    assert r.count(K.LEFT_CLICK) == 1 and r.count(K.RIGHT_CLICK) == 1
 
 
 def test_left_hand_pinch_never_clicks():

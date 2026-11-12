@@ -26,6 +26,8 @@ Settings mapping notes:
   mirrored view when mirror is on. Pipeline converts (left/right swapped and flipped).
 - mirror_preview drives the pointer mapping mirror (spec: mirror only display/mapping).
 - sensitivity s: scroll/zoom step size / s, volume gain * s.
+- pointer_mode "relative" (default): the cursor follows the palm anchor with acceleration and a
+  clutch; calibration only matters for "absolute". pointer_speed scales the relative gain.
 """
 from __future__ import annotations
 
@@ -115,6 +117,11 @@ def controller_config(settings: Settings) -> ControllerConfig:
         volume_gain=base.volume_gain * s,
         monitor_mode=mm.mode,
         monitor_index=mm.monitor_index,
+        pointer_relative=settings.pointer_mode != "absolute",
+        pointer_speed=settings.pointer_speed,
+        # thumb+middle uses the same pinch thresholds as thumb+index
+        right_pinch_on_pu=settings.pinch_on_threshold,
+        right_pinch_off_pu=settings.pinch_off_threshold,
     )
 
 
@@ -132,7 +139,10 @@ class Pipeline:
         settings: Optional[Settings] = None,
         *,
         smoother: Optional[Any] = None,
+        cursor_source: Optional[Callable[[], Optional[tuple[int, int]]]] = None,
     ) -> None:
+        """cursor_source: optional reader of the real OS cursor (physical px), used by the relative
+        pointer to start and re-engage from where the cursor really is."""
         self.settings = settings if settings is not None else Settings()
         self._clock = clock
         self._lock = threading.RLock()          # serializes process()/reset() (tracking thread)
@@ -148,7 +158,7 @@ class Pipeline:
             smoother = OneEuroPointerSmoother(float(box.right - box.left) if box else 1920.0)
         # Controller wraps `sink` in safety.GuardedSink itself: do not wrap it here.
         self.controller = Controller(clock, sink, displays, windows, volume, controller_config(self.settings),
-                                     smoother=smoother)
+                                     smoother=smoother, cursor_source=cursor_source)
         self.last_features: Optional[FrameFeatures] = None
         self.last_events: tuple[GestureEvent, ...] = ()
         self.gesture_resets = 0

@@ -33,7 +33,7 @@ def _last_move_before(rig: Rig, idx: int):
 
 
 def test_pinch_release_clicks_once_at_latched_point(rig):
-    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False)  # Legacy pinch regression.
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False, pointer_relative=False)  # Legacy pinch regression, absolute mapping.
     rig.activate(_point(250))
     rig.run(150, [hand(PINCH, DOM_C)])
     rig.run(400, _point(250))
@@ -45,7 +45,7 @@ def test_pinch_release_clicks_once_at_latched_point(rig):
 
 
 def test_pinch_onset_drift_of_latched_point_is_bounded(rig):
-    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False)  # Legacy pinch regression.
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False, pointer_relative=False)  # Legacy pinch regression, absolute mapping.
     """The index tip moves while the pinch closes; the click latches the pointer at PINCH_START.
     Synthetic pose change (index curl 0 -> 0.65) is a worst case; this measures, not proves, drift."""
     rig.activate(_point(250))
@@ -73,7 +73,7 @@ def test_pinch_with_motion_does_not_click(rig):
 
 
 def test_pointer_frozen_while_pinched(rig):
-    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False)  # Legacy pinch regression.
+    rig.ctl._cfg = replace(rig.ctl.config, index_tap_click=False, pinch_mouse=False, pointer_relative=False)  # Legacy pinch regression, absolute mapping.
     rig.activate(_point(250))
     rig.run(120, [hand(PINCH, DOM_C)])
     n = rig.count(A.MOVE_POINTER)
@@ -95,6 +95,7 @@ def test_calibration_bounds_are_unmirrored_settings():
     """Regression: config.CalibrationBounds is unmirrored, mapping.CalibrationRect is in the
     mirrored view. Active region = left half of the camera image."""
     s = Settings()
+    s.pointer_mode = "absolute"            # calibration only applies to the absolute mapping
     s.calibration.left, s.calibration.right = 0.0, 0.5
     rig = Rig(s)
     rig.activate(_point(160))
@@ -150,12 +151,16 @@ def test_primary_monitor_mapping_keeps_pointer_on_primary():
     """Regression: settings monitor_mapping 'primary' (the default) had no consumer; the pointer
     spanned the whole virtual desktop."""
     mons = [make_monitor(0, 0, 1920, 1080, primary=True), make_monitor(1920, 0, 1920, 1080)]
-    rig = Rig(Settings(), monitors=mons)
+    s = Settings()
+    s.pointer_mode = "absolute"
+    s.monitor_mapping.mode = "primary"
+    rig = Rig(s, monitors=mons)
     rig.activate(_point(150))
     rig.run(600, lambda u: _point(lerp(500, 60, u))).run(300, _point(60))
     xs = [m.x for m in rig.sink.of(A.MOVE_POINTER)]
     assert max(xs) <= 1919 and max(xs) > 1800
     s = Settings()
+    s.pointer_mode = "absolute"
     s.monitor_mapping.mode = "virtual_desktop"
     rig2 = Rig(s, monitors=mons)
     rig2.activate(_point(150))
@@ -169,7 +174,8 @@ def test_unknown_label_hand_never_drives_pointer(rig):
     assert rig.kinds() == []
 
 
-def test_open_palm_also_points(rig):
+def test_open_palm_also_points_in_absolute_mode(rig):
+    rig.ctl._cfg = replace(rig.ctl.config, pointer_relative=False)   # relative mode clutches on an open palm
     rig.activate([hand(OPEN, (250, 300))])
     rig.run(400, lambda u: [hand(OPEN, (lerp(250, 350, u), 300))])
     assert rig.count(A.MOVE_POINTER) > 3

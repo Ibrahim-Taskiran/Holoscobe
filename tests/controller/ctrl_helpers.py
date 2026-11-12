@@ -66,8 +66,10 @@ EventSpec = Union[GestureEvent, tuple]
 
 
 def tcfg(**kw) -> ControllerConfig:
-    # Legacy pinch regression fixtures: pinch-release click, no pinch mouse, no index depth tap.
-    base = dict(mirror=False, calibration=CalibrationRect(), index_tap_click=False, pinch_mouse=False)
+    # Legacy pinch regression fixtures: pinch-release click, no pinch mouse, no index depth tap, and the
+    # absolute fingertip mapping (the default is now the relative pointer; see test_ctrl_relative.py).
+    base = dict(mirror=False, calibration=CalibrationRect(), index_tap_click=False, pinch_mouse=False,
+                pointer_relative=False)
     base.update(kw)
     return ControllerConfig(**base)
 
@@ -82,7 +84,7 @@ def desktop(tip: tuple[float, float]) -> tuple[int, int]:
 class Rig:
     def __init__(self, cfg: Optional[ControllerConfig] = None, monitors: Optional[Sequence[Monitor]] = None,
                  windows: Optional[FakeWindows] = None, volume: float = 0.5, smoother=None,
-                 camera: bool = True, active: bool = True) -> None:
+                 camera: bool = True, active: bool = True, cursor_source=None) -> None:
         self.clock = FakeClock()
         self.sink = DryRunSink()
         self.displays = FakeDisplays(monitors)
@@ -92,7 +94,7 @@ class Rig:
         self.volume = FakeVolume(volume)
         self.smoother = smoother if smoother is not None else Identity()
         self.ctl = Controller(self.clock, self.sink, self.displays, self.windows, self.volume,
-                              cfg or tcfg(), smoother=self.smoother)
+                              cfg or tcfg(), smoother=self.smoother, cursor_source=cursor_source)
         if camera:
             self.ctl.set_camera_state(CameraState.RUNNING)
         if active:

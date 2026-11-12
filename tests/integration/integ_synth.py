@@ -123,13 +123,14 @@ class Rig:
 
     def __init__(self, settings: Optional[Settings] = None, *, fps: float = 30.0, jitter_ms: float = 0.0,
                  seed: int = 1, dispatch_delay_ms: float = 25.0, monitors=None,
-                 windows: Optional[FakeWindows] = None) -> None:
+                 windows: Optional[FakeWindows] = None, cursor_source=None) -> None:
         self.clock = FakeClock(10_000.0)
         self.sink = DryRunSink()
         self.displays = FakeDisplays(monitors)
         self.windows = windows if windows is not None else FakeWindows([(TARGET, TARGET_RECT)], foreground=TARGET)
         self.volume = FakeVolume(0.5)
-        self.pipe = Pipeline(self.clock, self.sink, self.displays, self.windows, self.volume, settings)
+        self.pipe = Pipeline(self.clock, self.sink, self.displays, self.windows, self.volume, settings,
+                             cursor_source=cursor_source)
         self.ctl = self.pipe.controller
         self.t = 10_000.0
         self.fps = fps

@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APP_DIR_NAME = "Holoscobe"
 SETTINGS_FILE = "settings.json"
 
@@ -23,6 +23,10 @@ HANDS = ("right", "left")
 DIRECTIONS = ("normal", "reversed")
 MODES = ("pointer", "scroll", "zoom", "volume", "windows")
 MONITOR_MODES = ("primary", "virtual_desktop", "monitor")
+POINTER_MODES = ("relative", "absolute")
+PINCH_ON_DEFAULT, PINCH_OFF_DEFAULT = 0.33, 0.48
+# (on, off) pairs that were written as defaults by schema 1 (settings defaults and the dialog defaults)
+_V1_DEFAULT_PINCH = ((0.30, 0.45), (0.28, 0.42))
 DEFAULT_HOTKEY = "Ctrl+Alt+Shift+F12"
 
 
@@ -37,7 +41,7 @@ class CameraSettings:
 
 @dataclass
 class MonitorMapping:
-    mode: str = "primary"
+    mode: str = "virtual_desktop"
     monitor_index: int = 0
 
 
@@ -56,9 +60,11 @@ class Settings:
     camera: CameraSettings = field(default_factory=CameraSettings)
     mirror_preview: bool = True
     dominant_hand: str = "right"
-    pinch_on_threshold: float = 0.30      # palm units: pinch starts below this
-    pinch_off_threshold: float = 0.45     # palm units: pinch ends above this (hysteresis)
+    pinch_on_threshold: float = PINCH_ON_DEFAULT    # palm units: pinch starts below this
+    pinch_off_threshold: float = PINCH_OFF_DEFAULT  # palm units: pinch ends above this (hysteresis)
     sensitivity: float = 1.0
+    pointer_mode: str = "relative"        # "relative" (clutch + acceleration) | "absolute" (calibration rect)
+    pointer_speed: float = 1.0            # relative pointer speed multiplier, 0.5..2.0
     scroll_direction: str = "normal"
     zoom_direction: str = "normal"
     default_mode: str = "pointer"
@@ -119,6 +125,8 @@ def validate(data: Any) -> Settings:
             on = off - 0.05
     s.pinch_on_threshold, s.pinch_off_threshold = on, off
     s.sensitivity = _num(d.get("sensitivity"), s.sensitivity, 0.2, 3.0)
+    s.pointer_mode = _choice(d.get("pointer_mode"), POINTER_MODES, s.pointer_mode)
+    s.pointer_speed = _num(d.get("pointer_speed"), s.pointer_speed, 0.5, 2.0)
     s.scroll_direction = _choice(d.get("scroll_direction"), DIRECTIONS, s.scroll_direction)
     s.zoom_direction = _choice(d.get("zoom_direction"), DIRECTIONS, s.zoom_direction)
     s.default_mode = _choice(d.get("default_mode"), MODES, s.default_mode)
@@ -145,8 +153,22 @@ def validate(data: Any) -> Settings:
 
 # ---------- migration ----------
 
+def _migrate_v1(data: dict[str, Any]) -> dict[str, Any]:
+    """Schema 1 -> 2 (relative pointer). Schema 1 saved its defaults explicitly, so values equal to
+    an old default are treated as never chosen: monitor mode "primary" (which kept the pointer off
+    the other monitors) becomes "virtual_desktop", and the old default pinch thresholds become the
+    new, wider ones. Other values are kept."""
+    md = data.get("monitor_mapping")
+    if isinstance(md, dict) and md.get("mode") == "primary":
+        data["monitor_mapping"] = {**md, "mode": "virtual_desktop"}
+    on, off = data.get("pinch_on_threshold"), data.get("pinch_off_threshold")
+    if any(on == a and off == b for a, b in _V1_DEFAULT_PINCH):
+        data["pinch_on_threshold"], data["pinch_off_threshold"] = PINCH_ON_DEFAULT, PINCH_OFF_DEFAULT
+    return data
+
+
 # Maps a stored schema_version to a function upgrading its dict to version + 1.
-MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1}
 
 
 def migrate(data: dict[str, Any]) -> dict[str, Any]:
