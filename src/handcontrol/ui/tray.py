@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget
 
 from handcontrol.contracts import Mode
 from handcontrol.ui.viewmodel import (
+    GESTURE_GUIDE_TR,
     MODE_LABELS_TR,
     TRAY_ICON_STATE_LABELS_TR,
     TrayIconState,
@@ -146,10 +147,18 @@ class HandControlTray(QSystemTrayIcon):
             self.mode_menu.addAction(act)
             self.mode_actions[mode] = act
 
+        # Read-only gesture guide: one disabled entry per gesture.
+        self.guide_menu = QMenu("Hareket Rehberi", self.menu)
+        for gesture, result in GESTURE_GUIDE_TR:
+            entry = QAction(f"{gesture} → {result}", self.guide_menu)
+            entry.setEnabled(False)
+            self.guide_menu.addAction(entry)
+
         self.menu.addAction(self.action_pause_resume)
         self.menu.addAction(self.action_camera_toggle)
         self.menu.addSeparator()
         self.menu.addMenu(self.mode_menu)
+        self.menu.addMenu(self.guide_menu)
         self.menu.addAction(self.action_settings)
         self.menu.addAction(self.action_calibrate)
         self.menu.addSeparator()

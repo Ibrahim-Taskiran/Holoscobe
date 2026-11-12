@@ -19,6 +19,7 @@ from handcontrol.ui import (UiBridge, UiState, OverlayState, OverlayMenuKind,
     OverlayWindow, FeedbackToast, DryRunPanel, SettingsDialog, SettingsData, CalibrationWizard)
 from handcontrol.windows import (enable_per_monitor_v2, WindowsDisplayProvider,
     WindowsWindowQuery, WindowsVolumeControl, WindowsActionSink, WindowsHotkey, WindowsSession)
+from handcontrol.windows import startup as windows_startup
 from handcontrol.windows.hotkey import HotkeyConflictError
 
 
@@ -38,6 +39,31 @@ def hotkey_binding(text: str) -> tuple[int, int]:
     if len(key) == 1 and key.isascii() and key.isalnum():
         return modifiers, ord(key)
     raise ValueError('Geçersiz acil durdurma kısayolu')
+
+
+STATUS_HINT_TR = ('Önce Sürdür. Sağ işaret: imleç | Kısa pinch: tık, iki kez: çift tık, tut: sürükle | '
+    'Başparmak+orta: sağ tık | Sağ/sol yumruk (350 ms): küçült/geri aç. Tümü: tepside Hareket Rehberi.')
+
+
+STARTUP_SOURCE_TR = 'Windows ile başlatma yalnızca paketlenmiş sürümde kullanılabilir'
+STARTUP_FAILED_TR = 'Windows ile başlatma ayarı değiştirilemedi'
+
+
+def settings_to_dialog_data(s, *, startup_enabled: bool | None = None) -> SettingsData:
+    """Map stored Settings to dialog values so saving does not reset untouched fields.
+
+    startup_enabled overrides the stored flag with the real registry state when known."""
+    mm = s.monitor_mapping
+    monitor = ('primary' if mm.mode == 'primary' else 'secondary' if mm.mode == 'monitor' and mm.monitor_index == 1
+        else 'all')
+    return SettingsData(mirror=s.mirror_preview, dominant_hand=s.dominant_hand,
+        camera_index=s.camera.index, camera_backend='directshow' if s.camera.backend == 'dshow' else 'media_foundation',
+        emergency_hotkey=s.emergency_hotkey, pinch_on_threshold=s.pinch_on_threshold,
+        pinch_off_threshold=s.pinch_off_threshold, pointer_sensitivity=s.sensitivity, default_mode=s.default_mode,
+        scroll_direction='reverse' if s.scroll_direction == 'reversed' else 'natural',
+        zoom_direction='reverse' if s.zoom_direction == 'reversed' else 'natural',
+        show_overlay=s.overlay_visible, show_mascot=s.mascot_visible, monitor_mapping=monitor,
+        start_with_windows=s.start_with_windows if startup_enabled is None else startup_enabled)
 
 
 def snapshot_to_viewmodel(snapshot, *, dry_run: bool = True, mirrored: bool = True) -> UiState:
@@ -91,9 +117,13 @@ class Runtime(QObject):
 
     def __init__(self, bridge, store, *, live=False, displays=None, windows=None,
                  volume=None, hotkey_factory=WindowsHotkey, session_factory=WindowsSession,
-                 sink_factory=WindowsActionSink, camera_factory=run_camera_pipeline):
+                 sink_factory=WindowsActionSink, camera_factory=run_camera_pipeline,
+                 startup=windows_startup, packaged: bool | None = None):
         super().__init__()
         self.bridge, self.store, self.live = bridge, store, live
+        # startup provides is_enabled()/set_enabled(); injected so tests never touch the registry.
+        self.startup = startup
+        self.packaged = getattr(sys, 'frozen', False) if packaged is None else packaged
         self.settings = store.load()
         self.displays = displays if displays is not None else WindowsDisplayProvider()
         self.windows = windows if windows is not None else WindowsWindowQuery(self.displays)
@@ -206,6 +236,7 @@ class Runtime(QObject):
             zoom_direction='reversed' if data.zoom_direction == 'reverse' else 'normal')
         values['camera'].update(index=data.camera_index, backend={'media_foundation':'msmf', 'directshow':'dshow'}.get(data.camera_backend, 'auto'))
         values['monitor_mapping'] = {'mode': 'primary' if data.monitor_mapping == 'primary' else 'monitor' if data.monitor_mapping == 'secondary' else 'virtual_desktop', 'monitor_index': 1 if data.monitor_mapping == 'secondary' else 0}
+        values['start_with_windows'] = self._apply_startup(bool(data.start_with_windows))
         settings = validate(values)
         try:
             self.hotkey.reassign(*hotkey_binding(settings.emergency_hotkey))
@@ -213,6 +244,23 @@ class Runtime(QObject):
             self._replace_pipeline(settings)
         except Exception as exc:
             self.bridge.show_feedback(message=f'Ayarlar kaydedilemedi: {exc}')
+
+    def startup_enabled(self) -> bool:
+        return self.startup.is_enabled()
+
+    def _apply_startup(self, wanted: bool) -> bool:
+        """Change HKCU Run only when the user toggled it; return the real resulting state."""
+        current = self.startup.is_enabled()
+        if wanted == current:
+            return current
+        # Source checkouts need PYTHONPATH=src, which a Run entry cannot provide.
+        if wanted and not self.packaged:
+            self.bridge.show_feedback(message=STARTUP_SOURCE_TR)
+            return current
+        if not self.startup.set_enabled(wanted):
+            self.bridge.show_feedback(message=STARTUP_FAILED_TR)
+            return current
+        return wanted
 
     def _replace_pipeline(self, settings):
         from handcontrol.pipeline import controller_config, gesture_config, dominant_of, calibration_rect
@@ -287,10 +335,9 @@ def main(argv=None) -> int:
     def update_controls(state):
         activate.setText(state.pause_resume_action_text)
         status.setText(f'  {state.control_state_label_tr} | {state.mode_label_tr} | {state.camera_state_label_tr}')
-        window.statusBar().showMessage(state.error_text or 'Önce Sürdür. Sağ yumruk: küçült | Sol yumruk: geri aç (350 ms tut).')
+        window.statusBar().showMessage(state.error_text or STATUS_HINT_TR)
     bridge.state_changed.connect(update_controls)
     update_controls(bridge.state)
-    window.statusBar().showMessage('Sürdür → sağ işaret: imleç; kısa öne/geri: tık. Sağ/sol yumruk: küçült/geri aç.')
     tray = HandControlTray(bridge, window)
     overlay = OverlayWindow(bridge)
     toast = FeedbackToast(bridge, auto_show_window=True)
@@ -303,10 +350,8 @@ def main(argv=None) -> int:
     def settings_dialog():
         runtime.pipeline.pause('Ayarlar')
         s = runtime.settings
-        dialog = SettingsDialog(initial=SettingsData(mirror=s.mirror_preview, dominant_hand=s.dominant_hand,
-            camera_index=s.camera.index, emergency_hotkey=s.emergency_hotkey,
-            pinch_on_threshold=s.pinch_on_threshold, pinch_off_threshold=s.pinch_off_threshold,
-            pointer_sensitivity=s.sensitivity, default_mode=s.default_mode), bridge=bridge, parent=window)
+        dialog = SettingsDialog(initial=settings_to_dialog_data(s, startup_enabled=runtime.startup_enabled()),
+            bridge=bridge, parent=window)
         dialog.exec()
     def calibration_dialog():
         if runtime.pipeline.controller.begin_calibration():

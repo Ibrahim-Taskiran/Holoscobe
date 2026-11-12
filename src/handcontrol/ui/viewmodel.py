@@ -130,6 +130,10 @@ WINDOW_ACTION_LABELS_TR: dict[WindowActionKind, str] = {
 ACTION_KIND_LABELS_TR: dict[ActionKind, str] = {
     ActionKind.MOVE_POINTER: "İmleci Taşı",
     ActionKind.LEFT_CLICK: "Sol Tık",
+    ActionKind.RIGHT_CLICK: "Sağ Tık",
+    ActionKind.DOUBLE_CLICK: "Çift Tık",
+    ActionKind.LEFT_DOWN: "Sol Tuş Basılı (Sürükle)",
+    ActionKind.LEFT_UP: "Sol Tuş Bırakıldı",
     ActionKind.SCROLL: "Kaydır",
     ActionKind.ZOOM: "Yakınlaştır",
     ActionKind.SET_VOLUME: "Ses Seviyesini Ayarla",
@@ -143,6 +147,25 @@ ACTION_KIND_LABELS_TR: dict[ActionKind, str] = {
     ActionKind.WINDOW_CLOSE: "Pencereyi Kapat",
     ActionKind.RELEASE_ALL: "Tüm Girdileri Bırak",
 }
+
+
+# User-facing gesture guide (gesture, result). Mirrors README "Ne yapar"; keep both in sync.
+GESTURE_GUIDE_TR: tuple[tuple[str, str], ...] = (
+    ("İki elle bir kez el çırp", "Kontrolü aç / duraklat"),
+    ("Sağ işaret parmağını gezdir (İşaretçi)", "İmleci taşı"),
+    ("Sağ el: başparmak + işaret kısa pinch", "Sol tık (imleç pinch başındaki yerde kalır)"),
+    ("Kısa pinch'i 500 ms içinde iki kez yap", "Çift tık"),
+    ("Pinch'i ~350 ms tut, taşı, bırak", "Sürükle bırak (sol tuş basılı)"),
+    ("İşaret açıkken başparmak + orta parmak kısa pinch", "Sağ tık"),
+    ("Sağ yumruk 350 ms tut", "Ön plandaki pencereyi küçült"),
+    ("Sol yumruk 350 ms tut", "Son küçültülen pencereyi geri aç"),
+    ("Baskın olmayan elin açık avucunu 600 ms sabit tut", "Mod menüsü"),
+)
+
+
+def format_gesture_guide_tr() -> str:
+    """Return the gesture guide as plain Turkish text lines ("gesture → result")."""
+    return "\n".join(f"{gesture} → {result}" for gesture, result in GESTURE_GUIDE_TR)
 
 
 def resolve_tray_icon_state(

@@ -42,6 +42,7 @@ from handcontrol.ui.viewmodel import (
     CONTROL_STATE_LABELS_TR,
     FINGER_NAME_LABELS_TR,
     FINGER_STATE_LABELS_TR,
+    GESTURE_GUIDE_TR,
     HANDEDNESS_LABELS_TR,
     MODE_LABELS_TR,
     QUALITY_LABELS_TR,
@@ -60,6 +61,7 @@ from handcontrol.ui.viewmodel import (
     create_mode_menu_items,
     create_window_action_menu_items,
     format_action_tr,
+    format_gesture_guide_tr,
     resolve_tray_icon_state,
 )
 
@@ -68,6 +70,7 @@ __all__ = [
     "CONTROL_STATE_LABELS_TR",
     "FINGER_NAME_LABELS_TR",
     "FINGER_STATE_LABELS_TR",
+    "GESTURE_GUIDE_TR",
     "HANDEDNESS_LABELS_TR",
     "MODE_LABELS_TR",
     "QUALITY_LABELS_TR",
@@ -110,5 +113,6 @@ __all__ = [
     "create_tray_pixmap",
     "create_window_action_menu_items",
     "format_action_tr",
+    "format_gesture_guide_tr",
     "resolve_tray_icon_state",
 ]

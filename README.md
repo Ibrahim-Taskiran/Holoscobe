@@ -2,7 +2,7 @@
 
 Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: uygulama bağlandı; donanım kabulü bekliyor.** Kamera → pipeline → denetleyici → arayüz zinciri ve güvenlik yaşam döngüsü hazır. Son otomatik takım: **695 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Gerçek kamera, el ve iki monitör doğrulaması henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir.
+> **Durum: uygulama bağlandı; donanım kabulü bekliyor.** Kamera → pipeline → denetleyici → arayüz zinciri ve güvenlik yaşam döngüsü hazır. Son otomatik takım: **867 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Gerçek kamera, el ve iki monitör doğrulaması henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir.
 
 ## Ne yapar
 
@@ -12,7 +12,10 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 | Hepsi (etkin) | Sağ eli yumruk yapıp 350 ms tut | Ön plandaki uygulama penceresini küçültür |
 | Hepsi (etkin) | Sol eli yumruk yapıp 350 ms tut | Bu oturumda son küçültülen pencereyi geri açar |
 | İşaretçi | Sağ elin işaret parmağı | İmleci hareket ettirir |
-| İşaretçi | Sağ elde yalnız işaret açık; parmağı kısa ve hızlı öne itip geri çek | Sol tık |
+| İşaretçi | Sağ el: başparmak + işaret kısa pinch | Sol tık |
+| İşaretçi | Sağ el: iki kısa pinch (ikincisi ~500 ms içinde) | Çift tık |
+| İşaretçi | Sağ el: pinch'i ~350 ms tut, taşı, bırak | Sürükle bırak |
+| İşaretçi | Sağ el: işaret ve yüzük/serçe açıkken başparmak + orta parmak kısa pinch | Sağ tık |
 | Kaydırma | Pinch + dikey hareket | Dikey kaydırma |
 | Yakınlaştırma | İki elle pinch, elleri aç/kapat | Ctrl + tekerlek |
 | Ses | Pinch + dikey hareket | Sistem sesi |
@@ -21,13 +24,15 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 
 Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut.
 
-Tıklama için sağ elinde başparmak, orta, yüzük ve serçe bükülü; yalnız işaret parmağı
-açık olsun. Önce yaklaşık 200 ms sabit tut, ardından işaret parmağını kameraya doğru
-kısa bir hareketle itip hemen başlangıç konumuna getir (en fazla 450 ms). Avucunu
-yerinde tut. Tıklama başlangıcındaki imleç konumu sabitlenir. Pinch artık varsayılan
-İmleç modunda tıklamaz. Sol el, baskın el ayarı ne olursa olsun imleci/tıklamayı
-yönetmez; sol yumrukla pencere geri açma korunur. Kamera z tahmini gerçek mesafe
-ölçümü değildir; bu hareketin gerçek kamera hassasiyeti henüz doğrulanmadı.
+Tıklamalar yalnız sağ elle ve İşaretçi modunda çalışır. Pinch başladığı anda imleç
+o konumda sabitlenir; tık oraya gider. Kısa pinch sol tık, art arda iki kısa pinch çift
+tıktır. Pinch'i tutup eli taşırsan sol tuş basılı kalır, bırakınca bırakılır. İşaret
+parmağı açıkken başparmakla orta parmağı birleştirmek sağ tıktır. Eski "işaret parmağını
+kameraya doğru itme" tıklaması varsayılan olarak kapalıdır (kamera z tahmini güvenilir
+değil). Sol el, baskın el ayarı ne olursa olsun imleci/tıklamayı yönetmez. Takip kaybında
+basılı sol tuş en geç 200 ms içinde bırakılır. Tüm hareketler tepsideki **Hareket Rehberi**
+menüsünde listelenir. Ayrıntı ve elle kontrol adımları: [click_controls.md](Docs/reports/click_controls.md).
+Bu hareketlerin gerçek kamera kabulü henüz yapılmadı.
 
 Yumruk komutundan önce elini en az 200 ms açık göster; tekrar komut için yeniden aç.
 Beş parmağın da bükük algılanması gerekir. İki yumruk aynı anda komut üretmez. Sağ yumruk
@@ -71,7 +76,7 @@ $env:PYTHONPATH = "$PWD\src"
 
 Alternatif: `powershell -ExecutionPolicy Bypass -File scripts\launch.ps1` (dry-run); aynı komuta `--live` eklenebilir. Normal kullanımda `QT_QPA_PLATFORM=offscreen` ayarlı olmamalıdır.
 
-Uygulama Paused başlar. Kamera sağlıklı olduktan sonra tepsiden Sürdür ile veya el çırparak etkinleştirin. Tepsiden kamerayı kapatabilir, ayarları/kalibrasyonu açabilir ve çıkabilirsiniz. Kısayol çakışırsa canlı başlatma reddedilir; dry-run ayarlarından başka bir kısayol seçin. Kamera hatası ve kurtarma otomatik etkinleştirme yapmaz. Gerçek donanım kabulü tamamlanana kadar önce dry-run kullanın.
+Uygulama Paused başlar. Kamera sağlıklı olduktan sonra tepsiden Sürdür ile veya el çırparak etkinleştirin. Ardından sağ işaret parmağıyla imleci taşıyın, kısa pinch ile tıklayın; diğer hareketler için tepsideki Hareket Rehberi'ne bakın. Tepsiden kamerayı kapatabilir, ayarları/kalibrasyonu açabilir ve çıkabilirsiniz. Kısayol çakışırsa canlı başlatma reddedilir; dry-run ayarlarından başka bir kısayol seçin. Kamera hatası ve kurtarma otomatik etkinleştirme yapmaz. Gerçek donanım kabulü tamamlanana kadar önce dry-run kullanın.
 
 ## Testler
 

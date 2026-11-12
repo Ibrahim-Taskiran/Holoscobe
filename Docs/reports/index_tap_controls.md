@@ -1,3 +1,5 @@
+> **Geçersiz:** yerini [click_controls.md](click_controls.md) aldı; öne itme tıklaması artık varsayılan olarak kapalı.
+
 # Sağ işaret parmağıyla tıklama
 
 İmleç hareketi ve sol tık, baskın el ayarından bağımsız olarak yalnız sağ elden gelir.
