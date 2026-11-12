@@ -153,6 +153,10 @@ class WindowTarget:
 class ActionKind(Enum):
     MOVE_POINTER = "move_pointer"                   # x, y
     LEFT_CLICK = "left_click"                       # x, y latched at pinch start
+    RIGHT_CLICK = "right_click"                     # x, y
+    DOUBLE_CLICK = "double_click"                   # x, y
+    LEFT_DOWN = "left_down"                         # x, y; left button held (drag start)
+    LEFT_UP = "left_up"                             # x, y; left button released (drag end)
     SCROLL = "scroll"                               # steps (+ up), target
     ZOOM = "zoom"                                   # steps (+ in), target
     SET_VOLUME = "set_volume"                       # value 0.0..1.0

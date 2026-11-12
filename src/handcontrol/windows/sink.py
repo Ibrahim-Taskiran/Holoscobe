@@ -51,19 +51,32 @@ class WindowsActionSink:
             if action.kind == ActionKind.RELEASE_ALL:
                 self.release_all()
                 return True
-            age = self._now() - action.capture_ms
-            if self._closed or action.epoch != self._epoch or not math.isfinite(age) or not 0 <= age <= 150:
-                return False
             try:
+                age = self._now() - action.capture_ms
+                if self._closed or action.epoch != self._epoch or not math.isfinite(age) or not 0 <= age <= 150:
+                    if action.kind == ActionKind.LEFT_UP:
+                        self.release_all()
+                    return False
                 kind, target = action.kind, action.target
-                if kind in (ActionKind.MOVE_POINTER, ActionKind.LEFT_CLICK,
+                pointer_routes = {
+                    ActionKind.MOVE_POINTER: self.input.move_pointer,
+                    ActionKind.LEFT_CLICK: self.input.left_click,
+                    ActionKind.RIGHT_CLICK: self.input.right_click,
+                    ActionKind.DOUBLE_CLICK: self.input.double_click,
+                    ActionKind.LEFT_DOWN: self.input.left_down,
+                    ActionKind.LEFT_UP: self.input.left_up,
+                }
+                if kind in (*pointer_routes,
                             ActionKind.WINDOW_DRAG_BEGIN, ActionKind.WINDOW_DRAG_MOVE):
                     if action.x is None or action.y is None:
+                        if kind == ActionKind.LEFT_UP:
+                            self.release_all()
                         return False
-                if kind == ActionKind.MOVE_POINTER:
-                    return self.input.move_pointer(action.x, action.y)
-                if kind == ActionKind.LEFT_CLICK:
-                    return self.input.left_click(action.x, action.y)
+                if kind in pointer_routes:
+                    success = pointer_routes[kind](action.x, action.y)
+                    if not success:
+                        self.release_all()
+                    return success
                 if kind == ActionKind.SET_VOLUME:
                     if isinstance(self.volume, WindowsVolumeControl) and self.clock is None:
                         return self.volume.set_volume(action.value, deadline_ms=action.capture_ms + 150)

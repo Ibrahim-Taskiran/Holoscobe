@@ -54,3 +54,29 @@ pipeline/test entegrasyonunu ve teslim belgelerini tamamlayabilir; gerekli en k�
 modülü düzeltmelerini yapabilir, conventional commit oluşturabilir ve main'e push edebilir.
 Paket kurulmaz. UI yalnız zorunlu bağlama düzeltmesiyle değiştirilir. Donanım kapıları insan
 doğrulamasına kadar bekliyor kalır.
+
+## 3. tur — tıklama eylemleri (2026-11-12)
+
+"Yönetici devri" bölümü geçersizdir: yönetici yeniden Claude'dur. Commit'i yalnız Claude yöneticisi atar.
+Bu turda Antigravity yok; `ui/**` geçici olarak Claude alt ajanındadır.
+
+| Sahip | Yazabileceği yollar |
+|---|---|
+| Codex | `src/handcontrol/windows/**`, `tests/windows/**`, `Docs/reports/windows_*`, `Docs/coordination/REQUESTS_codex.md` |
+| Claude H (jest + denetleyici) | `features.py`, `filters.py`, `gestures.py`, `index_tap.py`, `controller.py`, `safety.py`, `dryrun.py`, `pipeline.py`, `tests/features/**`, `tests/gestures/**`, `tests/controller/**`, `tests/integration/**` |
+| Claude I (arayüz + belgeler) | `src/handcontrol/ui/**`, `tests/ui/**`, `app.py`, `tests/app/**`, `README.md`, `Docs/reports/*` (`windows_*` hariç) |
+
+Sözleşme istisnası: `contracts.py` içinde `ActionKind`'a yalnız şu dört üye eklenir (`LEFT_CLICK` satırının altına).
+İlk gelen ekler, sonraki dokunmaz. Başka hiçbir sözleşme değişikliği yapılmaz.
+
+```python
+    RIGHT_CLICK = "right_click"                     # x, y
+    DOUBLE_CLICK = "double_click"                   # x, y
+    LEFT_DOWN = "left_down"                         # x, y; left button held (drag start)
+    LEFT_UP = "left_up"                             # x, y; left button released (drag end)
+```
+
+### 3. tur ek — Codex ikinci görev (2026-11-12)
+
+Codex'e ek yollar: `src/handcontrol/windows/startup.py` (yeni), `scripts/build.ps1` (yeni), `packaging/**` (yeni),
+`Docs/reports/windows_startup_packaging.md`. `app.py` ve `ui/**` bağlaması Claude tarafındadır; Codex dokunmaz.

@@ -12,6 +12,7 @@ from .placement import normalize_pointer
 
 log = logging.getLogger(__name__)
 MOVE, LEFTDOWN, LEFTUP, WHEEL = 0x1, 0x2, 0x4, 0x800
+RIGHTDOWN, RIGHTUP = 0x8, 0x10
 VIRTUALDESK, ABSOLUTE, KEYUP = 0x4000, 0x8000, 0x2
 VK_CONTROL = 0x11
 
@@ -71,7 +72,7 @@ class WindowsInput:
     def _release(self, token: tuple[str, int]) -> bool:
         if token not in self._ledger:
             return True
-        event = mouse(LEFTUP) if token[0] == "mouse" else key(token[1], up=True)
+        event = mouse({1: LEFTUP, 2: RIGHTUP}[token[1]]) if token[0] == "mouse" else key(token[1], up=True)
         if not self._send(event):
             return False
         self._ledger.remove(token)
@@ -84,12 +85,49 @@ class WindowsInput:
 
     def left_click(self, x: int, y: int) -> bool:
         with self._lock:
+            if ("mouse", 1) in self._ledger:
+                return False
             if not self.move_pointer(x, y):
                 return False
             token = ("mouse", 1)
             if not self._press(token, mouse(LEFTDOWN)):
                 return False
             return self._release(token)
+
+    def right_click(self, x: int, y: int) -> bool:
+        with self._lock:
+            token = ("mouse", 2)
+            if token in self._ledger or not self.move_pointer(x, y):
+                return False
+            if not self._press(token, mouse(RIGHTDOWN)):
+                return False
+            return self._release(token)
+
+    def double_click(self, x: int, y: int) -> bool:
+        with self._lock:
+            token = ("mouse", 1)
+            if token in self._ledger or not self.move_pointer(x, y):
+                return False
+            for _ in range(2):
+                if not self._press(token, mouse(LEFTDOWN)) or not self._release(token):
+                    return False
+            return True
+
+    def left_down(self, x: int, y: int) -> bool:
+        with self._lock:
+            token = ("mouse", 1)
+            if token in self._ledger or not self.move_pointer(x, y):
+                return False
+            return self._press(token, mouse(LEFTDOWN))
+
+    def left_up(self, x: int, y: int) -> bool:
+        with self._lock:
+            token = ("mouse", 1)
+            try:
+                moved = self.move_pointer(x, y)
+            finally:
+                released = self._release(token)
+            return moved and released
 
     def scroll(self, steps: int) -> bool:
         with self._lock:
