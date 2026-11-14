@@ -116,10 +116,11 @@ def test_drag_moves_the_cursor_with_the_hand(fps):
     rig.activate(_h(POINT, 300))
     rig.run(300, _h(POINT, 300))
     aim = rig.ctl.snapshot().pointer
-    rig.run(700, _h(PINCH, 300))
+    rig.run(300, _h(PINCH, 300))
+    assert rig.count(A.LEFT_DOWN) == 0
+    rig.run(500, lambda u: _h(PINCH, lerp(300, 200, u)))       # round 6: travel, not hold time, drags
     assert rig.count(A.LEFT_DOWN) == 1
-    rig.run(400, lambda u: _h(PINCH, lerp(300, 240, u)))
-    rig.run(300, _h(POINT, 240))
+    rig.run(300, _h(POINT, 200))
     moves = rig.sink.of(A.MOVE_POINTER)
     up = rig.sink.of(A.LEFT_UP)
     assert moves and moves[-1].x > aim[0] + 100 and len(up) == 1 and (up[0].x, up[0].y) == (moves[-1].x, moves[-1].y)

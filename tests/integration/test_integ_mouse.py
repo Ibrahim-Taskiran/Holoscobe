@@ -51,17 +51,18 @@ def test_double_tap_clicks_twice_at_one_point(fps):
 
 
 @FPS
-def test_hold_drags_with_the_left_button(fps):
+def test_pinch_and_move_drags_with_the_left_button(fps):
+    # Round 6: a still 700 ms pinch no longer presses the button; palm travel starts the drag.
     rig = Rig(fps=fps)
     rig.activate(_r())
     aim = rig.ctl.snapshot().pointer
     rig.run(700, _r(PINCH))
+    assert rig.count(A.LEFT_DOWN) == 0 and rig.count(A.MOVE_POINTER) == 0   # still hand: no press, no creep
+    rig.run(900, lambda u: [hand(PINCH, (lerp(250, 340, u), 300.0))])
     assert rig.count(A.LEFT_DOWN) == 1 and rig.count(A.LEFT_UP) == 0
     down = rig.sink.of(A.LEFT_DOWN)[0]
     assert (down.x, down.y) == aim
-    assert rig.kinds()[-1] is A.LEFT_DOWN                      # still hand: no pointer creep
-    rig.run(400, lambda u: [hand(PINCH, (lerp(250, 330, u), 300.0))])
-    rig.run(300, _r(POINT, 330))
+    rig.run(300, _r(POINT, 340))
     ks = rig.kinds()
     i, j = ks.index(A.LEFT_DOWN), ks.index(A.LEFT_UP)
     moves = [a for a in rig.sink.actions[i:j] if a.kind is A.MOVE_POINTER]
@@ -75,7 +76,8 @@ def test_hold_drags_with_the_left_button(fps):
 def test_hand_leaving_mid_drag_releases_the_button(fps):
     rig = Rig(fps=fps)
     rig.activate(_r())
-    rig.run(700, _r(PINCH))
+    rig.run(200, _r(PINCH))
+    rig.run(500, lambda u: [hand(PINCH, (lerp(250, 410, u), 300.0))])   # round 6: travel starts the drag
     assert rig.count(A.LEFT_DOWN) == 1
     rig.run(300, [])
     ks = rig.kinds(skip_release=False)
@@ -99,7 +101,7 @@ def test_thumb_middle_tap_right_clicks(fps):
 def test_long_thumb_middle_hold_does_not_right_click(fps):
     rig = Rig(fps=fps)
     rig.activate(_r(OPEN))
-    rig.run(700, _r(RIGHT_PINCH)).run(400, _r(OPEN))
+    rig.run(3300, _r(RIGHT_PINCH)).run(400, _r(OPEN))      # round 6: limit 3000 ms (was 480 ms)
     assert _no_clicks(rig)
 
 

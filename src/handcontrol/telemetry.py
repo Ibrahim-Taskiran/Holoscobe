@@ -24,6 +24,7 @@ COLUMNS = (
     "events", "actions", "moves",
     "state", "mode", "pending_action", "notice", "pointer_x", "pointer_y", "dropped_actions",
     "pointer_engaged", "tracking_ok", "last_cancel",
+    "dom_reasons", "mid_pinch_pu",
 )
 
 
@@ -47,6 +48,29 @@ def _num(value: Any, digits: int = 3) -> Any:
 
 def _enum(value: Any) -> str:
     return str(getattr(value, "value", value) if value is not None else "")
+
+
+def _reasons(ff: Any, dom: Any) -> str:
+    """Reason codes attached by FeatureExtractor (FrameFeatures.reasons, a non-field attribute)."""
+    try:
+        per_hand, frame = getattr(ff, "reasons", ({}, ()))
+        codes = list(per_hand.get(getattr(dom, "hand_id", None), ())) if dom else []
+        codes += [c for c in frame if c not in codes]
+        return "|".join(codes)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _mid_pinch(ff: Any, dom: Any) -> Any:
+    """Thumb tip (4) to middle fingertip (12) distance in palm units, like pinch_pu."""
+    try:
+        lms = dom.landmarks
+        scale = float(dom.palm_scale_px)
+        if len(lms) < 13 or not scale > 0:
+            return ""
+        return _num(math.hypot((lms[4].x - lms[12].x) * ff.width, (lms[4].y - lms[12].y) * ff.height) / scale)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 class SessionRecorder:
@@ -172,6 +196,7 @@ class SessionRecorder:
             1 if getattr(snap, "pointer_engaged", False) else 0,
             1 if getattr(snap, "tracking_ok", True) else 0,
             getattr(snap, "last_cancel", ""),
+            _reasons(ff, dom), _mid_pinch(ff, dom) if dom else "",
         ]
 
 

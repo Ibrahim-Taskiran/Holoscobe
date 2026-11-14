@@ -197,6 +197,9 @@ class FeatureExtractor:
         self.config = config
         self._next_id = 1
         self._tracks: list[_Track] = []
+        # diagnostics only (no effect on output): reason codes of the last update() call
+        self.last_reasons: dict[int, tuple[str, ...]] = {}
+        self.last_frame_reasons: tuple[str, ...] = ()
 
     def reset(self) -> None:
         """Forget all tracks and finger states. IDs are never reused, even after reset."""
@@ -206,6 +209,8 @@ class FeatureExtractor:
 
     def update(self, sample: FrameSample) -> FrameFeatures:
         cfg = self.config
+        self.last_reasons = {}
+        self.last_frame_reasons = ()
         t = sample.capture_ms
         w, h = sample.width, sample.height
         try:
@@ -213,15 +218,18 @@ class FeatureExtractor:
         except TypeError:
             valid = False
         if not valid:
-            return FrameFeatures(sample.capture_ms, sample.inference_done_ms, w, h, (), False)
+            self.last_frame_reasons = ("invalid_sample",)
+            return self._tagged(FrameFeatures(sample.capture_ms, sample.inference_done_ms, w, h, (), False))
 
         self._tracks = [tr for tr in self._tracks if t - tr.last_seen_ms <= cfg.track_memory_ms]
 
         ambiguous = len(sample.hands) > cfg.max_hands
+        frame_reasons: list[str] = ["too_many_hands"] if ambiguous else []
         dets: list[_Det] = []
         for hand in sample.hands[: cfg.max_hands]:
             det = _measure(hand, w, h)
             if det is None:
+                frame_reasons.append("hand_unlocatable")
                 continue
             p = det.px
             s = _palm_scale(_dist2(p[0], p[9]), _dist2(p[5], p[17]), cfg.palm_width_ratio)
@@ -229,8 +237,15 @@ class FeatureExtractor:
             dets.append(det)
 
         mapping, assign_ambiguous = self._associate(dets, t, min(w, h))
-        ambiguous = (ambiguous or assign_ambiguous or self._pair_ambiguous(dets, min(w, h))
-                     or self._merge_ambiguous(dets, mapping, t, min(w, h)))
+        if assign_ambiguous:
+            frame_reasons.append("identity_ambiguous")
+        pair_reason = self._pair_ambiguous(dets, min(w, h))
+        if pair_reason:
+            frame_reasons.append(pair_reason)
+        merged = self._merge_ambiguous(dets, mapping, t, min(w, h))
+        if merged:
+            frame_reasons.append("merge")
+        ambiguous = ambiguous or assign_ambiguous or bool(pair_reason) or merged
 
         latency = sample.inference_done_ms - sample.capture_ms
         slow = not math.isfinite(latency) or latency > cfg.max_processing_ms
@@ -243,10 +258,11 @@ class FeatureExtractor:
                 track = _Track(self._next_id, det.center, det.scale, det.sample.handedness, t)
                 self._next_id += 1
                 self._tracks.append(track)
-                discontinuous = False
+                disc_reason: Optional[str] = None
             else:
                 track = self._tracks[ti]
-                discontinuous = self._temporal_check(track, det, t)
+                disc_reason = self._temporal_check(track, det, t)
+            discontinuous = disc_reason is not None
             if ambiguous:
                 track.amb_until_ms = t + cfg.ambiguity_hold_ms
             if discontinuous:
@@ -254,7 +270,17 @@ class FeatureExtractor:
             in_amb = t < track.amb_until_ms or ambiguous
             frame_ambiguous = frame_ambiguous or in_amb
 
-            hf = self._hand_features(det, track, sample, t, slow, in_amb, t < track.disc_until_ms or discontinuous)
+            reasons: list[str] = []
+            if in_amb:
+                reasons.append("identity_ambiguous" if ambiguous else "ambiguity_hold")
+            if disc_reason is not None:
+                reasons.append(disc_reason)
+            elif t < track.disc_until_ms:
+                reasons.append("discontinuity_hold")
+            hf = self._hand_features(det, track, sample, t, slow, in_amb, t < track.disc_until_ms or discontinuous,
+                                     reasons)
+            if hf.quality is not Quality.USABLE and reasons:
+                self.last_reasons[hf.hand_id] = tuple(dict.fromkeys(reasons))
             out.append(hf)
 
             track.center = det.center
@@ -265,7 +291,17 @@ class FeatureExtractor:
             track.last_seen_ms = t
 
         out.sort(key=lambda f: f.hand_id)
-        return FrameFeatures(sample.capture_ms, sample.inference_done_ms, w, h, tuple(out), frame_ambiguous)
+        self.last_frame_reasons = tuple(dict.fromkeys(frame_reasons))
+        return self._tagged(FrameFeatures(sample.capture_ms, sample.inference_done_ms, w, h, tuple(out),
+                                          frame_ambiguous))
+
+    def _tagged(self, ff: FrameFeatures) -> FrameFeatures:
+        """Attach the reason codes as a non-field attribute (ignored by ==, repr and the contract)."""
+        try:
+            object.__setattr__(ff, "reasons", (dict(self.last_reasons), self.last_frame_reasons))
+        except Exception:  # noqa: BLE001 - diagnostics must never break tracking
+            pass
+        return ff
 
     # ---------- identity ----------
 
@@ -317,7 +353,8 @@ class FeatureExtractor:
                 break
         return list(best), ambiguous
 
-    def _pair_ambiguous(self, dets: list[_Det], frame_min: float) -> bool:
+    def _pair_ambiguous(self, dets: list[_Det], frame_min: float) -> str:
+        """Reason code ('same_handedness' / 'overlap'), or '' when the pair is unambiguous."""
         cfg = self.config
         for i in range(len(dets)):
             for j in range(i + 1, len(dets)):
@@ -326,12 +363,12 @@ class FeatureExtractor:
                 if (ha is hb and ha is not Handedness.UNKNOWN
                         and a.sample.handedness_score >= cfg.same_handedness_min_score
                         and b.sample.handedness_score >= cfg.same_handedness_min_score):
-                    return True
+                    return "same_handedness"
                 ref = max(a.scale, b.scale)
                 ref = ref if ref > 0 else 0.1 * frame_min
                 if _dist2(a.center, b.center) / ref < cfg.overlap_palm:
-                    return True
-        return False
+                    return "overlap"
+        return ""
 
     def _merge_ambiguous(self, dets: list[_Det], mapping: list[Optional[int]], t: float, frame_min: float) -> bool:
         """A track seen moments ago is unmatched while a detection sits on top of it: two hands merged."""
@@ -347,24 +384,24 @@ class FeatureExtractor:
 
     # ---------- temporal ----------
 
-    def _temporal_check(self, track: _Track, det: _Det, t: float) -> bool:
-        """True when the matched detection jumped implausibly since the previous sample."""
+    def _temporal_check(self, track: _Track, det: _Det, t: float) -> Optional[str]:
+        """Reason code when the matched detection jumped implausibly since the previous sample."""
         cfg = self.config
         dt = t - track.last_seen_ms
         if dt > cfg.latch_reset_gap_ms:
             track.reset_latches()       # the hand was away: states restart, no jump judgement
-            return False
+            return None
         ref = track.scale if track.scale > 0 else det.scale
         if ref <= 0:
-            return False
+            return None
         d = _dist2(det.center, track.center) / ref
         dt_s = max(dt, 1.0) / 1000.0
         if d > cfg.disc_min_palm and d / dt_s > cfg.disc_speed_palm_s:
-            return True
+            return "discontinuity_speed"
         if det.scale > 0 and track.scale > 0 and dt <= cfg.disc_scale_window_ms:
             if abs(math.log(det.scale / track.scale)) > math.log(cfg.disc_scale_ratio):
-                return True
-        return False
+                return "discontinuity_scale"
+        return None
 
     # ---------- geometry ----------
 
@@ -376,7 +413,7 @@ class FeatureExtractor:
         zs = w * cfg.depth_scale if cfg.use_depth else 0.0
         return [(p.x * w, p.y * h, p.z * zs) for p in hand.landmarks]
 
-    def _plausibility(self, g: list[Vec3], palm: float, det: _Det) -> Quality:
+    def _plausibility(self, g: list[Vec3], palm: float, det: _Det, reasons: list[str]) -> Quality:
         cfg = self.config
         q = Quality.USABLE
         lo, hi = cfg.bone_ratio_range
@@ -386,12 +423,16 @@ class FeatureExtractor:
             bones = [_dist(pts[k], pts[k + 1]) / palm for k in range(3)]
             if any(not (lo <= b <= hi) for b in bones) or not (flo <= sum(bones) <= fhi):
                 q = Quality.DEGRADED
+                if "bone_ratio" not in reasons:
+                    reasons.append("bone_ratio")
         p = det.px
         aspect2d = (_dist2(p[5], p[17]) / cfg.palm_width_ratio) / max(_dist2(p[0], p[9]), 1e-9)
         aspect3d = (_dist(g[5], g[17]) / cfg.palm_width_ratio) / max(_dist(g[0], g[9]), 1e-12)
         for a in (aspect2d, aspect3d):
             if not (cfg.palm_aspect_min <= a <= 1.0 / cfg.palm_aspect_min):
                 q = Quality.DEGRADED
+                if "palm_edge_on" not in reasons:
+                    reasons.append("palm_edge_on")
         return q
 
     def _finger_curl(self, g: list[Vec3], name: FingerName, palm: float, palm_center: Vec3) -> tuple[float, bool]:
@@ -427,7 +468,7 @@ class FeatureExtractor:
         return curl, abs(angle_curl - reach_curl) > cfg.disagreement_max
 
     def _hand_features(self, det: _Det, track: _Track, sample: FrameSample, t: float, slow: bool,
-                       in_amb: bool, discontinuous: bool) -> HandFeatures:
+                       in_amb: bool, discontinuous: bool, reasons: list[str]) -> HandFeatures:
         cfg = self.config
         w, h = sample.width, sample.height
         hand = det.sample
@@ -437,18 +478,26 @@ class FeatureExtractor:
 
         if not det.all_finite or det.scale <= 0:
             quality = Quality.UNKNOWN
+            reasons.append("landmarks_nonfinite" if not det.all_finite else "palm_tiny")
         else:
             g = self._geo_points(hand, w, h)
             palm_geo = _palm_scale(_dist(g[0], g[9]), _dist(g[5], g[17]), cfg.palm_width_ratio)
             if not math.isfinite(palm_geo) or palm_geo <= 1e-9:
                 quality = Quality.UNKNOWN
+                reasons.append("palm_geo_invalid")
             else:
-                quality = self._plausibility(g, palm_geo, det)
-                if det.scale < cfg.degraded_palm_px or det.scale > cfg.max_palm_frame_frac * min(w, h):
+                quality = self._plausibility(g, palm_geo, det, reasons)
+                if det.scale < cfg.degraded_palm_px:
                     quality = _worst(quality, Quality.DEGRADED)
+                    reasons.append("palm_small")
+                elif det.scale > cfg.max_palm_frame_frac * min(w, h):
+                    quality = _worst(quality, Quality.DEGRADED)
+                    reasons.append("palm_large")
                 pc = tuple(sum(g[i][k] for i in PALM_MCPS) / 4.0 for k in range(3))
                 curls = [self._finger_curl(g, n, palm_geo, pc) for n in FINGER_ORDER]  # type: ignore[arg-type]
                 pinch = _dist2(det.px[4], det.px[8]) / det.scale
+        if slow:
+            reasons.append("slow_processing")
         if slow or discontinuous or in_amb:
             quality = _worst(quality, Quality.DEGRADED)
 

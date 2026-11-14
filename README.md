@@ -14,8 +14,8 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 | İşaretçi | İşaret açık, diğer parmaklar kapalı | İmleç hareket eder. Hızlı hareket uzağa, yavaş hareket hassas gider |
 | İşaretçi | Eli aç (ya da kadrajdan çıkar) | İmleç hemen durur; el 200 ms açık kalırsa bırakılır. Eli geri getir, yeniden işaret et: kaldığı yerden devam eder |
 | İşaretçi | Kısa başparmak + işaret pinch | Sol tık. İmleç pinch sırasında durur |
-| İşaretçi | İki hızlı pinch (arada parmakları belirgin aç) | Çift tık |
-| İşaretçi | Pinch'i yaklaşık yarım saniye tut, taşı, bırak | Sürükle bırak |
+| İşaretçi | İki hızlı pinch (çeyrek ile yarım saniye arayla) | Çift tık |
+| İşaretçi | Pinch'i kapat, eli belirgin taşı, bırak | Sürükle bırak. Sürükleme süreyle değil el hareketiyle başlar |
 | İşaretçi | Açık elden kısa başparmak + orta parmak pinch | Sağ tık |
 | Kaydırma | Pinch + dikey hareket | Dikey kaydırma |
 | Yakınlaştırma | İki elle pinch, elleri aç/kapat | Ctrl + tekerlek |
@@ -37,9 +37,9 @@ Ekranın sağ üstündeki gösterge anlık durumu yazar (İmleç aktif / bekleme
 Kalibrasyon dikdörtgeni yalnız **Mutlak** türde geçerlidir (kamera alanı = ekran).
 
 Tıklamalar yalnız sağ elle ve İşaretçi modunda çalışır. Pinch sırasında imleç durur;
-tık pinch başındaki konuma gider. Kısa pinch sol tık, iki hızlı pinch (arada parmakları
-belirgin aç) çift tıktır. Pinch'i yaklaşık yarım saniye tutup eli taşırsan sol tuş basılı
-kalır, bırakınca bırakılır. Açık elden başparmakla orta parmağı kısa birleştirmek sağ tıktır. Eski "işaret parmağını
+tık pinch başındaki konuma gider. El yerinde dururken yapılan pinch sol tıktır (1,5 sn'ye kadar
+tutulabilir); iki hızlı pinch çift tıktır. Pinch kapalıyken eli belirgin taşırsan sol tuş basılı
+kalır, bırakınca bırakılır. Açık elden başparmakla orta parmağı birleştirmek sağ tıktır (3 sn'ye kadar). Eski "işaret parmağını
 kameraya doğru itme" tıklaması varsayılan olarak kapalıdır (kamera z tahmini güvenilir
 değil). Sol el, baskın el ayarı ne olursa olsun imleci/tıklamayı yönetmez. Takip kaybında
 basılı sol tuş en geç 200 ms içinde bırakılır. Tüm hareketler tepsideki **Hareket Rehberi**

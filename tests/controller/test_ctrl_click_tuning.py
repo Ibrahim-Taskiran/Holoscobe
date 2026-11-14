@@ -84,10 +84,11 @@ def test_deliberate_right_double_click_is_not_blanket_suppressed_for_600_ms():
 
 
 def test_relative_drag_recovery_reanchors_instead_of_replaying_hidden_motion():
-    from test_ctrl_relative import rig as relative_rig, rh, hold
+    from test_ctrl_relative import rig as relative_rig, rh, hold, stroke
     r = relative_rig(33.4)
     r.frame(rh(idx=.1), events=[(G.PINCH_START, RIGHT)])
-    hold(r, (320, 300), 520, 33.4, idx=.1)
+    stroke(r, (320, 300), (360, 300), 200, 33.4, idx=.1)     # round 6: travel, not hold time, drags
+    hold(r, (360, 300), 100, 33.4, idx=.1)
     assert r.count(K.LEFT_DOWN) == 1
     r.sink.clear()
     r.frame(replace(rh(), quality=Quality.DEGRADED), dt=60)
@@ -111,8 +112,9 @@ def test_release_crossing_hold_deadline_between_frames_is_not_silently_lost():
     for _ in range(4):
         r.frame(mh(idx=.1, bent="i"), dt=100)
     r.frame(mh(), events=[(G.PINCH_END, RIGHT)], dt=100)
-    assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_UP) == 1
-    assert r.count(K.LEFT_CLICK) == r.count(K.RIGHT_CLICK) == 0
+    # Round 6: a still 500 ms pinch is a click (was LEFT_DOWN + LEFT_UP at the same point).
+    assert r.count(K.LEFT_CLICK) == 1
+    assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_UP) == r.count(K.RIGHT_CLICK) == 0
 
 
 @pytest.mark.parametrize("gap_ms", [62, 109, 140, 190])
@@ -193,7 +195,12 @@ def test_recorded_short_cadence_click_classification(phase, repeat):
 @pytest.mark.parametrize("repeat", [3, 5])
 def test_recorded_drag_original_timing_and_safe_cleanup(repeat):
     r = replay(groups()["drag", repeat])
-    assert r.count(K.LEFT_DOWN) >= 1 and r.count(K.LEFT_UP) >= 1
+    if repeat == 3:                     # palm travel 2.71 palm units: a drag
+        assert r.count(K.LEFT_DOWN) >= 1 and r.count(K.LEFT_UP) >= 1
+    else:   # round 6: 0.31 palm units in 4.5 s is below the drift ceiling: no drag, no click (was a drag)
+        assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_CLICK) == 0
+        assert r.ctl.snapshot().last_cancel == "Tıklama iptal: uzun tutuldu"
+    assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_UP)
     assert r.count(K.RIGHT_CLICK) == 0
 
 

@@ -59,7 +59,7 @@ def test_pinch_onset_drift_of_latched_point_is_bounded(rig):
 
 def test_long_pinch_does_not_click(rig):
     rig.activate(_point(250))
-    rig.run(700, [hand(PINCH, DOM_C)])
+    rig.run(1700, [hand(PINCH, DOM_C)])            # round 6: tap_max_ms 1500 (was 480 ms -> drag)
     rig.run(300, _point(250))
     assert rig.count(A.LEFT_CLICK) == 0
 

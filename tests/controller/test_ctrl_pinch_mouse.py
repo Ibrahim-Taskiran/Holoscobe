@@ -1,4 +1,4 @@
-"""POINTER pinch mouse: thumb+index tap = LEFT_CLICK, hold = LEFT_DOWN/MOVE/LEFT_UP,
+"""POINTER pinch mouse: thumb+index tap = LEFT_CLICK, pinch + palm travel = LEFT_DOWN/MOVE/LEFT_UP,
 thumb+middle tap = RIGHT_CLICK. Synthetic HandFeatures; left pinch events are injected, the
 thumb+middle pinch is measured by the controller from landmarks 4 and 12."""
 from __future__ import annotations
@@ -57,7 +57,8 @@ def released_after_down(r: Rig) -> bool:
 def test_defaults_pinch_mouse_on_and_depth_tap_off():
     cfg = ControllerConfig()
     assert cfg.pinch_mouse is True and cfg.index_tap_click is False
-    assert cfg.mouse_hold_ms == 480.0 and cfg.double_click_window_ms == 500.0
+    assert cfg.tap_max_ms == 1500.0 and cfg.double_click_window_ms == 500.0
+    assert cfg.mouse_drag_move_palm == 0.6 and cfg.right_hold_max_ms == 3000.0
 
 
 @FPS
@@ -97,21 +98,22 @@ def test_slow_second_tap_uses_its_own_point():
 
 
 @FPS
-def test_hold_drags_with_left_button(dt):
+def test_pinch_then_travel_drags_with_left_button(dt):
+    # Round 6: a still hold never presses the button (was: 480 ms hold -> LEFT_DOWN); travel does.
     r = rig()
     p = pointer_at(r, dt=dt)
     r.sink.clear()
     r.frame(mh(), events=[(G.PINCH_START, RIGHT)], dt=dt)
     t = 0.0
-    while t < 500:
+    while t < 1000:
         r.frame(mh(), dt=dt)
         t += dt
-    assert r.kinds() == [K.LEFT_DOWN]
-    d = r.sink.of(K.LEFT_DOWN)[0]
-    assert (d.x, d.y) == p
-    for k in range(1, 6):                    # whole hand moves right
+    assert r.kinds() == []
+    for k in range(1, 10):                   # whole hand moves right: 90 px = 1.5 palm units
         r.frame(mh((320.0 + 10 * k, 240.0), (320.0 + 10 * k, 300.0)), dt=dt)
-    r.frame(mh((370.0, 240.0), (370.0, 300.0)), events=[(G.PINCH_END, RIGHT)], dt=dt)
+    d = r.sink.of(K.LEFT_DOWN)[0]
+    assert (d.x, d.y) == p and r.kinds()[0] is K.LEFT_DOWN
+    r.frame(mh((410.0, 240.0), (410.0, 300.0)), events=[(G.PINCH_END, RIGHT)], dt=dt)
     ks = r.kinds()
     assert ks[0] is K.LEFT_DOWN and ks[-1] is K.LEFT_UP
     moves = r.sink.of(K.MOVE_POINTER)
@@ -125,8 +127,8 @@ def test_hand_motion_during_tap_starts_a_drag_not_a_click():
     r = rig()
     pointer_at(r)
     r.frame(mh(), events=[(G.PINCH_START, RIGHT)])
-    r.frame(mh((350.0, 240.0), (350.0, 300.0)))      # 30 px palm travel = 0.5 palm units
-    r.frame(mh((355.0, 240.0), (355.0, 300.0)), events=[(G.PINCH_END, RIGHT)])
+    r.frame(mh((360.0, 240.0), (360.0, 300.0)))      # 40 px palm travel = 0.67 palm units
+    r.frame(mh((365.0, 240.0), (365.0, 300.0)), events=[(G.PINCH_END, RIGHT)])
     assert r.count(K.LEFT_CLICK) == 0
     assert K.LEFT_DOWN in r.kinds() and released_after_down(r)
 
@@ -135,8 +137,10 @@ def _dragging(dt: float = 33.4) -> Rig:
     r = rig()
     pointer_at(r, dt=dt)
     r.frame(mh(), events=[(G.PINCH_START, RIGHT)], dt=dt)
-    for _ in range(int(520 / dt) + 1):
-        r.frame(mh(), dt=dt)
+    for k in range(1, 5):                    # 40 px = 0.67 palm units of travel starts the drag
+        r.frame(mh(palm=(PALM[0] + 10 * k, PALM[1])), dt=dt)
+    for _ in range(3):
+        r.frame(mh(palm=(PALM[0] + 40, PALM[1])), dt=dt)
     assert r.count(K.LEFT_DOWN) == 1
     return r
 
@@ -211,9 +215,10 @@ def test_thumb_middle_tap_right_clicks_once(dt):
 
 
 def test_long_thumb_middle_hold_does_not_right_click():
+    # Round 6: the limit is right_hold_max_ms (3000 ms, was mouse_hold_ms 480 ms).
     r = rig()
     pointer_at(r)
-    for _ in range(20):
+    for _ in range(100):                     # 3.3 s
         r.frame(mh(mid=0.1))
     for _ in range(5):
         r.frame(mh(mid=1.2))

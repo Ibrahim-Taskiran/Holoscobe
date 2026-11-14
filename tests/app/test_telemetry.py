@@ -144,3 +144,23 @@ def test_main_flag_parsing(monkeypatch, tmp_path):
     assert main([]) == 1 and seen["telemetry"] is None
     assert main(["--telemetry"]) == 1 and isinstance(seen["telemetry"], SessionRecorder)
     seen["telemetry"].close()
+
+
+def test_recorder_reason_and_mid_pinch_columns(tmp_path):
+    from handcontrol.contracts import Landmark
+    assert COLUMNS[-2:] == ("dom_reasons", "mid_pinch_pu")
+    lms = [Landmark(0.0, 0.0, 0.0)] * 21
+    lms[4], lms[12] = Landmark(0.25, 0.5, 0.0), Landmark(0.25 + 40.0 / 640, 0.5, 0.0)
+    h = HandFeatures(7, Handedness.RIGHT, Quality.DEGRADED, (100.0, 50.0), 80.0, (), 0.8, (0.0, 0.0), tuple(lms))
+    ff = frame(100.0, [h])
+    object.__setattr__(ff, "reasons", ({7: ("palm_small", "slow_processing")}, ("overlap",)))
+    p = tmp_path / "s.csv"
+    rec = SessionRecorder(p)
+    rec.on_frame(ff, (), snap())
+    rec.on_frame(frame(133.0, [hand()]), (), snap())   # no reasons attribute, no landmarks
+    rec.on_frame(frame(166.0, []), (), snap())
+    rec.close()
+    r = rows(p)
+    assert r[0]["dom_reasons"] == "palm_small|slow_processing|overlap" and r[0]["mid_pinch_pu"] == "0.5"
+    assert r[1]["dom_reasons"] == "" and r[1]["mid_pinch_pu"] == ""
+    assert r[2]["dom_present"] == "0" and r[2]["mid_pinch_pu"] == ""

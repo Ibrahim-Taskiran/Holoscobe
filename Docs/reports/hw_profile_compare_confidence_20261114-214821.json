@@ -1,0 +1,118 @@
+{
+  "tool": "profile_compare",
+  "title": "İzleyici güven profili karşılaştırması",
+  "stem": "hw_profile_compare_confidence_20261114-214821",
+  "status": "tamam",
+  "environment": {
+    "cpu": "AMD Ryzen 5 5600H with Radeon Graphics",
+    "cpu_cekirdek": 12,
+    "windows": "Windows 10 (10.0.26300)",
+    "kamera": {
+      "profiller": {
+        "0.55/0.55/0.55": {
+          "arka_uc": "msmf",
+          "istenen": "640x480@30",
+          "gercek_cozunurluk": "640x480",
+          "kamera_fps": 30.2,
+          "el_etiketi_degisimi": false
+        },
+        "0.5/0.35/0.35": {
+          "arka_uc": "msmf",
+          "istenen": "640x480@30",
+          "gercek_cozunurluk": "640x480",
+          "kamera_fps": 30.2,
+          "el_etiketi_degisimi": false
+        },
+        "0.5/0.25/0.25": {
+          "arka_uc": "msmf",
+          "istenen": "640x480@30",
+          "gercek_cozunurluk": "640x480",
+          "kamera_fps": 30.0,
+          "el_etiketi_degisimi": false
+        }
+      }
+    }
+  },
+  "software": {
+    "paketler": {
+      "mediapipe": "1.2.2",
+      "opencv-contrib-python": "5.0.0.93",
+      "numpy": "2.4.6",
+      "python": "3.11.18"
+    },
+    "model": {
+      "manifest_sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
+      "file_sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
+      "eslesiyor": true
+    }
+  },
+  "conditions": {
+    "Işık": "tavan lambası",
+    "Arka plan": "dağınık oda",
+    "Mesafe": "50-70cm"
+  },
+  "experiment": [
+    "Sabit poz listesi (5 poz) x 8 sn, her güven profilinde aynı sırayla.",
+    "Profil: algılama/varlık/izleme eşiği. Çözünürlük: 640x480"
+  ],
+  "result_lines": [
+    "0.55/0.55/0.55: kullanılabilir 0.867, eli olmayan 0.082, en uzun boşluk 1781.0 ms, 22.0 FPS",
+    "0.5/0.35/0.35: kullanılabilir 0.839, eli olmayan 0.024, en uzun boşluk 1031.0 ms, 21.8 FPS",
+    "0.5/0.25/0.25: kullanılabilir 0.922, eli olmayan 0.003, en uzun boşluk 157.0 ms, 13.6 FPS"
+  ],
+  "decision": "geçti",
+  "decision_note": "Ölçüm tamamlandı (bilgi amaçlı; kabul kapısı yok).",
+  "raw": {
+    "profiller": [
+      {
+        "istenen": "640x480",
+        "gercek_cozunurluk": "640x480",
+        "ornek": 993,
+        "islenen_fps": 22.0,
+        "cikarim_ms_p50": 20.9,
+        "cikarim_ms_p95": 28.9,
+        "kullanilabilir_kapsama_yuzde": 86.7,
+        "bos_kare_orani": 0.082,
+        "en_uzun_bosluk_ms": 1781.0,
+        "kullanilabilir_kare_orani": 0.867,
+        "profil": "0.55/0.55/0.55",
+        "kamera_fps": 30.2
+      },
+      {
+        "istenen": "640x480",
+        "gercek_cozunurluk": "640x480",
+        "ornek": 926,
+        "islenen_fps": 21.8,
+        "cikarim_ms_p50": 20.9,
+        "cikarim_ms_p95": 23.3,
+        "kullanilabilir_kapsama_yuzde": 83.9,
+        "bos_kare_orani": 0.024,
+        "en_uzun_bosluk_ms": 1031.0,
+        "kullanilabilir_kare_orani": 0.839,
+        "profil": "0.5/0.35/0.35",
+        "kamera_fps": 30.2
+      },
+      {
+        "istenen": "640x480",
+        "gercek_cozunurluk": "640x480",
+        "ornek": 914,
+        "islenen_fps": 13.6,
+        "cikarim_ms_p50": 20.9,
+        "cikarim_ms_p95": 23.2,
+        "kullanilabilir_kapsama_yuzde": 92.2,
+        "bos_kare_orani": 0.003,
+        "en_uzun_bosluk_ms": 157.0,
+        "kullanilabilir_kare_orani": 0.922,
+        "profil": "0.5/0.25/0.25",
+        "kamera_fps": 30.0
+      }
+    ],
+    "checklist": [
+      "SAĞ el açık avuç, kameraya dönük",
+      "SOL el açık avuç, kameraya dönük",
+      "İKİ el açık avuç",
+      "İKİ el yumruk",
+      "SAĞ el baş parmak + işaret parmağı tutuşu (pinch)"
+    ]
+  }
+}

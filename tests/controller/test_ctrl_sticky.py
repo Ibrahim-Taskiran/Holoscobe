@@ -201,7 +201,7 @@ def test_degraded_frame_of_another_hand_id_or_ambiguous_frame_still_disengages(d
 @FPS
 def test_last_cancel_reasons_and_clear_on_dispatch(dt):
     r = rig(dt, pose="open")
-    for d in (1.0, 0.15, 0.15) + (0.15,) * int(600 // dt):         # right pinch held too long
+    for d in (1.0, 0.15, 0.15) + (0.15,) * int(3100 // dt):        # right pinch held too long (> 3 s)
         r.frame(rh(pose="open", mid=d), dt=dt)
     assert snap(r).last_cancel == "Sağ tık iptal: uzun tutuldu"
     for d in (0.6, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2):

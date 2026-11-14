@@ -17,6 +17,9 @@ GAP_BUCKETS = (("< 100 ms", 0, 100), ("100-200 ms", 100, 200), ("200-500 ms", 20
 FLICKER_MAX_MS = 500.0
 STALL_MS = 200.0
 STALL_MOVE_SCALE = 0.25
+GAP_MIN_MS = 200.0
+HOLD_BUCKETS = (("< 200 ms", 0, 200), ("200-480 ms", 200, 480), ("480-1000 ms", 480, 1000), ("> 1000 ms", 1000, math.inf))
+OUTCOMES = (("left", "sol tık"), ("drag", "sürükleme"), ("right", "sağ tık"), ("cancel", "iptal"), ("none", "hiçbiri"))
 FINGERS = ("thumb", "index", "middle", "ring", "little")
 CLICK_KINDS = (("left_click", "sol tık"), ("right_click", "sağ tık"), ("double_click", "çift tık"), ("left_down", "sürükleme başlangıcı"))
 
@@ -85,6 +88,87 @@ def _tracking(header: list[str], rows: list[Row]) -> list[str]:
     return out
 
 
+def _row_reasons(r: Row) -> list[str]:
+    codes = [c for c in (r.get("dom_reasons") or "").split("|") if c]
+    if codes:
+        return codes
+    return ["hand_absent"] if not _flag(r, "dom_present") else ["unspecified"]
+
+
+def _reasons(header: list[str], rows: list[Row]) -> list[str]:
+    out = ["## Takip bozulma nedenleri", ""]
+    if not _has(header, "dom_reasons", "dom_quality"):
+        return out + [f"- Neden kodları: {NO_DATA}", ""]
+    bad = [r for r in rows if r.get("dom_quality") != "usable"]
+    counts: Counter[str] = Counter(c for r in bad for c in _row_reasons(r))
+    out.append(f"- Kullanılabilir olmayan baskın el kareleri: {len(bad)}/{len(rows)}")
+    out.extend([f"  - {c}: {n}" for c, n in counts.most_common()] or ["  - yok"])
+    first: Counter[str] = Counter()
+    n_gaps = 0
+    last_t: Optional[float] = None
+    start: Optional[Row] = None
+    for r in rows:
+        t = _f(r, "t_ms")
+        if t is None:
+            continue
+        if r.get("dom_quality") == "usable":
+            if start is not None and last_t is not None and t - last_t >= GAP_MIN_MS:
+                n_gaps += 1
+                first.update(_row_reasons(start))
+            last_t, start = t, None
+        elif start is None and last_t is not None:
+            start = r
+    out.append(f"- {GAP_MIN_MS:.0f} ms ve uzun kopukluklar ({n_gaps}), ilk bozuk karenin nedenleri:")
+    out.extend([f"  - {c}: {n}" for c, n in first.most_common()] or ["  - yok"])
+    out.append("")
+    return out
+
+
+def _pinch_holds(header: list[str], rows: list[Row]) -> list[str]:
+    out = ["- Pinch denemeleri süreye göre (sonuç: eylem ve iptal sütunlarından):"]
+    if not _has(header, "pinch_pu", "t_ms"):
+        return out + [f"  - {NO_DATA}"]
+    spans: list[tuple[int, int]] = []
+    armed, start = True, 0
+    for i, r in enumerate(rows):
+        d = _f(r, "pinch_pu")
+        if d is None:
+            continue
+        if armed and d < PINCH_ON:
+            armed, start = False, i
+        elif not armed and d > PINCH_OFF:
+            armed = True
+            spans.append((start, i))
+    if not armed:
+        spans.append((start, len(rows) - 1))
+    table = {b[0]: Counter() for b in HOLD_BUCKETS}
+    for k, (a, b) in enumerate(spans):
+        ta, tb = _f(rows[a], "t_ms"), _f(rows[b], "t_ms")
+        if ta is None or tb is None:
+            continue
+        end = min(b + 2, (spans[k + 1][0] - 1) if k + 1 < len(spans) else len(rows) - 1)
+        acts = {x for r in rows[a:end + 1] for x in (r.get("actions") or "").split("|") if x}
+        prev = (rows[a - 1].get("last_cancel") or "").strip() if a > 0 else ""
+        cancel = any((r.get("last_cancel") or "").strip() not in ("", prev) for r in rows[a:end + 1])
+        if "right_click" in acts:
+            res = "right"
+        elif "left_down" in acts:
+            res = "drag"
+        elif acts & {"left_click", "double_click"}:
+            res = "left"
+        else:
+            res = "cancel" if cancel else "none"
+        for name, lo, hi in HOLD_BUCKETS:
+            if lo <= tb - ta < hi:
+                table[name][res] += 1
+                break
+    out.append("  - süre: " + " / ".join(label for _, label in OUTCOMES) + " (toplam)")
+    for name, _, _ in HOLD_BUCKETS:
+        c = table[name]
+        out.append(f"  - {name}: " + " / ".join(str(c[k]) for k, _ in OUTCOMES) + f" ({sum(c.values())})")
+    return out
+
+
 def _pointer(header: list[str], rows: list[Row]) -> list[str]:
     out = ["## İşaretçi", ""]
     if not _has(header, "pointer_engaged", "t_ms"):
@@ -149,6 +233,7 @@ def _clicks(header: list[str], rows: list[Row]) -> list[str]:
         out.append(f"- Pinch denemesi (mesafe {PINCH_ON} altına inip {PINCH_OFF} üstüne çıkma): {attempts}")
     else:
         out.append(f"- Pinch denemesi: {NO_DATA}")
+    out.extend(_pinch_holds(header, rows))
     if _has(header, "actions"):
         counts: Counter[str] = Counter()
         for r in rows:
@@ -213,7 +298,9 @@ def render_report(header: list[str], rows: list[Row], source: str = "") -> str:
     if len(times) >= 2 and times[-1] > times[0]:
         dur = (times[-1] - times[0]) / 1000.0
         lines.append(f"- Süre: {dur:.1f} sn")
-        lines.append(f"- Kare sayısı: {len(rows)}, ortalama fps: {(len(times) - 1) / dur:.1f}")
+        gaps = sorted(b - a for a, b in zip(times, times[1:]))
+        lines.append(f"- Kare sayısı: {len(times)}, ortalama fps: {len(times) / dur:.1f}, "
+                     f"medyan kare aralığı: {gaps[len(gaps) // 2]:.1f} ms")
     else:
         lines.append(f"- Süre / fps: {NO_DATA}")
     if "age_ms" in header:
@@ -223,7 +310,7 @@ def render_report(header: list[str], rows: list[Row], source: str = "") -> str:
     lines.append("")
     if not rows:
         return "\n".join(lines + ["Dosyada kare yok."]) + "\n"
-    for section in (_tracking, _pointer, _clicks, _fingers, _notices):
+    for section in (_tracking, _reasons, _pointer, _clicks, _fingers, _notices):
         lines += section(header, rows)
     return "\n".join(lines).rstrip() + "\n"
 

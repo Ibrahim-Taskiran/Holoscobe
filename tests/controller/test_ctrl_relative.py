@@ -94,7 +94,7 @@ def swipe_left(r: Rig, dt: float, px: float = 160.0, ms: float = 200.0, y: float
 def test_defaults_are_relative_with_new_click_timings():
     c = ControllerConfig()
     assert c.pointer_relative is True and c.pointer_speed == 1.0 and c.monitor_mode == "virtual_desktop"
-    assert c.mouse_hold_ms == 480.0 and c.clutch_debounce_ms == 100.0
+    assert c.tap_max_ms == 1500.0 and c.clutch_debounce_ms == 100.0
     assert c.rel_min_gain < c.rel_max_gain and c.rel_dead_zone > 0
 
 
@@ -324,15 +324,18 @@ def test_deliberate_double_pinch_clicks_twice_at_one_point(dt):
 
 
 @FPS
-def test_slow_pinch_under_hold_time_clicks_over_it_drags(dt):
+def test_slow_pinch_clicks_and_a_still_hold_never_drags(dt):
+    # Round 6: a still 1 s hold is a click on release (was: LEFT_DOWN after 480 ms).
     r = rig(dt)
     _tap(r, dt, 400)
     assert r.kinds() == [K.LEFT_CLICK]
     hold(r, (320.0, 300.0), 400, dt)
     r.sink.clear()
     r.frame(rh(idx=0.1), events=[(G.PINCH_START, RIGHT)], dt=dt)
-    hold(r, (320.0, 300.0), 520, dt, idx=0.1)
-    assert r.kinds() == [K.LEFT_DOWN]
+    hold(r, (320.0, 300.0), 1000, dt, idx=0.1)
+    assert r.kinds() == []
+    r.frame(rh(idx=1.0), events=[(G.PINCH_END, RIGHT)], dt=dt)
+    assert r.kinds() == [K.LEFT_CLICK]
 
 
 @FPS
@@ -392,11 +395,11 @@ def test_drag_follows_the_anchor_whatever_the_fingers_do(dt):
     r = rig(dt)
     p = ptr(r)
     r.frame(rh(idx=0.1), events=[(G.PINCH_START, RIGHT)], dt=dt)
-    hold(r, (320.0, 300.0), 520, dt, idx=0.1)
-    assert r.kinds() == [K.LEFT_DOWN]
-    stroke(r, (320.0, 300.0), (380.0, 300.0), 300, dt, "open", idx=0.1)
-    stroke(r, (380.0, 300.0), (400.0, 300.0), 100, dt, states=(U, U, U, U, U), idx=0.1)
-    r.frame(rh((400.0, 300.0), idx=1.0), events=[(G.PINCH_END, RIGHT)], dt=dt)
+    stroke(r, (320.0, 300.0), (360.0, 300.0), 200, dt, idx=0.1)     # 0.67 palm units: the drag starts
+    assert r.kinds()[0] is K.LEFT_DOWN
+    stroke(r, (360.0, 300.0), (420.0, 300.0), 300, dt, "open", idx=0.1)
+    stroke(r, (420.0, 300.0), (440.0, 300.0), 100, dt, states=(U, U, U, U, U), idx=0.1)
+    r.frame(rh((440.0, 300.0), idx=1.0), events=[(G.PINCH_END, RIGHT)], dt=dt)
     moves = r.sink.of(K.MOVE_POINTER)
     assert len(moves) >= 3 and moves[-1].x > p[0] + 100
     up = r.sink.of(K.LEFT_UP)[0]

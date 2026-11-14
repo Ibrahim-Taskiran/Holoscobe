@@ -68,3 +68,59 @@ def test_cli_main_and_missing_file(tmp_path):
     assert sr.main([str(p), "--out", str(tmp_path / "o.md")]) == 0
     assert (tmp_path / "o.md").is_file()
     assert sr.main([str(tmp_path / "none.csv")]) == 1
+
+
+def test_reason_section_counts_and_gap_starts(tmp_path):
+    specs = [{} for _ in range(20)]
+    for i in (3, 4, 5, 6):   # 400 ms gap, first bad frame palm_small
+        specs[i].update(dom_quality="degraded", dom_reasons="palm_small|slow_processing")
+    specs[10].update(dom_quality="degraded", dom_reasons="overlap")   # 200 ms gap (9 -> 11)
+    specs[14].update(dom_present=0, dom_quality="")                   # 200 ms gap, hand absent
+    p = tmp_path / "s.csv"
+    make_csv(p, specs)
+    text = sr.build_report(p, tmp_path / "r.md").read_text(encoding="utf-8")
+    assert "## Takip bozulma nedenleri" in text
+    assert "  - palm_small: 4" in text and "  - overlap: 1" in text and "  - hand_absent: 1" in text
+    assert "ve uzun kopukluklar (3)" in text
+    sec = text.split("ilk bozuk karenin nedenleri:")[1]
+    assert "  - palm_small: 1" in sec and "  - slow_processing: 1" in sec and "  - overlap: 1" in sec
+
+
+def test_reason_section_without_column_and_old_csv(tmp_path):
+    p = tmp_path / "s.csv"
+    make_csv(p, [{} for _ in range(5)], drop=("dom_reasons", "mid_pinch_pu"))
+    text = sr.build_report(p, tmp_path / "r.md").read_text(encoding="utf-8")
+    assert "## Takip bozulma nedenleri" in text and "Neden kodları: veri yok" in text
+
+
+def test_fps_median_interval_and_pinch_hold_table(tmp_path):
+    specs = [{} for _ in range(30)]
+    # 200 ms pinch -> left click; 600 ms -> drag; 400 ms -> cancel; 900 ms (cut by file end) -> nothing
+    for i in (2, 3):
+        specs[i]["pinch_pu"] = 0.2
+    specs[3]["actions"] = "left_click"
+    for i in range(6, 12):
+        specs[i]["pinch_pu"] = 0.2
+    specs[8]["actions"] = "left_down"
+    for i in (14, 15, 16, 17):
+        specs[i]["pinch_pu"] = 0.2
+    specs[16]["last_cancel"] = "Poz bozuldu"
+    specs[17]["last_cancel"] = "Poz bozuldu"
+    for i in range(20, 30):
+        specs[i]["pinch_pu"] = 0.2
+    p = tmp_path / "s.csv"
+    make_csv(p, specs)
+    text = sr.build_report(p, tmp_path / "r.md").read_text(encoding="utf-8")
+    assert "Kare sayısı: 30, ortalama fps: 10.3" in text and "medyan kare aralığı: 100.0 ms" in text
+    # span = first frame below 0.33 .. first frame above 0.48 (release); last one is cut at the file end
+    assert "  - < 200 ms: 0 / 0 / 0 / 0 / 0 (0)" in text
+    assert "  - 200-480 ms: 1 / 0 / 0 / 1 / 0 (2)" in text       # rows 2..4 left click, rows 14..18 cancel
+    assert "  - 480-1000 ms: 0 / 1 / 0 / 0 / 1 (2)" in text      # rows 6..12 drag, rows 20..29 nothing
+    assert "  - > 1000 ms: 0 / 0 / 0 / 0 / 0 (0)" in text
+
+
+def test_pinch_hold_table_missing_columns(tmp_path):
+    p = tmp_path / "s.csv"
+    make_csv(p, [{} for _ in range(5)], drop=("pinch_pu",))
+    text = sr.build_report(p, tmp_path / "r.md").read_text(encoding="utf-8")
+    assert "Pinch denemeleri süreye göre" in text and "  - veri yok" in text
