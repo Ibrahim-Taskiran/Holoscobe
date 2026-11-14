@@ -68,6 +68,7 @@ def test_gesture_guide_describes_relative_pointer_and_clutch() -> None:
     text = format_gesture_guide_tr()
     for needle in ("İşaret açık, diğer parmaklar kapalı", "hızlı hareket uzağa", "yavaş hareket hassas",
                    "Eli aç", "kaldığı yerden devam", "imleç pinch sırasında durur", "belirgin aç",
-                   "yarım saniye", "Açık elden kısa başparmak + orta parmak", "önce el açık olmalı",
+                   "0,8 sn", "Başparmak, işaret ve orta parmak uçlarını birleştir",
+                   "Açık elden başparmak + orta parmak", "önce el açık olmalı",
                    "Yalnız mutlak"):
         assert needle in text

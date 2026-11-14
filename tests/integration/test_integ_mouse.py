@@ -51,18 +51,48 @@ def test_double_tap_clicks_twice_at_one_point(fps):
 
 
 @FPS
-def test_pinch_and_move_drags_with_the_left_button(fps):
-    # Round 6: a still 700 ms pinch no longer presses the button; palm travel starts the drag.
+def test_long_press_right_clicks_once_before_release_through_the_real_chain(fps):
     rig = Rig(fps=fps)
     rig.activate(_r())
     aim = rig.ctl.snapshot().pointer
-    rig.run(700, _r(PINCH))
+    rig.run(1200, _r(PINCH))
+    clicks = rig.sink.of(A.RIGHT_CLICK)
+    assert len(clicks) == 1 and (clicks[0].x, clicks[0].y) == aim
+    rig.run(500, _r(OPEN))
+    assert rig.count(A.RIGHT_CLICK) == 1
+    assert rig.count(A.LEFT_CLICK) == rig.count(A.LEFT_DOWN) == 0
+
+
+@FPS
+def test_three_tip_grab_drags_through_the_real_chain(fps):
+    rig = Rig(fps=fps)
+    rig.activate(_r(OPEN))
+    h = hand(dict(PINCH, middle=0.65), (250, 300))
+    rig.run(600, [h])
+    assert rig.count(A.LEFT_DOWN) == 1
+    assert rig.count(A.LEFT_UP) == 0
+    rig.run(400, _r(OPEN))
+    assert rig.count(A.LEFT_UP) == 1
+    assert rig.count(A.LEFT_CLICK) == rig.count(A.RIGHT_CLICK) == 0
+
+
+@FPS
+def test_pinch_and_move_drags_with_the_left_button(fps):
+    # Round 6: a still pinch no longer presses the button; palm travel starts the drag. Round 7: the
+    # still part is 300 ms (was 700) so the travel passes the threshold before the 800 ms long press.
+    rig = Rig(fps=fps)
+    rig.activate(_r())
+    aim = rig.ctl.snapshot().pointer
+    rig.run(300, _r(PINCH))
     assert rig.count(A.LEFT_DOWN) == 0 and rig.count(A.MOVE_POINTER) == 0   # still hand: no press, no creep
-    rig.run(900, lambda u: [hand(PINCH, (lerp(250, 340, u), 300.0))])
-    assert rig.count(A.LEFT_DOWN) == 1 and rig.count(A.LEFT_UP) == 0
+    # round 7: the travel past the drag threshold comes before the 800 ms long press (was 900 ms for
+    # 90 px), then the drag goes on
+    rig.run(600, lambda u: [hand(PINCH, (lerp(250, 340, u), 300.0))])
+    assert rig.count(A.LEFT_DOWN) == 1 and rig.count(A.LEFT_UP) == 0 and rig.count(A.RIGHT_CLICK) == 0
     down = rig.sink.of(A.LEFT_DOWN)[0]
     assert (down.x, down.y) == aim
-    rig.run(300, _r(POINT, 340))
+    rig.run(400, lambda u: [hand(PINCH, (lerp(340, 400, u), 300.0))])
+    rig.run(300, _r(POINT, 400))
     ks = rig.kinds()
     i, j = ks.index(A.LEFT_DOWN), ks.index(A.LEFT_UP)
     moves = [a for a in rig.sink.actions[i:j] if a.kind is A.MOVE_POINTER]

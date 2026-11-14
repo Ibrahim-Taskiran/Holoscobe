@@ -217,10 +217,17 @@ def test_last_cancel_on_tracking_loss_and_ambiguous_contact(dt):
     r.frame(rh(idx=0.1), events=[(G.PINCH_START, RIGHT)], dt=dt)
     r.frame(dt=dt)
     assert snap(r).last_cancel == "Tıklama iptal: takip koptu"
+    # Round 7: both tips touching with a debounced thumb+index PINCH is the grab (was "Kararsız");
+    # the tie stays unresolved only while no thumb+index pinch started (thumb+middle onset).
+    r = rig(dt, pose="open")
+    r.frame(rh(pose="open", idx=0.2, mid=0.2), dt=dt)
+    hold(r, (320.0, 300.0), 200, dt, "open", idx=0.2, mid=0.2)
+    assert snap(r).last_cancel == "Kararsız: iki parmak da temas etti"
+    assert r.count(K.LEFT_CLICK) == 0 and r.count(K.RIGHT_CLICK) == 0
     r = rig(dt, pose="open")
     r.frame(rh(pose="open", idx=0.2, mid=0.2), events=[(G.PINCH_START, RIGHT)], dt=dt)
-    hold(r, (320.0, 300.0), 100, dt, "open", idx=0.2, mid=0.2)
-    assert snap(r).last_cancel == "Kararsız: iki parmak da temas etti"
+    hold(r, (320.0, 300.0), 250, dt, "open", idx=0.2, mid=0.2)
+    assert r.count(K.LEFT_DOWN) == 1 and snap(r).last_cancel == ""
     assert r.count(K.LEFT_CLICK) == 0 and r.count(K.RIGHT_CLICK) == 0
 
 

@@ -105,7 +105,7 @@ def test_pinch_then_travel_drags_with_left_button(dt):
     r.sink.clear()
     r.frame(mh(), events=[(G.PINCH_START, RIGHT)], dt=dt)
     t = 0.0
-    while t < 1000:
+    while t < 300:   # round 7: travel must start before right_long_press_ms (800) fires (was 1000)
         r.frame(mh(), dt=dt)
         t += dt
     assert r.kinds() == []
@@ -247,8 +247,9 @@ def test_middle_finger_entering_already_pinched_does_not_fire():
 def test_decided_pinches_ignore_other_contact_until_release():
     r = rig()
     pointer_at(r)
-    # A late overlapping index contact does not replace the already decided right session.
-    for _ in range(4):
+    # A late overlapping index contact does not replace the already decided right session. Round 7:
+    # "late" means after pinch_decide_ms (60) from the onset; sooner it is the grab (was 4 frames).
+    for _ in range(12):
         r.frame(mh(mid=0.1))
     r.frame(mh(mid=0.1, idx=0.12), events=[(G.PINCH_START, RIGHT)])
     r.frame(mh(mid=0.1, idx=0.12))
@@ -256,7 +257,8 @@ def test_decided_pinches_ignore_other_contact_until_release():
     for _ in range(8):
         r.frame(mh(mid=1.2))
     assert r.count(K.RIGHT_CLICK) == 1 and r.count(K.LEFT_CLICK) == 0
-    # thumb+index first, then thumb+middle: index wins, still a single tap
+    # thumb+index first, then thumb+middle one frame later: round 7 grab (was: index wins, a left
+    # click). Opened after 100 ms, before grab_confirm_ms: no click, no press, a reason.
     r.frame(mh(idx=0.1), events=[(G.PINCH_START, RIGHT)])
     for _ in range(4):
         r.frame(mh(mid=0.1, idx=0.1))
@@ -264,7 +266,8 @@ def test_decided_pinches_ignore_other_contact_until_release():
     for _ in range(4):
         r.frame(mh(mid=1.2))
     assert r.count(K.RIGHT_CLICK) == 1
-    assert r.count(K.LEFT_CLICK) == 1 and r.count(K.LEFT_DOWN) == 0
+    assert r.count(K.LEFT_CLICK) == 0 and r.count(K.LEFT_DOWN) == 0
+    assert r.ctl.snapshot().last_cancel == "Sürükleme iptal: kavrama tamamlanmadı"
 
 
 def test_same_frame_equal_distances_without_decisive_states_do_not_guess():
@@ -286,9 +289,11 @@ def test_closest_finger_wins_regardless_of_arrival_order(dt):
     r = rig()
     pointer_at(r, dt=dt)
     r.sink.clear()
-    r.frame(mh(mid=0.1, idx=0.3), events=[(G.PINCH_START, RIGHT)], dt=dt)   # index event first
+    # index event first; round 7: the index tip sits at .40 (inside its hysteresis), since .30 would
+    # put both tips under the pinch-on threshold, which is the grab
+    r.frame(mh(mid=0.1, idx=0.4), events=[(G.PINCH_START, RIGHT)], dt=dt)
     for _ in range(3):
-        r.frame(mh(mid=0.1, idx=0.3), dt=dt)
+        r.frame(mh(mid=0.1, idx=0.4), dt=dt)
     r.frame(mh(mid=1.2, idx=1.0), events=[(G.PINCH_END, RIGHT)], dt=dt)
     for _ in range(4):
         r.frame(mh(mid=1.2), dt=dt)

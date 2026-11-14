@@ -92,14 +92,21 @@ class ControllerConfig:
     monitor_index: int = 0
     camera_error_paused: bool = False
     # POINTER click source. index_tap_click (z-depth index tap, noisy on real cameras) wins when on and
-    # disables pinch clicks. Otherwise pinch_mouse: thumb+index tap = left click, hold = left-button
-    # drag, thumb+middle tap = right click. pinch_mouse=False keeps the legacy pinch-release click.
+    # disables pinch clicks. Otherwise pinch_mouse: thumb+index tap = left click, long hold = right
+    # click, grab = left-button drag, thumb+middle tap = right click. False keeps the legacy click.
     index_tap_click: bool = False
     pinch_mouse: bool = True
-    # A left drag starts on palm travel only, never on time (session 2026-11-14: 5 of 14 hold-time
+    # A motion drag starts on palm travel only, never on time (session 2026-11-14: 5 of 14 hold-time
     # drags were still-hand pinches of 531-1938 ms, real drags travelled 1.37-3.30 palm units, still
-    # holds drifted up to 0.39). A still pinch released within tap_max_ms is a click.
-    tap_max_ms: float = 1500.0              # longer still thumb+index pinch: no click (cancelled)
+    # holds drifted up to 0.39).
+    tap_max_ms: float = 1500.0              # round 6 only; the pinch mouse long press replaced it (unused)
+    # Round 7 gesture set (user decision 2026-11-14). A still thumb+index pinch released before
+    # right_long_press_ms is a left click; held that long it right-clicks at once (the release adds
+    # nothing). Grab: the thumb tip with the index AND middle tips together, held grab_confirm_ms,
+    # presses the left button for a drag until the grab opens. The second fingertip may join during
+    # pinch_decide_ms after the pinch onset (the click fires at release).
+    right_long_press_ms: float = 800.0
+    grab_confirm_ms: float = 120.0
     right_hold_max_ms: float = 3000.0       # longer thumb+middle pinch: no right click (real holds 1.6-2.8 s)
     right_curl_cancel_ms: float = 150.0     # ring+little curled this long during a right pinch cancels it
     double_click_window_ms: float = 500.0   # a tap starting this soon after a click reuses its point
@@ -117,8 +124,8 @@ class ControllerConfig:
     pinch_rearm_ms: float = 700.0          # narrow recontacts within this window are one physical pinch
     # Left/right decision. A pinch onset (first thumb+index or thumb+middle start) opens a window of
     # pinch_decide_ms; at its end (or at a release inside it) the last contact frame decides: finger
-    # states when they are decisive, else the clearly nearer tip (by pinch_resolve_margin_pu). A tie
-    # remains unresolved when both tips touch. Once decided the other pinch is ignored
+    # states when they are decisive, else the clearly nearer tip (by pinch_resolve_margin_pu). Both
+    # tips touching is the grab (checked first); a near tie without contact stays unresolved. Once decided the other pinch is ignored
     # until both are released. The decided finger's own pinch must start within pinch_decide_max_ms.
     pinch_resolve_margin_pu: float = 0.02
     pinch_decide_ms: float = 60.0           # 3 frames at 30 FPS (onset frame + 2)
@@ -264,17 +271,21 @@ class _EngKind(Enum):
     MOUSE_TAP = "mouse_tap"      # thumb+index pinch: tap candidate (pointer held at the latch)
     MOUSE_DRAG = "mouse_drag"    # left button held, pointer follows the hand
     RIGHT_TAP = "right_tap"      # thumb+middle pinch: right click candidate
+    GRAB = "grab"                # thumb with index and middle tips together: drag being confirmed
     BLOCKED = "blocked"      # cancelled or refused; waits for the pinch release
 
 
-_MOUSE_KINDS = (_EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG, _EngKind.RIGHT_TAP)
+_MOUSE_KINDS = (_EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG, _EngKind.RIGHT_TAP,
+                _EngKind.GRAB)
 _CLICK_KINDS = _MOUSE_KINDS + (_EngKind.CLICK,)   # engagements whose cancellation sets last_cancel
+_LONG_PRESS_HINT_MS = 300.0   # a still thumb+index pinch held this long shows the long press hint
 
 _ENG_TEXT = {
     _EngKind.MOUSE_PENDING: "Tıklama bekleniyor",
     _EngKind.MOUSE_TAP: "Tıklama bekleniyor",
     _EngKind.MOUSE_DRAG: "Sürükleniyor (sol tuş basılı)",
     _EngKind.RIGHT_TAP: "Sağ tık bekleniyor",
+    _EngKind.GRAB: "Sürükleme hazırlanıyor",
     _EngKind.CLICK: "Tıklama bekleniyor",
     _EngKind.SCROLL: "Kaydırma",
     _EngKind.ZOOM_WAIT: "Yakınlaştırma: ikinci el bekleniyor",
@@ -317,6 +328,11 @@ class _Eng:
     curl_since: Optional[float] = None           # RIGHT_TAP: first frame of the current ring+little curl
     anchor0: Optional[tuple[float, float]] = None  # relative mode: filtered hand anchor at pinch start
     fpos: Optional[tuple[float, float]] = None     # relative mode: float position of a window drag
+    onset: float = 0.0                           # pinch-mouse session onset (grab join window)
+    grab: bool = False                           # MOUSE_DRAG started by a grab (ends when the grab opens)
+    grab_since: Optional[float] = None           # GRAB: first frame of the three-tip contact
+    open_since: Optional[float] = None           # grab: first frame of the current opening (debounce)
+    text: str = ""                               # pending text override (BLOCKED after a long press)
 
     def hands(self) -> tuple[int, ...]:
         return (self.hand_id,) if self.other_hand is None else (self.hand_id, self.other_hand)
@@ -420,7 +436,7 @@ def _release_pose(h: HandFeatures) -> bool:
 def _cancel_prefix(kind: Optional[_EngKind]) -> str:
     if kind is _EngKind.RIGHT_TAP:
         return "Sağ tık iptal"
-    if kind is _EngKind.MOUSE_DRAG:
+    if kind in (_EngKind.MOUSE_DRAG, _EngKind.GRAB):
         return "Sürükleme iptal"
     return "Tıklama iptal"
 
@@ -961,7 +977,7 @@ class Controller:
             return False
         e = self._eng
         running = e is not None and e.hand_id == h.hand_id and e.kind in (
-            _EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG)
+            _EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG, _EngKind.GRAB)
         return running or h.pinch_distance <= self._cfg.pinch_not_fist_pu
 
     def _soft_reset(self, cancel_menu_hold: bool = True, why: str = "takip koptu") -> None:
@@ -1445,7 +1461,7 @@ class Controller:
     def _start_pending(self, dom: HandFeatures, t: float, pos: tuple[int, int]) -> None:
         """Pinch onset (thumb+index or thumb+middle start): hold the pointer, decide left/right."""
         e = _Eng(_EngKind.MOUSE_PENDING, dom.hand_id, t, palm0=dom.palm_center_px, pos0=pos,
-                 anchor0=self._anchor_now, middle=True)
+                 anchor0=self._anchor_now, middle=True, onset=t)
         e.vote, e.state_vote = self._pinch_vote(dom)
         e.index_armed = self._armed("index", dom.hand_id, t) or self._double_tap(dom, t)
         e.middle_armed = self._armed("middle", dom.hand_id, t)
@@ -1453,6 +1469,67 @@ class Controller:
         if e.vote is None and self._middle.distance > self._cfg.right_pinch_on_pu:
             e.vote = "left" if dom.hand_id in self._pinched else "right"
         self._eng = e
+        if self._grab_contact(dom):   # the grab is decided before any left/right logic
+            self._start_grab(e, dom, t, pos)
+
+    def _grab_contact(self, dom: HandFeatures, held: bool = False) -> bool:
+        """Thumb tip at the index tip AND the middle tip (grab). Onset (and the confirming frame): the
+        debounced thumb+index pinch is held and both distances are at or under the pinch-on
+        threshold; held: the thumb+index pinch has not ended (its pinch-off hysteresis) and the
+        middle distance is under the pinch-off threshold. Real left pinches kept thumb-middle >=
+        0.62 pu and the pointing pose keeps thumb-index wide open (recording 2026-11-12), so neither
+        is a grab; recorded right pinches touched the index tip for single frames at their release,
+        which never reaches a debounced thumb+index pinch. A fist is not a grab either: index and
+        middle must not be fully curled (pinch_not_fist_index_curl)."""
+        cfg = self._cfg
+        on, off = cfg.right_pinch_on_pu, cfg.right_pinch_off_pu
+        di, dm = dom.pinch_distance, self._middle.distance
+        if dom.hand_id not in self._pinched:
+            return False
+        if not (di < off and dm < off if held else (di <= on and dm <= on)):
+            return False
+        curls = {f.name: f.curl for f in dom.fingers}
+        lim = cfg.pinch_not_fist_index_curl
+        return curls.get(FingerName.INDEX, 0.0) < lim and curls.get(FingerName.MIDDLE, 0.0) < lim
+
+    def _start_grab(self, e: _Eng, dom: HandFeatures, t: float, pos: Optional[tuple[int, int]]) -> None:
+        """Pending / tap / right-tap candidate -> GRAB: never a click or a long press any more."""
+        ref = e.pos0 if e.pos0 is not None else pos
+        latched = e.latched
+        if latched is None and ref is not None:
+            latched = self._mouse_latch(e.onset, ref, dom, left=True)
+        if latched is None:
+            self._session_block(e, "Sürükleme iptal edildi", "Sürükleme iptal: imleç noktası yok")
+            return
+        e.kind, e.latched, e.grab_since, e.open_since = _EngKind.GRAB, latched, t, None
+        e.t0 = e.onset
+        self._last_tap = None
+        self._notice = "Kavrama: sürükleme hazırlanıyor"
+
+    def _grab_holds(self, e: _Eng, dom: HandFeatures, t: float) -> bool:
+        """False once the grab opened: one fingertip beyond the pinch-off threshold for
+        right_pinch_debounce_ms (a single slipped frame keeps the button down)."""
+        if self._grab_contact(dom, held=True):
+            e.open_since = None
+            if e.kind is _EngKind.GRAB and e.grab_since is None:
+                e.grab_since = t
+            return True
+        if e.kind is _EngKind.GRAB:
+            e.grab_since = None  # confirmation requires continuous contact
+        if e.open_since is None:
+            e.open_since = t
+        return t - e.open_since < self._cfg.right_pinch_debounce_ms
+
+    def _long_press(self, e: _Eng, dom: HandFeatures, t: float) -> None:
+        """Still thumb+index pinch held right_long_press_ms: RIGHT_CLICK now, the release adds nothing."""
+        assert e.latched is not None
+        ok = self._dispatch(ActionKind.RIGHT_CLICK, t, x=e.latched[0], y=e.latched[1])
+        if ok:
+            self._set_pointer(e.latched)
+            self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
+        self._last_tap = None
+        self._eng = _Eng(_EngKind.BLOCKED, e.hand_id, e.t0, middle=True, text="Sağ tık" if ok else "")
+        self._notice = "Sağ tık (uzun basma)" if ok else "Sağ tık gönderilemedi"
 
     def _session_block(self, e: _Eng, notice: str, cancel: str = "") -> None:
         """No click from this physical pinch: wait until both pinches are released."""
@@ -1590,6 +1667,26 @@ class Controller:
                  and math.dist(dom.palm_center_px, e.palm0) / dom.palm_scale_px > cfg.mouse_drag_move_palm)
         ends = [ev for ev in events if ev.kind is GestureKind.PINCH_END and ev.hand_id == e.hand_id]
 
+        # the second fingertip joining soon after the onset makes it a grab, before any click
+        if (e.kind in (_EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.RIGHT_TAP) and not ends
+                and t - e.onset <= cfg.pinch_decide_ms and self._grab_contact(dom)):
+            self._start_grab(e, dom, t, pos)
+            if self._eng is not e:
+                return
+
+        if e.kind is _EngKind.GRAB:
+            if ends or not self._grab_holds(e, dom, t):
+                self._session_block(e, "Sürükleme iptal edildi", "Sürükleme iptal: kavrama tamamlanmadı")
+                return
+            if (e.grab_since is not None and t - e.grab_since >= cfg.grab_confirm_ms
+                    and e.open_since is None and self._grab_contact(dom)):
+                e.grab = True
+                self._begin_drag(e, t)
+                if cfg.pointer_relative and self._eng is e and e.anchor0 is not None:
+                    self._rel.anchor(max(e.t0, t - 200.0), e.anchor0[0], e.anchor0[1])
+                    self._rel_drag_step(e, t)
+            return
+
         if e.kind is _EngKind.MOUSE_PENDING:
             self._decide_pinch(e, dom, t, pos, bool(ends), mid_ev)
             if self._eng is not e or e.kind is _EngKind.MOUSE_PENDING:
@@ -1640,33 +1737,41 @@ class Controller:
                     self._left_up(e, t)
                     if e.dispatched:
                         self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
-                elif ends[0].t_ms - e.t0 <= cfg.tap_max_ms and e.latched is not None:
+                elif e.latched is None:
+                    self._notice = "Tıklama iptal edildi"
+                    self._last_cancel = "Tıklama iptal: tıklama noktası yok"
+                elif ends[0].t_ms - e.t0 < cfg.right_long_press_ms:
                     if self._dispatch(ActionKind.LEFT_CLICK, t, x=e.latched[0], y=e.latched[1]):
                         self._set_pointer(e.latched)
                         self._last_tap = (ends[0].t_ms, e.latched, e.palm0 or dom.palm_center_px)
                         self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
                     self._notice = "Sol tık"
-                else:
-                    self._notice = "Tıklama iptal edildi"
-                    self._last_cancel = ("Tıklama iptal: tıklama noktası yok" if e.latched is None
-                                         else "Tıklama iptal: uzun tutuldu")
+                else:   # the hold reached the long press on its release frame (low frame rate)
+                    self._eng = e
+                    self._long_press(e, dom, t)
+                    self._eng = None
                 if self._middle.pinched and not _pointing_pose(dom):
                     self._session_block(e, self._notice)
             elif moved:
-                # the only drag start: palm travel while pinched, never hold time
+                # motion drag: palm travel while pinched, before the long press fired
                 self._begin_drag(e, t)          # keep the travel made during the candidate
                 if cfg.pointer_relative and self._eng is e and e.anchor0 is not None:
                     self._rel.anchor(max(e.t0, t - 200.0), e.anchor0[0], e.anchor0[1])
                     self._rel_drag_step(e, t)
+            elif t - e.t0 >= cfg.right_long_press_ms and e.latched is not None:
+                self._long_press(e, dom, t)     # still hand held long enough: right click now
             return
 
         # MOUSE_DRAG: the pointer follows the hand (relative: the anchor, whatever the fingers do;
         # absolute: the fingertip relative to its drag reference pos0)
-        if ends:
+        if ends or (e.grab and not self._grab_holds(e, dom, t)):
             self._eng = None
             self._left_up(e, t)
-            self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
+            if ends or dom.hand_id in self._pinched:
+                self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
             self._notice = "Sürükleme bitti"
+            if not ends and (dom.hand_id in self._pinched or self._middle.pinched):
+                self._session_block(e, self._notice)   # a pinch still held after the grab opened: no click
             return
         if cfg.pointer_relative:
             self._rel_drag_step(e, t)
@@ -2086,6 +2191,11 @@ class Controller:
             if m.close_armed:
                 return "Kapatma onayı bekleniyor"
             return "Menü açık"
-        if self._eng is not None:
-            return _ENG_TEXT[self._eng.kind]
+        e = self._eng
+        if e is not None:
+            if e.text:
+                return e.text
+            if e.kind is _EngKind.MOUSE_TAP and now - e.t0 >= _LONG_PRESS_HINT_MS:
+                return "Sağ tık için tutun"
+            return _ENG_TEXT[e.kind]
         return ""

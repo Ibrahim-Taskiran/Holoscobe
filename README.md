@@ -15,7 +15,9 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 | İşaretçi | Eli aç (ya da kadrajdan çıkar) | İmleç hemen durur; el 200 ms açık kalırsa bırakılır. Eli geri getir, yeniden işaret et: kaldığı yerden devam eder |
 | İşaretçi | Kısa başparmak + işaret pinch | Sol tık. İmleç pinch sırasında durur |
 | İşaretçi | İki hızlı pinch (çeyrek ile yarım saniye arayla) | Çift tık |
-| İşaretçi | Pinch'i kapat, eli belirgin taşı, bırak | Sürükle bırak. Sürükleme süreyle değil el hareketiyle başlar |
+| İşaretçi | Başparmak + işaret pinch'ini yerinde 0,8 sn tut | Anında sağ tık; bırakınca ikinci eylem oluşmaz |
+| İşaretçi | Başparmak, işaret ve orta parmak uçlarını birleştir, taşı, bırak | Kavrayarak sürükle bırak; 120 ms sonra sol tuş basılır |
+| İşaretçi | İşaret pinch kapalıyken sağ tıktan önce eli 0,6 avuçtan fazla taşı | Alternatif sürükle bırak |
 | İşaretçi | Açık elden kısa başparmak + orta parmak pinch | Sağ tık |
 | Kaydırma | Pinch + dikey hareket | Dikey kaydırma |
 | Yakınlaştırma | İki elle pinch, elleri aç/kapat | Ctrl + tekerlek |
@@ -37,9 +39,14 @@ Ekranın sağ üstündeki gösterge anlık durumu yazar (İmleç aktif / bekleme
 Kalibrasyon dikdörtgeni yalnız **Mutlak** türde geçerlidir (kamera alanı = ekran).
 
 Tıklamalar yalnız sağ elle ve İşaretçi modunda çalışır. Pinch sırasında imleç durur;
-tık pinch başındaki konuma gider. El yerinde dururken yapılan pinch sol tıktır (1,5 sn'ye kadar
-tutulabilir); iki hızlı pinch çift tıktır. Pinch kapalıyken eli belirgin taşırsan sol tuş basılı
-kalır, bırakınca bırakılır. Açık elden başparmakla orta parmağı birleştirmek sağ tıktır (3 sn'ye kadar). Eski "işaret parmağını
+tık pinch başındaki konuma gider. İşaret pinch'ini 0,8 sn dolmadan bırakmak sol tık,
+yerinde 0,8 sn tutmak anında ve yalnız bir kez sağ tıktır; iki hızlı pinch çift tıktır.
+Başparmağı hem işaret hem orta parmak ucuna değdirip 120 ms tutmak kavrayarak sürüklemeyi
+başlatır; eli taşı, kavramayı açınca sol tuş bırakılır. İkinci temas ilk temastan sonraki
+60 ms karar penceresinde katılmalıdır. Yumruk kavrama değildir. Alternatif olarak işaret
+pinch kapalıyken sağ tık oluşmadan eli 0,6 avuçtan fazla taşımak sürükleme başlatır.
+Sürükleme başladıktan sonra sağ tık, sağ tık oluştuktan sonra sürükleme oluşmaz.
+Açık elden başparmakla orta parmağı birleştirmek sağ tıktır (3 sn'ye kadar). Eski "işaret parmağını
 kameraya doğru itme" tıklaması varsayılan olarak kapalıdır (kamera z tahmini güvenilir
 değil). Sol el, baskın el ayarı ne olursa olsun imleci/tıklamayı yönetmez. Takip kaybında
 basılı sol tuş en geç 200 ms içinde bırakılır. Tüm hareketler tepsideki **Hareket Rehberi**

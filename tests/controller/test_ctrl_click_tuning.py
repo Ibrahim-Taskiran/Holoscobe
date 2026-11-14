@@ -26,9 +26,11 @@ def right_tap(r: Rig, *, idx: float = 1, mid: float = .1, bent: str = "m") -> No
 @pytest.mark.parametrize("idx,mid,bent,expected", [
     (.10, .22, "m", K.RIGHT_CLICK),  # middle BENT beats the closer index tip
     (.22, .10, "i", K.LEFT_CLICK),   # index BENT beats the closer middle tip
-    (.28, .10, "", K.RIGHT_CLICK),   # no decisive states: clearly nearer middle
-    (.10, .28, "", K.LEFT_CLICK),
-    (.18, .13, "im", K.RIGHT_CLICK), # recorded right repeat 6: both states BENT
+    # no decisive states: clearly nearer tip. Round 7: both tips under the pinch-on threshold with a
+    # thumb+index PINCH is the grab (was .28/.10 -> right, .10/.28 -> left), so the far tip is at .40.
+    (.40, .10, "", K.RIGHT_CLICK),
+    (.10, .40, "", K.LEFT_CLICK),
+    (.18, .13, "im", K.RIGHT_CLICK), # both states BENT, fully curled (.95): never a grab
 ])
 def test_finger_state_first_then_distance(idx, mid, bent, expected):
     r = rig()
@@ -195,21 +197,27 @@ def test_recorded_short_cadence_click_classification(phase, repeat):
 @pytest.mark.parametrize("repeat", [3, 5])
 def test_recorded_drag_original_timing_and_safe_cleanup(repeat):
     r = replay(groups()["drag", repeat])
-    if repeat == 3:                     # palm travel 2.71 palm units: a drag
-        assert r.count(K.LEFT_DOWN) >= 1 and r.count(K.LEFT_UP) >= 1
-    else:   # round 6: 0.31 palm units in 4.5 s is below the drift ceiling: no drag, no click (was a drag)
-        assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_CLICK) == 0
-        assert r.ctl.snapshot().last_cancel == "Tıklama iptal: uzun tutuldu"
+    # Round 7 (intended change): both recordings hold the pinch still for more than 800 ms before any
+    # travel, so the long press right-clicks once and the later travel no longer drags (round 6:
+    # repeat 3 dragged, repeat 5 was "uzun tutuldu"). Drags are now made with the grab or by moving early.
+    assert r.count(K.RIGHT_CLICK) == 1
+    assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_CLICK) == 0
     assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_UP)
-    assert r.count(K.RIGHT_CLICK) == 0
 
 
 @pytest.mark.parametrize("repeat", [2, 6, 8])
 def test_recorded_multi_second_right_hold_never_turns_into_left_activity(repeat):
     r = replay(groups()["right_pinch", repeat])
-    assert r.count(K.LEFT_CLICK) == r.count(K.LEFT_DOWN) == 0
+    assert r.count(K.LEFT_CLICK) == 0
     # Long stationary right holds remain cancelled, as required by the existing safety regression.
     assert r.count(K.RIGHT_CLICK) == 0
+    if repeat == 2:
+        assert r.count(K.LEFT_DOWN) == 0
+    else:
+        # Round 7 (intended change): repeats 6 and 8 hold the thumb on BOTH the index and the middle
+        # tip (index .14-.29, middle .06-.17 pu) for 300-450 ms with a debounced thumb+index pinch:
+        # that is the grab now (round 6: an unresolved tie, nothing). One press, always released.
+        assert r.count(K.LEFT_DOWN) == r.count(K.LEFT_UP) == 1
 
 
 def test_excerpt_is_small_and_geometry_matches_the_csv_distances():

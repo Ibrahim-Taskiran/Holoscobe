@@ -325,14 +325,15 @@ def test_deliberate_double_pinch_clicks_twice_at_one_point(dt):
 
 @FPS
 def test_slow_pinch_clicks_and_a_still_hold_never_drags(dt):
-    # Round 6: a still 1 s hold is a click on release (was: LEFT_DOWN after 480 ms).
+    # Round 6: a still hold is a click on release (was: LEFT_DOWN after 480 ms). Round 7: the hold
+    # stays under right_long_press_ms (700 ms; was 1000 ms, which now right-clicks).
     r = rig(dt)
     _tap(r, dt, 400)
     assert r.kinds() == [K.LEFT_CLICK]
     hold(r, (320.0, 300.0), 400, dt)
     r.sink.clear()
     r.frame(rh(idx=0.1), events=[(G.PINCH_START, RIGHT)], dt=dt)
-    hold(r, (320.0, 300.0), 1000, dt, idx=0.1)
+    hold(r, (320.0, 300.0), 650, dt, idx=0.1)
     assert r.kinds() == []
     r.frame(rh(idx=1.0), events=[(G.PINCH_END, RIGHT)], dt=dt)
     assert r.kinds() == [K.LEFT_CLICK]
