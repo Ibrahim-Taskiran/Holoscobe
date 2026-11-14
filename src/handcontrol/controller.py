@@ -1108,6 +1108,8 @@ class Controller:
 
         stale = now - frame.capture_ms > self._cfg.stale_ms
         certain = not stale and not frame.identity_ambiguous
+        if certain and self._pointer_geometry_frame(frame, events, now):
+            return
         if certain and self._mouse_gap_frame(frame, events, now):
             self._tracking_ok = True
             return
@@ -1265,6 +1267,40 @@ class Controller:
                 self._open_ptr["index"] = (frame.capture_ms, self._pointer)
             if not self._middle.pinched and self._middle.distance >= open_pu:
                 self._open_ptr["middle"] = (frame.capture_ms, self._pointer)
+
+    def _pointer_geometry_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], now: float) -> bool:
+        """Keep an already engaged pointer moving through a brief finger-only geometry failure.
+
+        Session 2026-11-14 23:38: 82 bone_ratio frames, 73 still with index EXTENDED.
+        Palm/identity faults remain excluded. This path never starts gestures or feeds the loss
+        watchdog: a fully usable capture must still arrive within the original 200 ms limit.
+        Untagged degraded frames retain the conservative freeze behavior.
+        """
+        if (not self._cfg.pointer_relative or self._mode is not Mode.POINTER or not self._engaged
+                or self._eng is not None or self._menu is not None or self._need_neutral
+                or self._clap_pending or self._release_since is not None or self._pinched or events):
+            return False
+        last = self.watchdog.last_usable_ms
+        if (last is None or not self.watchdog.armed
+                or not 0.0 <= now - last < self._cfg.loss_timeout_ms):
+            return False
+        dom = self._dominant(frame.hands)
+        if (dom is None or dom.hand_id != self._clutch_hand or dom.quality is not Quality.DEGRADED
+                or not math.isfinite(dom.palm_scale_px) or dom.palm_scale_px <= 0
+                or not _pointing_pose(dom) or not math.isfinite(dom.pinch_distance)
+                or dom.pinch_distance < self._cfg.right_pinch_off_pu
+                or any(h.hand_id != dom.hand_id and h.handedness is not Handedness.LEFT for h in frame.hands)):
+            return False
+        reasons, frame_reasons = getattr(frame, "reasons", ({}, ()))
+        if set(reasons.get(dom.hand_id, ())) != {"bone_ratio"} or frame_reasons:
+            return False
+        anchor = self._anchor(dom, frame)
+        if anchor is None:
+            return False
+        self._anchor_now = anchor
+        self._tracking_ok = True
+        self._rel_move_cursor(frame.capture_ms)
+        return True
 
     def _dom_gap(self, frame: FrameFeatures, events: tuple[GestureEvent, ...]) -> bool:
         """The engaged dominant hand is present with the same id but DEGRADED, its last usable frame

@@ -98,6 +98,10 @@ Alternatif: `powershell -ExecutionPolicy Bypass -File scripts\launch.ps1` (dry-r
 
 Uygulama Paused başlar. Kamera sağlıklı olduktan sonra tepsiden Sürdür ile veya el çırparak etkinleştirin. Ardından sağ işaret parmağıyla imleci taşıyın, kısa pinch ile tıklayın; diğer hareketler için tepsideki Hareket Rehberi'ne bakın. Tepsiden kamerayı kapatabilir, ayarları/kalibrasyonu açabilir ve çıkabilirsiniz. Kısayol çakışırsa canlı başlatma reddedilir; dry-run ayarlarından başka bir kısayol seçin. Kamera hatası ve kurtarma otomatik etkinleştirme yapmaz. Gerçek donanım kabulü tamamlanana kadar önce dry-run kullanın.
 
+Masaüstündeki `Holoscobe` ve `Holoscobe - Canli` kısayollarını güncel kaynak koduna bağlamak için
+`powershell -ExecutionPolicy Bypass -File scripts\update_shortcuts.ps1` çalıştırın.
+Bu kısayollar gerçek fare kontrolü ve telemetriyle (`--live --telemetry`) başlatır.
+
 ## Testler
 
 ```powershell

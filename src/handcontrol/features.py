@@ -197,7 +197,7 @@ class FeatureExtractor:
         self.config = config
         self._next_id = 1
         self._tracks: list[_Track] = []
-        # diagnostics only (no effect on output): reason codes of the last update() call
+        # Quality reasons: diagnostics and bounded pointer-only continuity for bone_ratio frames.
         self.last_reasons: dict[int, tuple[str, ...]] = {}
         self.last_frame_reasons: tuple[str, ...] = ()
 

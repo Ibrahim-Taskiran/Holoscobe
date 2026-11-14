@@ -5,7 +5,7 @@ import math
 from dataclasses import replace
 
 from handcontrol.config import Settings
-from handcontrol.contracts import ActionKind as A, Handedness
+from handcontrol.contracts import ActionKind as A, Handedness, Quality
 from handcontrol.dryrun import make_monitor
 
 from integ_synth import DOM_C, OPEN, PINCH, POINT, Rig, hand, lerp
@@ -23,6 +23,24 @@ def test_pointing_sweep_moves_only(rig):
     assert set(rig.kinds()) == {A.MOVE_POINTER}
     xs = [m.x for m in moves]
     assert xs[-1] < xs[0]                          # mirror: hand to image right -> pointer left
+
+
+def test_pointing_moves_through_brief_finger_bone_failures_in_the_real_pipeline(rig):
+    rig.activate(_point(250))
+    rig.run(300, _point(250))
+    assert rig.ctl.snapshot().pointer_engaged
+    rig.sink.clear()
+    for x in (255, 260, 265):
+        h = hand(POINT, (x, 300))
+        lms = list(h.landmarks)
+        lms[20] = lms[19]  # occluded little fingertip: implausible bone, intact palm and index
+        rig.frame([replace(h, landmarks=tuple(lms))])
+        ff = rig.pipe.last_features
+        assert ff.hands[0].quality is Quality.DEGRADED
+        assert rig.pipe.features.last_reasons[ff.hands[0].hand_id] == ("bone_ratio",)
+    assert rig.count(A.MOVE_POINTER) >= 2  # initial sub-dead-zone motion may be filtered
+    assert set(rig.kinds()) == {A.MOVE_POINTER}
+    assert rig.ctl.snapshot().pointer_engaged
 
 
 def _last_move_before(rig: Rig, idx: int):
