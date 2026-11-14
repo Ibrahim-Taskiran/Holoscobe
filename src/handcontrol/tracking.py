@@ -45,7 +45,21 @@ def _default_image_factory(frame_bgr: Any) -> Any:
     return mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
 
-def _default_landmarker_factory(model_path: str, num_hands: int, conf: float) -> Any:
+DEFAULT_DETECTION_CONFIDENCE = 0.5
+DEFAULT_PRESENCE_CONFIDENCE = 0.35
+DEFAULT_TRACKING_CONFIDENCE = 0.35
+
+
+def _default_landmarker_factory(
+    model_path: str,
+    num_hands: int,
+    detection: float,
+    presence: Optional[float] = None,
+    tracking: Optional[float] = None,
+) -> Any:
+    """Presence/tracking default to the detection value (old 3-argument call shape)."""
+    presence = detection if presence is None else presence
+    tracking = detection if tracking is None else tracking
     import mediapipe as mp  # lazy
     from mediapipe.tasks import python as mp_python
     from mediapipe.tasks.python import vision
@@ -58,9 +72,9 @@ def _default_landmarker_factory(model_path: str, num_hands: int, conf: float) ->
         ),
         running_mode=vision.RunningMode.VIDEO,
         num_hands=num_hands,
-        min_hand_detection_confidence=conf,
-        min_hand_presence_confidence=conf,
-        min_tracking_confidence=conf,
+        min_hand_detection_confidence=detection,
+        min_hand_presence_confidence=presence,
+        min_tracking_confidence=tracking,
     )
     return vision.HandLandmarker.create_from_options(options)
 
@@ -80,18 +94,40 @@ class HandTracker:
         landmarker_factory: Optional[Callable[[str, int, float], Any]] = None,
         image_factory: Optional[Callable[[Any], Any]] = None,
         num_hands: int = 2,
-        confidence: float = 0.55,
+        confidence: Optional[float] = None,
+        detection_confidence: Optional[float] = None,
+        presence_confidence: Optional[float] = None,
+        tracking_confidence: Optional[float] = None,
         swap_handedness: bool = False,
     ) -> None:
+        """``confidence`` sets all three thresholds; the specific arguments override it.
+
+        Injected ``landmarker_factory`` keeps the legacy ``(model_path, num_hands, conf)`` call
+        and receives the detection value; only the built-in factory gets all three.
+        """
         self.model_path = Path(model_path) if model_path else default_model_path()
         self._clock = clock or _MonotonicClock()
         self._landmarker_factory = landmarker_factory or _default_landmarker_factory
         self._image_factory = image_factory or _default_image_factory
         self._num_hands = num_hands
-        self._confidence = confidence
+        self._custom_factory = landmarker_factory is not None
+        self._detection = self._pick(detection_confidence, confidence, DEFAULT_DETECTION_CONFIDENCE)
+        self._presence = self._pick(presence_confidence, confidence, DEFAULT_PRESENCE_CONFIDENCE)
+        self._tracking = self._pick(tracking_confidence, confidence, DEFAULT_TRACKING_CONFIDENCE)
         self._swap = swap_handedness
         self._landmarker: Any = None
         self._last_ts = -1
+
+    @staticmethod
+    def _pick(specific: Optional[float], general: Optional[float], default: float) -> float:
+        if specific is not None:
+            return float(specific)
+        return float(general) if general is not None else default
+
+    @property
+    def confidences(self) -> tuple[float, float, float]:
+        """(detection, presence, tracking)."""
+        return (self._detection, self._presence, self._tracking)
 
     def load(self) -> None:
         """Create the landmarker. Raises ModelNotFoundError if the model file is missing."""
@@ -99,9 +135,14 @@ class HandTracker:
             return
         if not self.model_path.is_file():
             raise ModelNotFoundError(MSG_MODEL_MISSING.format(path=self.model_path))
-        self._landmarker = self._landmarker_factory(
-            str(self.model_path), self._num_hands, self._confidence
-        )
+        if self._custom_factory:
+            self._landmarker = self._landmarker_factory(
+                str(self.model_path), self._num_hands, self._detection
+            )
+        else:
+            self._landmarker = self._landmarker_factory(
+                str(self.model_path), self._num_hands, self._detection, self._presence, self._tracking
+            )
 
     def close(self) -> None:
         lm, self._landmarker = self._landmarker, None
@@ -175,6 +216,20 @@ def _percentile(values: list[float], q: float) -> float:
     return s[lo] + (s[hi] - s[lo]) * (k - lo)
 
 
+def _longest_gap_ms(times: list[float], empty: list[bool]) -> float:
+    """Longest zero-hand run: from the last frame that had a hand (or the run start) to the run's last frame."""
+    best = 0.0
+    start: Optional[float] = None
+    for i, (t, e) in enumerate(zip(times, empty)):
+        if e:
+            if start is None:
+                start = times[i - 1] if i > 0 else t
+            best = max(best, t - start)
+        else:
+            start = None
+    return best
+
+
 class TrackingStats:
     """Rolling capture age, inference time and output rate (p50/p95)."""
 
@@ -183,16 +238,19 @@ class TrackingStats:
         self._age: deque[float] = deque(maxlen=window)
         self._infer: deque[float] = deque(maxlen=window)
         self._done: deque[float] = deque(maxlen=window)
+        self._empty: deque[bool] = deque(maxlen=window)    # True = frame had zero hands
 
     def record(self, sample: FrameSample, inference_ms: float) -> None:
         with self._lock:
             self._age.append(sample.inference_done_ms - sample.capture_ms)
             self._infer.append(inference_ms)
             self._done.append(sample.inference_done_ms)
+            self._empty.append(len(sample.hands) == 0)
 
     def snapshot(self) -> dict[str, float]:
         with self._lock:
             age, infer, done = list(self._age), list(self._infer), list(self._done)
+            empty = list(self._empty)
         intervals = [b - a for a, b in zip(done, done[1:]) if b > a]
         rates = [1000.0 / d for d in intervals]
         return {
@@ -206,6 +264,8 @@ class TrackingStats:
             "output_fps_p50": _percentile(rates, 0.5),
             "output_fps_p95": _percentile(rates, 0.95),
             "samples": float(len(done)),
+            "no_hand_ratio": (sum(empty) / len(empty)) if empty else 0.0,
+            "no_hand_longest_ms": _longest_gap_ms(done, empty),
         }
 
 

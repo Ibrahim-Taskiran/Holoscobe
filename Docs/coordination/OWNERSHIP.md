@@ -98,3 +98,22 @@ Kullanıcı kamera denemesi: tek sol tık zor, ikinci ekrana geçilemiyor, el ç
 Claude kotası bittiği sürece Codex, 4. turdaki Claude H işini (tıklama kararı, sektirme, takip kopması, kayıt tekrar testi)
 tamamlayabilir: Claude H yollarına yazabilir, tam test takımını çalıştırabilir, conventional commit atabilir. Push yok.
 `contracts.py` değişmez, paket kurulmaz. Claude döndüğünde yönetim yine Claude'dadır.
+
+## 5. tur — kontrol kolaylığı (2026-11-14)
+
+Kullanıcı: bazı hareketler hâlâ zor, kontrol kolay değil. Yönetici Claude (Fable); kod yazmaz. Bu turda Codex ve Antigravity yok.
+"Geçici devir — Claude kotası" bölümü geçersizdir.
+
+| Sahip | Yazabileceği yollar |
+|---|---|
+| Claude J (denetleyici, Opus) | `controller.py`, `tests/controller/**`, `tests/integration/**` |
+| Claude K (kamera + takip, Sonnet) | `camera.py`, `tracking.py`, `tests/camera/**` |
+| Claude L (telemetri, Sonnet) | `src/handcontrol/telemetry.py` (yeni), `src/handcontrol/tools/session_report.py` (yeni), `tests/tools/test_tools_session_report.py` (yeni), `tests/app/test_telemetry.py` (yeni), `app.py`, `pipeline.py`, `Docs/reports/telemetry.md` |
+| Claude M (arayüz geri bildirimi, Sonnet) | `src/handcontrol/ui/**`, `tests/ui/**`, `Docs/reports/ui_feedback_round5.md` |
+| Claude N (kayıt analizi, Haiku) | yalnız `Docs/reports/hw_click_reanalysis.md` (yeni); depo kodu yazmaz |
+
+`contracts.py`, `config.py`, `features.py`, `filters.py`, `gestures.py` bu turda değişmez.
+Ortak sözleşme: `ControllerSnapshot` (controller.py) sonuna varsayılanlı üç alan eklenir, yalnız J ekler:
+`pointer_engaged: bool = False`, `tracking_ok: bool = True`, `last_cancel: str = ""`.
+L ve M bu alanları `getattr(snap, "<ad>", <varsayılan>)` ile okur; J bitmeden de çalışır.
+Ek: Claude K ayrıca `src/handcontrol/tools/profile_compare.py` dosyasına yazabilir.

@@ -162,6 +162,7 @@ class Pipeline:
         self.last_features: Optional[FrameFeatures] = None
         self.last_events: tuple[GestureEvent, ...] = ()
         self.gesture_resets = 0
+        self._frame_observers: list[Callable[[FrameFeatures, tuple[GestureEvent, ...], ControllerSnapshot], None]] = []
         self._reset_pending = False
         self._full_reset_pending = False
         snap = self.controller.snapshot()
@@ -184,7 +185,25 @@ class Pipeline:
             self.last_features = ff
             self.last_events = tuple(events)
             self.controller.on_frame(ff, events)
+            if self._frame_observers:
+                self._notify_observers(ff, self.last_events)
             return ff
+
+    def add_frame_observer(self, observer: Callable[[FrameFeatures, tuple[GestureEvent, ...], ControllerSnapshot], None]) -> None:
+        """Optional hook called after the controller handled each frame (tracking thread).
+        Observer exceptions are swallowed."""
+        self._frame_observers.append(observer)
+
+    def _notify_observers(self, ff: FrameFeatures, events: tuple[GestureEvent, ...]) -> None:
+        try:
+            snap = self.controller.snapshot()
+        except Exception:
+            return
+        for observer in tuple(self._frame_observers):
+            try:
+                observer(ff, events, snap)
+            except Exception:
+                pass
 
     def tick(self) -> None:
         self.controller.tick()

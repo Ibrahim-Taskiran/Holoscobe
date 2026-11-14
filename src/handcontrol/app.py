@@ -15,10 +15,11 @@ from handcontrol.config import SettingsStore, CalibrationBounds, validate
 from handcontrol.contracts import CameraState, ControlState, Mode
 from handcontrol.controller import MenuKind
 from handcontrol.dryrun import DryRunSink, FakeVolume
-from handcontrol.pipeline import Pipeline, run_camera_pipeline
+from handcontrol.pipeline import Pipeline, dominant_of, run_camera_pipeline
+from handcontrol.telemetry import SessionRecorder, TelemetrySink
 from handcontrol.ui import (UiBridge, UiState, OverlayState, OverlayMenuKind,
     OverlayMenuItem, VirtualCursorState, HandControlTray, CameraPreviewWidget,
-    OverlayWindow, FeedbackToast, DryRunPanel, SettingsDialog, SettingsData, CalibrationWizard)
+    OverlayWindow, FeedbackToast, StatusIndicator, DryRunPanel, SettingsDialog, SettingsData, CalibrationWizard)
 from handcontrol.windows import (enable_per_monitor_v2, WindowsDisplayProvider,
     WindowsWindowQuery, WindowsVolumeControl, WindowsActionSink, WindowsHotkey, WindowsSession)
 from handcontrol.windows import startup as windows_startup
@@ -138,8 +139,9 @@ class Runtime(QObject):
                  volume=None, hotkey_factory=WindowsHotkey, session_factory=WindowsSession,
                  sink_factory=WindowsActionSink, camera_factory=run_camera_pipeline,
                  startup=windows_startup, packaged: bool | None = None,
-                 cursor_source: CursorSource | None = None):
+                 cursor_source: CursorSource | None = None, telemetry: SessionRecorder | None = None):
         super().__init__()
+        self.telemetry = telemetry
         self.bridge, self.store, self.live = bridge, store, live
         # Relative pointer starts from, and re-syncs to, the real cursor; injected in tests.
         self.cursor_source: CursorSource = cursor_source if cursor_source is not None else read_os_cursor
@@ -166,10 +168,14 @@ class Runtime(QObject):
                 bridge.show_feedback(message='Acil durdurma kısayolu kullanılamıyor; komutsuz deneme sürüyor')
             inner = sink_factory(displays=self.displays, windows=self.windows, volume=self.volume) if live else DryRunSink(max_history=200)
             self.sink = EpochSink(inner, bridge)
-            self.pipeline = Pipeline(Clock(), self.sink, self.displays, self.windows, self.volume, self.settings,
+            pipeline_sink = TelemetrySink(self.sink, telemetry) if telemetry else self.sink
+            self.pipeline = Pipeline(Clock(), pipeline_sink, self.displays, self.windows, self.volume, self.settings,
                 cursor_source=self.cursor_source)
             self.pipeline.controller._cfg = replace(self.pipeline.controller.config, camera_error_paused=True)
             self.pipeline.controller.add_listener(self._on_snapshot)
+            if telemetry:
+                telemetry.dominant = lambda: dominant_of(self.settings)
+                self.pipeline.add_frame_observer(telemetry.on_frame)
             self.pipeline.start()
             self.session = session_factory(self._session_event)
             self.session.start()
@@ -219,6 +225,7 @@ class Runtime(QObject):
         self.bridge.update_state(replace(state, latest_frame=previous.latest_frame,
             dry_run_command_text=previous.dry_run_command_text))
         self.bridge.update_overlay(state.overlay)
+        self.bridge.update_snapshot(snapshot)
 
     def toggle_pause(self):
         if self.pipeline.controller.snapshot().state == ControlState.ACTIVE:
@@ -321,6 +328,8 @@ class Runtime(QObject):
         if self.pipeline:
             self.pipeline.emergency_stop()
             self.pipeline.stop()
+        if self.telemetry:
+            self.telemetry.close()
         for service in (self.sink, self.hotkey, self.session, self.displays):
             if service:
                 try:
@@ -338,12 +347,16 @@ def main(argv=None) -> int:
         return 1
     parser = argparse.ArgumentParser()
     parser.add_argument('--live', action='store_true', help='Gerçek Windows komutlarını etkinleştir')
+    parser.add_argument('--telemetry', action='store_true', help='Oturum telemetrisini yerel CSV dosyasına kaydet (görüntü yok)')
     args = parser.parse_args(argv)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     bridge = UiBridge()
     try:
-        runtime = Runtime(bridge, SettingsStore(), live=args.live)
+        telemetry = SessionRecorder() if args.telemetry else None
+        if telemetry:
+            print(f'Telemetri kaydı: {telemetry.path}')
+        runtime = Runtime(bridge, SettingsStore(), live=args.live, telemetry=telemetry)
     except Exception as exc:
         print(f'Başlatılamadı: {exc}', file=sys.stderr)
         return 1
@@ -367,6 +380,12 @@ def main(argv=None) -> int:
     tray = HandControlTray(bridge, window)
     overlay = OverlayWindow(bridge)
     toast = FeedbackToast(bridge, auto_show_window=True)
+    indicator = StatusIndicator(bridge, enabled_fn=lambda: runtime.settings.overlay_visible, auto_show_window=True)
+    screen = app.primaryScreen()
+    if screen:
+        area = screen.availableGeometry()
+        indicator.move(area.right() - indicator.width() - 16, area.top() + 16)
+    bridge.settings_saved.connect(lambda _data: indicator.apply_indicator(indicator.indicator_state))
     panel = DryRunPanel(bridge)
     def frames():
         if runtime.pipeline.last_features is not None:

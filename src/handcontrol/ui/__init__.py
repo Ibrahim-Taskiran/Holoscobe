@@ -17,6 +17,7 @@ from handcontrol.ui.feedback import (
 from handcontrol.ui.overlay import (
     OverlayWidget,
     OverlayWindow,
+    StatusIndicator,
     build_mode_overlay_state,
     build_window_action_overlay_state,
     compute_closing_progress,
@@ -94,6 +95,7 @@ __all__ = [
     "OverlayState",
     "OverlayWidget",
     "OverlayWindow",
+    "StatusIndicator",
     "PreviewWidget",
     "SettingsData",
     "SettingsDialog",

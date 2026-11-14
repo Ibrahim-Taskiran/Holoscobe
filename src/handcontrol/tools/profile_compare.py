@@ -1,6 +1,8 @@
 """Compare camera profiles (640x480 vs 1280x720) with one fixed pose checklist.
 
 Run: python -m handcontrol.tools.profile_compare [--seconds-per-pose 5]
+Tracker confidence profiles (detection/presence/tracking, 640x480, same checklist per profile):
+  python -m handcontrol.tools.profile_compare --confidence-profiles "0.55/0.55/0.55,0.5/0.35/0.35,0.5/0.25/0.25"
 Measurement only: there is no acceptance gate here, the report just puts the numbers side by side.
 """
 from __future__ import annotations
@@ -91,6 +93,76 @@ class ProfileStats:
             "cikarim_ms_p95": round(percentile(self.infer, 0.95), 1),
             "kullanilabilir_kapsama_yuzde": round(self.coverage_pct, 1),
         }
+
+
+def parse_confidence_profiles(text: str) -> list[tuple[float, float, float]]:
+    """"0.5/0.35/0.35,0.5/0.25/0.25" -> [(det, pres, trk), ...]; a single number sets all three."""
+    out: list[tuple[float, float, float]] = []
+    for chunk in text.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            vals = [float(v) for v in chunk.split("/")]
+        except ValueError as exc:
+            raise ToolError(f"Geçersiz güven profili: {chunk!r}") from exc
+        if len(vals) == 1:
+            vals *= 3
+        if len(vals) != 3 or not all(0.0 <= v <= 1.0 for v in vals):
+            raise ToolError(f"Geçersiz güven profili (algılama/varlık/izleme, 0-1): {chunk!r}")
+        out.append((vals[0], vals[1], vals[2]))
+    if not out:
+        raise ToolError("En az bir güven profili gerekli.")
+    return out
+
+
+class GapStats(ProfileStats):
+    """ProfileStats plus zero-hand ratio and the longest zero-hand gap (capture clock)."""
+
+    def __init__(self, width: int, height: int) -> None:
+        super().__init__(width, height)
+        self.zero = 0
+        self.longest_gap_ms = 0.0
+        self._gap_start: Optional[float] = None
+        self._prev_ms: Optional[float] = None
+
+    def add(self, obs: Observation, expected: int) -> bool:
+        if not super().add(obs, expected):
+            return False
+        t = obs.frame.capture_ms
+        if len(obs.frame.hands) == 0:
+            self.zero += 1
+            if self._gap_start is None:
+                self._gap_start = self._prev_ms if self._prev_ms is not None else t
+            self.longest_gap_ms = max(self.longest_gap_ms, t - self._gap_start)
+        else:
+            self._gap_start = None
+        self._prev_ms = t
+        return True
+
+    def pose_break(self) -> None:
+        """Pose changes (user pressing Enter) must not count as one long gap."""
+        self._gap_start = None
+        self._prev_ms = None
+
+    def summary(self) -> dict[str, Any]:
+        row = super().summary()
+        n = self.samples
+        row["bos_kare_orani"] = round(self.zero / n, 3) if n else 0.0
+        row["en_uzun_bosluk_ms"] = round(self.longest_gap_ms, 0)
+        row["kullanilabilir_kare_orani"] = round(self.usable / n, 3) if n else 0.0
+        return row
+
+
+def confidence_table(rows: list[dict[str, Any]]) -> str:
+    cols = [
+        ("Profil (alg/varlık/izleme)", "profil"), ("Kullanılabilir kare oranı", "kullanilabilir_kare_orani"),
+        ("Eli olmayan kare oranı", "bos_kare_orani"), ("En uzun boşluk ms", "en_uzun_bosluk_ms"),
+        ("İşlenen FPS", "islenen_fps"), ("Örnek", "ornek"),
+    ]
+    head = "| " + " | ".join(c[0] for c in cols) + " |"
+    body = ["| " + " | ".join(str(r.get(c[1], "-")) for c in cols) + " |" for r in rows]
+    return "\n".join(["## Güven profili karşılaştırması", "", head, "|" + "---|" * len(cols), *body])
 
 
 def comparison_table(rows: list[dict[str, Any]]) -> str:
@@ -209,12 +281,120 @@ class ProfileRun:
         return report
 
 
+class ConfidenceRun(ProfileRun):
+    """Same checklist per tracker confidence profile at one resolution (live camera, no OS input)."""
+
+    def __init__(
+        self, source_factory: Callable[[float, float, float], FrameSource], console: Console,
+        confidences: list[tuple[float, float, float]], *, seconds_per_pose: float = 5.0,
+        resolution: tuple[int, int] = PROFILES[0], out_dir: Optional[Path] = None,
+        software: Optional[dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(lambda w, h: source_factory(0, 0, 0), console, seconds_per_pose=seconds_per_pose,
+                         profiles=(resolution,), out_dir=out_dir, software=software)
+        self.cfactory, self.confidences, self.resolution = source_factory, confidences, resolution
+        self.stem = rp.timestamp_stem(TOOL + "_confidence")
+
+    def _run_conf(self, det: float, pres: float, trk: float) -> None:
+        label = f"{det:g}/{pres:g}/{trk:g}"
+        self.console.say(f"\n=== Güven profili {label} ===")
+        source = self.cfactory(det, pres, trk)
+        stats = GapStats(*self.resolution)
+        try:
+            source.open()
+            for idx, (text, expected) in enumerate(CHECKLIST, 1):
+                self.console.ask(f"  [{idx}/{len(CHECKLIST)}] {text} - hazırsanız Enter: ", pump_source(source))
+                stats.pose_break()
+                start = source.now_ms()
+                while source.now_ms() - start < self.seconds * 1000.0:
+                    obs = source.next(0.1)
+                    if obs is not None and obs.frame.capture_ms >= start:
+                        stats.add(obs, expected)
+            info = source.camera_info()
+        finally:
+            try:
+                source.close()
+            except Exception:
+                pass
+        row = stats.summary()
+        row["profil"] = label
+        row["kamera_fps"] = info.get("kamera_fps", "-")
+        self._cam_info[label] = info
+        self.rows.append(row)
+
+    def build_report(self, complete: bool) -> rp.Report:
+        sw = self._software if self._software is not None else rp.collect_software()
+        self._software = sw
+        note = "Ölçüm tamamlandı (bilgi amaçlı; kabul kapısı yok)." if complete else "Ölçüm yarım kaldı."
+        if self.error:
+            note += f" Hata: {self.error}"
+        return rp.Report(
+            tool=TOOL, title="İzleyici güven profili karşılaştırması", stem=self.stem,
+            status=rp.STATUS_TAMAM if complete else rp.STATUS_YARIM,
+            environment=rp.collect_environment({"profiller": self._cam_info}), software=sw,
+            conditions=self.conditions,
+            experiment=[
+                f"Sabit poz listesi ({len(CHECKLIST)} poz) x {self.seconds:.0f} sn, her güven profilinde aynı sırayla.",
+                "Profil: algılama/varlık/izleme eşiği. Çözünürlük: " + "x".join(map(str, self.resolution)),
+            ],
+            result_lines=[
+                f"{r['profil']}: kullanılabilir {r['kullanilabilir_kare_orani']}, eli olmayan {r['bos_kare_orani']}, "
+                f"en uzun boşluk {r['en_uzun_bosluk_ms']} ms, {r['islenen_fps']} FPS"
+                for r in self.rows
+            ] or ["veri yok"],
+            raw={"profiller": self.rows, "checklist": [c[0] for c in CHECKLIST]},
+            details_md=confidence_table(self.rows), decision=rp.KARAR_GECTI if complete else rp.KARAR_YAPILMADI,
+            decision_note=note,
+        )
+
+    def execute(self) -> rp.Report:
+        complete = False
+        try:
+            self.conditions = ask_conditions(self.console)
+            for det, pres, trk in self.confidences:
+                self._run_conf(det, pres, trk)
+                self._save(False)
+            complete = True
+        except KeyboardInterrupt:
+            self.console.say("\nDurduruldu (Ctrl+C). Kısmi sonuç kaydediliyor...")
+        except ToolError as exc:
+            self.error = str(exc)
+            self.console.say(f"HATA: {exc}")
+        report = self._save(complete)
+        self.console.say(f"Karar: {report.decision} ({report.status})")
+        self.console.say(f"Rapor: {self.md_path}")
+        return report
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="handcontrol.tools.profile_compare", description="Kamera profili karşılaştırması")
     p.add_argument("--seconds-per-pose", type=float, default=5.0)
     p.add_argument("--swap-handedness", action="store_true")
+    p.add_argument("--confidence-profiles", default=None,
+                   help='izleyici güven profilleri "alg/varlık/izleme,..." (ör. "0.55/0.55/0.55,0.5/0.35/0.35")')
     add_camera_args(p)
     args = p.parse_args(argv)
+
+    if args.confidence_profiles:
+        confs = parse_confidence_profiles(args.confidence_profiles)
+
+        def conf_factory(det: float, pres: float, trk: float) -> FrameSource:
+            from ..tracking import HandTracker
+
+            tracker = HandTracker(detection_confidence=det, presence_confidence=pres,
+                                  tracking_confidence=trk, swap_handedness=args.swap_handedness)
+            return LiveSource(*PROFILES[0], index=args.camera_index, backend=args.backend,
+                              swap_handedness=args.swap_handedness, tracker=tracker)
+
+        crun = ConfidenceRun(conf_factory, RealConsole(), confs, seconds_per_pose=args.seconds_per_pose,
+                             out_dir=Path(args.out_dir) if args.out_dir else None)
+
+        def go_conf() -> int:
+            crun.execute()
+            return 2 if crun.error else 0
+
+        run_main(go_conf)
+        return 0
 
     def factory(w: int, h: int) -> FrameSource:
         return LiveSource(w, h, index=args.camera_index, backend=args.backend, swap_handedness=args.swap_handedness)

@@ -141,7 +141,7 @@ def test_mirror_flips_relative_direction(dt):
 
 
 @FPS
-@pytest.mark.parametrize("clutch", ["open_hand", "hand_lost", "out_of_frame", "unknown_fingers"])
+@pytest.mark.parametrize("clutch", ["open_hand", "hand_lost", "out_of_frame"])   # unknown: test_ctrl_sticky.py
 def test_clutch_freezes_and_reengage_continues_without_jump(dt, clutch):
     r = rig(dt, palm=(300.0, 300.0))
     stroke(r, (300.0, 300.0), (360.0, 300.0), 300, dt)
@@ -151,9 +151,6 @@ def test_clutch_freezes_and_reengage_continues_without_jump(dt, clutch):
     if clutch == "open_hand":
         hold(r, (360.0, 300.0), 150, dt, "open")
         stroke(r, (360.0, 300.0), (250.0, 200.0), 300, dt, "open")
-    elif clutch == "unknown_fingers":
-        hold(r, (360.0, 300.0), 150, dt, states=(U, U, U, U, U))
-        stroke(r, (360.0, 300.0), (250.0, 200.0), 300, dt, states=(U, U, U, U, U))
     elif clutch == "hand_lost":
         for _ in range(3):
             r.frame(dt=dt)
@@ -272,7 +269,7 @@ def test_cursor_source_sets_start_and_resyncs_on_reengage(dt):
     real = [(100, 200)]
     r = rig(dt, cursor_source=lambda: real[0])
     assert ptr(r) == (100, 200)
-    hold(r, (320.0, 300.0), 150, dt, "open")
+    hold(r, (320.0, 300.0), 300, dt, "open")                         # release needs clutch_release_ms
     real[0] = (1500, 900)                                          # the physical mouse moved meanwhile
     hold(r, (320.0, 300.0), 150, dt)
     assert ptr(r) == (1500, 900)

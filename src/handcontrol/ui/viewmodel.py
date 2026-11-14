@@ -152,7 +152,7 @@ ACTION_KIND_LABELS_TR: dict[ActionKind, str] = {
 # User-facing gesture guide (gesture, result). Mirrors README "Ne yapar"; keep both in sync.
 GESTURE_GUIDE_TR: tuple[tuple[str, str], ...] = (
     ("İki elle bir kez el çırp", "Kontrolü aç / duraklat"),
-    ("İşaret açık, diğer parmaklar kapalı", "İmleç hareket eder (hızlı hareket uzağa, yavaş hareket hassas gider)"),
+    ("İşaret açık, diğer parmaklar kapalı", "İmleç hareket eder (hızlı hareket uzağa, yavaş hareket hassas gider); bir kez işaret etmek yeter, el açılana ya da yumruk olana kadar sürer"),
     ("Eli aç ya da kadrajdan çıkar", "İmleç yerinde kalır; eli geri getirip yeniden işaret et, kaldığı yerden devam eder"),
     ("Kısa başparmak + işaret pinch", "Sol tık (imleç pinch sırasında durur)"),
     ("İki hızlı pinch (arada parmakları belirgin aç)", "Çift tık"),
@@ -163,6 +163,46 @@ GESTURE_GUIDE_TR: tuple[tuple[str, str], ...] = (
     ("Baskın olmayan elin açık avucunu 600 ms sabit tut", "Mod menüsü"),
     ("Kalibrasyon dikdörtgeni", "Yalnız mutlak imleç türünde geçerli"),
 )
+
+
+class IndicatorKind(Enum):
+    """Single status the user should currently see, in priority order."""
+
+    PAUSED = "paused"
+    NO_TRACKING = "no_tracking"
+    PENDING = "pending"
+    ENGAGED = "engaged"
+    PARKED = "parked"
+
+
+@dataclass(frozen=True)
+class IndicatorState:
+    kind: IndicatorKind = IndicatorKind.PAUSED
+    text: str = "Duraklatıldı"
+
+
+INDICATOR_TEXT_TR: dict[IndicatorKind, str] = {
+    IndicatorKind.PAUSED: "Duraklatıldı",
+    IndicatorKind.NO_TRACKING: "Takip yok (el görünmüyor)",
+    IndicatorKind.ENGAGED: "İmleç aktif",
+    IndicatorKind.PARKED: "İmleç beklemede (işaret pozu yap)",
+}
+
+CANCEL_TOAST_MS = 1500
+
+
+def resolve_indicator(snapshot: Any) -> IndicatorState:
+    """Pick the one status to show. New snapshot fields are read via getattr (old snapshots work)."""
+    if getattr(snapshot, "state", None) != ControlState.ACTIVE:
+        return IndicatorState(IndicatorKind.PAUSED, INDICATOR_TEXT_TR[IndicatorKind.PAUSED])
+    if not getattr(snapshot, "tracking_ok", True):
+        return IndicatorState(IndicatorKind.NO_TRACKING, INDICATOR_TEXT_TR[IndicatorKind.NO_TRACKING])
+    pending = str(getattr(snapshot, "pending_action", "") or "").strip()
+    if pending:
+        return IndicatorState(IndicatorKind.PENDING, pending)
+    if getattr(snapshot, "pointer_engaged", False):
+        return IndicatorState(IndicatorKind.ENGAGED, INDICATOR_TEXT_TR[IndicatorKind.ENGAGED])
+    return IndicatorState(IndicatorKind.PARKED, INDICATOR_TEXT_TR[IndicatorKind.PARKED])
 
 
 def format_gesture_guide_tr() -> str:
@@ -384,6 +424,7 @@ class UiBridge(QObject):
     overlay_updated = Signal(object)            # OverlayState
     feedback_triggered = Signal(object)         # FeedbackMessage
     dry_run_updated = Signal(str)               # str
+    indicator_updated = Signal(object)          # IndicatorState
 
     # User request signals (controller / application coordinator subscribes to these)
     pause_resume_requested = Signal()
@@ -408,6 +449,7 @@ class UiBridge(QObject):
     _marshal_overlay = Signal(object)
     _marshal_feedback = Signal(object)
     _marshal_dry_run = Signal(str)
+    _marshal_snapshot = Signal(object)
 
     def __init__(
         self,
@@ -416,7 +458,10 @@ class UiBridge(QObject):
     ) -> None:
         super().__init__(parent)
         self._state: UiState = initial_state or UiState()
+        self._indicator: Optional[IndicatorState] = None
+        self._last_cancel: str = ""
 
+        self._marshal_snapshot.connect(self._apply_snapshot_on_gui_thread)
         self._marshal_state.connect(self._apply_state_on_gui_thread)
         self._marshal_patch.connect(self._apply_patch_on_gui_thread)
         self._marshal_frame.connect(self._apply_frame_on_gui_thread)
@@ -533,6 +578,28 @@ class UiBridge(QObject):
         self._state = replace(self._state, **changes)
         self.frame_updated.emit(frame)
         self.state_changed.emit(self._state)
+
+    @Slot(object)
+    def update_snapshot(self, snapshot: Any) -> None:
+        """Feed a ControllerSnapshot: refreshes the status indicator and cancel toast."""
+        if self._is_gui_thread():
+            self._apply_snapshot_on_gui_thread(snapshot)
+        else:
+            self._marshal_snapshot.emit(snapshot)
+
+    @Slot(object)
+    def _apply_snapshot_on_gui_thread(self, snapshot: Any) -> None:
+        indicator = resolve_indicator(snapshot)
+        if indicator != self._indicator:
+            self._indicator = indicator
+            self.indicator_updated.emit(indicator)
+        cancel = str(getattr(snapshot, "last_cancel", "") or "")
+        if cancel != self._last_cancel:
+            self._last_cancel = cancel
+            if cancel:
+                self._apply_feedback_on_gui_thread(
+                    FeedbackMessage(FeedbackKind.WARNING, cancel, duration_ms=CANCEL_TOAST_MS)
+                )
 
     @Slot(object)
     def update_overlay(self, overlay: OverlayState) -> None:

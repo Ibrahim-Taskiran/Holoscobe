@@ -71,7 +71,7 @@ def test_params_passed(model):
     lm = FakeLandmarker()
     t = make_tracker(model, lm)
     t.process(FakeFrame(1), 10.0)
-    assert t.seen["n"] == 2 and t.seen["conf"] == 0.55 and t.seen["path"] == str(model)
+    assert t.seen["n"] == 2 and t.seen["conf"] == 0.5 and t.seen["path"] == str(model)
 
 
 @pytest.mark.parametrize("labels", [[], ["Right"], ["Left", "Right"]])

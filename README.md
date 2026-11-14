@@ -12,7 +12,7 @@ Kamerayla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama.
 | Hepsi (etkin) | Sağ yumruk tut (önce el açık olmalı) | Ön plandaki uygulama penceresini küçültür |
 | Hepsi (etkin) | Sol yumruk tut (önce el açık olmalı) | Bu oturumda son küçültülen pencereyi geri açar |
 | İşaretçi | İşaret açık, diğer parmaklar kapalı | İmleç hareket eder. Hızlı hareket uzağa, yavaş hareket hassas gider |
-| İşaretçi | Eli aç (ya da kadrajdan çıkar) | İmleç yerinde kalır. Eli geri getir, yeniden işaret et: kaldığı yerden devam eder |
+| İşaretçi | Eli aç (ya da kadrajdan çıkar) | İmleç hemen durur; el 200 ms açık kalırsa bırakılır. Eli geri getir, yeniden işaret et: kaldığı yerden devam eder |
 | İşaretçi | Kısa başparmak + işaret pinch | Sol tık. İmleç pinch sırasında durur |
 | İşaretçi | İki hızlı pinch (arada parmakları belirgin aç) | Çift tık |
 | İşaretçi | Pinch'i yaklaşık yarım saniye tut, taşı, bırak | Sürükle bırak |
@@ -30,6 +30,9 @@ taramak zorunda değildir: işaret ederken el hareket ettikçe imleç o kadar ka
 hareket uzağa, yavaş hareket hassas gider; ikinci ekrana da böyle geçilir. Eli açmak ya da
 kadrajdan çıkarmak debriyajdır: imleç yerinde kalır. Eli geri getirip yeniden işaret edince
 kaldığı yerden devam eder. Gerçek fareyle imleci taşıdıysan oradan devam eder.
+İmleç bir kez tutulunca yapışkandır: parmak durumu kısa süre belirsiz okunsa ya da takip
+200 ms'den kısa bozulsa da bırakılmaz. Bırakmak için eli belirgin aç ya da yumruk yap.
+Ekranın sağ üstündeki gösterge anlık durumu yazar (İmleç aktif / beklemede / Takip yok).
 **Ayarlar** içinde **İmleç Türü** (Göreli / Mutlak) ve **İmleç Hızı** (0,5–2,0) seçilir.
 Kalibrasyon dikdörtgeni yalnız **Mutlak** türde geçerlidir (kamera alanı = ekran).
 

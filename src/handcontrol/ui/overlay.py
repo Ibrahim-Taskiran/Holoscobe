@@ -9,7 +9,7 @@ Features:
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Slot
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QWidget
 
 from handcontrol.contracts import Mode
 from handcontrol.ui.viewmodel import (
+    IndicatorKind,
+    IndicatorState,
     OverlayMenuItem,
     OverlayMenuKind,
     OverlayState,
@@ -106,6 +108,111 @@ def build_window_action_overlay_state(
         closing_progress=closing,
         target_window_title=target_window_title,
     )
+
+
+_INDICATOR_COLORS: dict[IndicatorKind, QColor] = {
+    IndicatorKind.PAUSED: QColor(241, 196, 15),
+    IndicatorKind.NO_TRACKING: QColor(231, 76, 60),
+    IndicatorKind.PENDING: QColor(52, 152, 219),
+    IndicatorKind.ENGAGED: QColor(46, 204, 113),
+    IndicatorKind.PARKED: QColor(149, 165, 166),
+}
+_INDICATOR_GLYPHS: dict[IndicatorKind, str] = {
+    IndicatorKind.PAUSED: "||",
+    IndicatorKind.NO_TRACKING: "X",
+    IndicatorKind.PENDING: "...",
+    IndicatorKind.ENGAGED: "+",
+    IndicatorKind.PARKED: "o",
+}
+
+
+class StatusIndicator(QWidget):
+    """Small always-on-top, click-through pill showing the one current pointer status."""
+
+    def __init__(
+        self,
+        bridge: Optional[UiBridge] = None,
+        enabled_fn: Optional[Callable[[], bool]] = None,
+        auto_show_window: bool = False,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        super().__init__(parent, flags)
+        self._enabled_fn = enabled_fn
+        self._auto_show_window = bool(auto_show_window)
+        self._state = IndicatorState()
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.resize(300, 36)
+        if bridge is not None:
+            bridge.indicator_updated.connect(self.apply_indicator)
+
+    @property
+    def indicator_state(self) -> IndicatorState:
+        return self._state
+
+    @property
+    def color(self) -> QColor:
+        return _INDICATOR_COLORS[self._state.kind]
+
+    def is_enabled(self) -> bool:
+        return True if self._enabled_fn is None else bool(self._enabled_fn())
+
+    @Slot(object)
+    def apply_indicator(self, state: IndicatorState) -> None:
+        """Repaint only when the state changed; respect the overlay_visible setting."""
+        if self._auto_show_window:
+            want = self.is_enabled()
+            if want != self.isVisible():
+                self.setVisible(want)
+        if state == self._state:
+            return
+        self._state = state
+        self.update()
+
+    def render_to_image(self) -> QImage:
+        image = QImage(self.width(), self.height(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        self._paint(painter)
+        painter.end()
+        return image
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        self._paint(painter)
+        painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        accent = self.color
+        box = QRectF(2.0, 2.0, self.width() - 4.0, self.height() - 4.0)
+        painter.setPen(QPen(accent, 2.0))
+        painter.setBrush(QColor(20, 26, 36, 220))
+        painter.drawRoundedRect(box, 16.0, 16.0)
+        font = QFont("Segoe UI", 10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(accent)
+        painter.drawText(
+            QRectF(box.left() + 10.0, box.top(), 30.0, box.height()),
+            int(Qt.AlignmentFlag.AlignCenter),
+            _INDICATOR_GLYPHS[self._state.kind],
+        )
+        painter.setPen(QColor(240, 245, 250))
+        painter.drawText(
+            QRectF(box.left() + 44.0, box.top(), box.width() - 54.0, box.height()),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            self._state.text,
+        )
 
 
 class OverlayWindow(QWidget):
