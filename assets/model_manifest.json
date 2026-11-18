@@ -13,7 +13,7 @@
       "gcs_last_modified": "Wed, 26 Apr 2023 03:33:24 GMT",
       "size_bytes": 7819105,
       "sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
-      "sha256_status": "computed at retrieval, independent review pending",
+      "sha256_status": "re-verified 2026-11-18: fresh download of the docs latest alias gives the same SHA-256; GCS JSON API metadata (md5, crc32c, size, generation 1682480004222387) matches. Still Google-sourced; no third-party published hash exists.",
       "sha256_notes": [
         "No independently published SHA-256 for this exact file was found.",
         "google-ai-edge/mediapipe third_party/external_files.bzl pins a DIFFERENT file (mediapipe-assets testdata hand_landmarker.task, sha256 32d1eab97e80a9a20edb29231e15301ce65abfd0fa9d41cf1757e0ecc8078a4e); not usable as a reference.",
@@ -25,7 +25,7 @@
       "license_link_evidence": "Official docs https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker, 'Models' table: row 'HandLandmarker (full) | 192 x 192, 224 x 224 | float 16' links that model card and the float16 bundle download.",
       "license_caveat": "The model card is dated Oct 2021 and describes the Lite/Full hand pipeline; the 2023 .task bundle is tied to it only through the official docs table. The docs page text itself is CC BY 4.0 (page content), which is NOT the model license. The MediaPipe repository license (Apache-2.0) is recorded separately in THIRD_PARTY_NOTICES.md.",
       "intended_use_notes": "Model card lists 'Gesture recognition' and 'Hand control' as intended domains; surveillance/identity recognition out of scope.",
-      "redistribution_status": "permitted by license evidence (Apache-2.0: ship LICENSE text + attribution); bundling in a release HELD until sha256_status is independently reviewed. Until then setup downloads the model from the official URL.",
+      "redistribution_status": "permitted by license evidence (Apache-2.0: ship LICENSE text + attribution); bundling in release builds approved 2026-11-18 by the project manager after re-verification; the build fails if the bundled file does not match sha256. Source setup still downloads from the official URL.",
       "retrieved": "2026-11-12"
     }
   ]
