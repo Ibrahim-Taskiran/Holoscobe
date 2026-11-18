@@ -11,6 +11,10 @@ from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from handcontrol.swipe import COMMAND_LABELS as SWIPE_COMMAND_LABELS
+from handcontrol.swipe import PROFILES as SWIPE_PROFILES
+from handcontrol.swipe import SwipeDirection, pinch_command, swipe_command
+
 from handcontrol.contracts import (
     Action,
     ActionKind,
@@ -212,14 +216,27 @@ GESTURE_GUIDE_TR: tuple[tuple[str, str], ...] = (
     ("Kalibrasyon dikdörtgeni", "Yalnız mutlak imleç türünde geçerli"),
 )
 
-# Komutlar mode section of the gesture guide (gesture, result).
-COMMANDS_GUIDE_TR: tuple[tuple[str, str], ...] = (
-    ("Sola kaydır", "Önceki · Tarayıcı geri · Önceki parça · Sol masaüstü (kaydırma profiline göre)"),
-    ("Sağa kaydır", "Sonraki · Tarayıcı ileri · Sonraki parça · Sağ masaüstü (kaydırma profiline göre)"),
-    ("Yukarı kaydır", "Görev görünümü"),
-    ("Aşağı kaydır", "Masaüstünü göster"),
-    ("Kısa pinch", "Oynat/Duraklat (Sunum profilinde Sonraki)"),
-)
+# Komutlar mode section of the gesture guide (gesture, result). Built from swipe.py so it cannot drift.
+def _build_commands_guide() -> tuple[tuple[str, str], ...]:
+    profs = [(p, SWIPE_PROFILE_LABELS_TR[p]) for p in SWIPE_PROFILES]
+
+    def horizontal(direction: SwipeDirection) -> str:
+        return " · ".join(
+            f"{label}: {SWIPE_COMMAND_LABELS[swipe_command(p, direction)]}" for p, label in profs)
+
+    pinch = {SWIPE_COMMAND_LABELS[pinch_command(p)] for p in SWIPE_PROFILES}
+    default = SWIPE_COMMAND_LABELS[pinch_command("desktops")]
+    pinch_text = f"{default} (Sunum profilinde {SWIPE_COMMAND_LABELS[pinch_command('slides')]})"         if len(pinch) > 1 else default
+    return (
+        ("Sola kaydır", horizontal(SwipeDirection.LEFT)),
+        ("Sağa kaydır", horizontal(SwipeDirection.RIGHT)),
+        ("Yukarı kaydır", SWIPE_COMMAND_LABELS[swipe_command("desktops", SwipeDirection.UP)]),
+        ("Aşağı kaydır", SWIPE_COMMAND_LABELS[swipe_command("desktops", SwipeDirection.DOWN)]),
+        ("Kısa pinch", pinch_text),
+    )
+
+
+COMMANDS_GUIDE_TR: tuple[tuple[str, str], ...] = _build_commands_guide()
 COMMANDS_GUIDE_TITLE_TR = "Komutlar modu"
 
 

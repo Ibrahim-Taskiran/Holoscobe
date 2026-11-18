@@ -24,7 +24,7 @@ from handcontrol.pipeline import Pipeline, dominant_of, run_camera_pipeline
 from handcontrol.telemetry import SessionRecorder, TelemetrySink
 from handcontrol.ui import (UiBridge, UiState, OverlayState, OverlayMenuKind,
     OverlayMenuItem, VirtualCursorState, HandControlTray, CameraPreviewWidget,
-    OverlayWindow, FeedbackToast, StatusIndicator, DryRunPanel, SettingsDialog, SettingsData, CalibrationWizard)
+    OverlayWindow, CursorFeedbackOverlay, FeedbackToast, StatusIndicator, DryRunPanel, SettingsDialog, SettingsData, CalibrationWizard)
 from handcontrol.windows import (enable_per_monitor_v2, WindowsDisplayProvider,
     WindowsWindowQuery, WindowsVolumeControl, WindowsActionSink, WindowsHotkey, WindowsSession)
 from handcontrol.windows import startup as windows_startup
@@ -92,17 +92,13 @@ def settings_to_dialog_data(s, *, startup_enabled: bool | None = None) -> Settin
         pointer_mode=s.pointer_mode, pointer_speed=s.pointer_speed,
         show_overlay=s.overlay_visible, show_mascot=s.mascot_visible, monitor_mapping=monitor,
         start_with_windows=s.start_with_windows if startup_enabled is None else startup_enabled)
-    # Schema 3 fields exist on SettingsData only once the UI agent's change lands.
-    known = {f.name for f in fields(SettingsData)}
-    extra = {k: getattr(s, k) for k in SETTINGS_V3_KEYS if hasattr(s, k)}
-    return replace(data, **{k: v for k, v in extra.items() if k in known})
+    return replace(data, **{k: getattr(s, k) for k in SETTINGS_V3_KEYS})
 
 
 def dialog_data_to_values(values: dict, data) -> dict:
     """Copy schema 3 dialog fields into a settings dict (only those the dialog provides)."""
     for key in SETTINGS_V3_KEYS:
-        if hasattr(data, key):
-            values[key] = getattr(data, key)
+        values[key] = getattr(data, key)
     return values
 
 
@@ -529,6 +525,21 @@ class Runtime(QObject):
             self.camera = None
 
 
+def show_or_reuse_dialog(ref: list, factory):
+    """Raise the dialog held in `ref` if still open, else build one with `factory` and keep it there."""
+    if ref and ref[0].isVisible():
+        dlg = ref[0]
+        if dlg.isMinimized():
+            dlg.showNormal()
+        dlg.raise_()
+        dlg.activateWindow()
+        return dlg
+    dlg = factory()
+    ref[:] = [dlg]
+    dlg.show()
+    return dlg
+
+
 def main(argv=None) -> int:
     if not enable_per_monitor_v2():
         print('Başlatılamadı: per-monitor DPI awareness v2 ayarlanamadı.', file=sys.stderr)
@@ -589,6 +600,8 @@ def main(argv=None) -> int:
     tray = HandControlTray(bridge, window)
     tray_ref.append(tray)
     overlay = OverlayWindow(bridge)
+    cursor_ring = CursorFeedbackOverlay(bridge, enabled_fn=lambda: runtime.settings.cursor_feedback,
+        follow_os_cursor=args.live)
     toast = FeedbackToast(bridge, auto_show_window=True)
     indicator = StatusIndicator(bridge, enabled_fn=lambda: runtime.settings.overlay_visible, auto_show_window=True)
     screen = app.primaryScreen()
@@ -615,19 +628,18 @@ def main(argv=None) -> int:
             from handcontrol.ui.onboarding import OnboardingDialog
         except ImportError:
             return
-        if onboarding_ref and onboarding_ref[0].isVisible():
-            onboarding_ref[0].raise_()
-            return
-        dlg = OnboardingDialog(window, hotkey=runtime.settings.emergency_hotkey,
-            dominant_hand=runtime.settings.dominant_hand, live=args.live)
-        for name in ('completed', 'skipped'):
-            getattr(dlg, name).connect(runtime.mark_onboarding_done)
-        if hasattr(dlg, 'on_action'):
-            runtime.add_action_listener(dlg.on_action)
-            dlg.destroyed.connect(lambda *_: runtime.remove_action_listener(dlg.on_action))
-        onboarding_ref[:] = [dlg]
-        dlg.setModal(False)
-        dlg.show()
+
+        def build():
+            dlg = OnboardingDialog(window, hotkey=runtime.settings.emergency_hotkey,
+                dominant_hand=runtime.settings.dominant_hand, live=args.live)
+            for name in ('completed', 'skipped'):
+                getattr(dlg, name).connect(runtime.mark_onboarding_done)
+            if hasattr(dlg, 'on_action'):
+                runtime.add_action_listener(dlg.on_action)
+                dlg.destroyed.connect(lambda *_: runtime.remove_action_listener(dlg.on_action))
+            dlg.setModal(False)
+            return dlg
+        show_or_reuse_dialog(onboarding_ref, build)
     def export_settings(path):
         runtime.export_settings(path)
     def import_settings(path):
@@ -642,8 +654,8 @@ def main(argv=None) -> int:
             signal = getattr(dialog, name, None)
             if signal is not None:
                 signal.connect(slot)
-    if hasattr(tray, 'tutorial_requested'):
-        tray.tutorial_requested.connect(open_onboarding)
+    # The tray click emits both its own signal and bridge.tutorial_requested; connect only the bridge one.
+    bridge.tutorial_requested.connect(open_onboarding)
     def calibration_dialog():
         if runtime.pipeline.controller.begin_calibration():
             CalibrationWizard(bridge=bridge, parent=window).exec()
@@ -651,6 +663,7 @@ def main(argv=None) -> int:
     bridge.calibration_requested.connect(calibration_dialog)
     bridge.exit_requested.connect(app.quit)
     app.aboutToQuit.connect(runtime.close)
+    app.aboutToQuit.connect(cursor_ring.close)
     tray.show()
     window.show()
     if not args.live:

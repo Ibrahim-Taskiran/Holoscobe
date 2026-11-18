@@ -53,8 +53,8 @@ def test_controller_config_gets_schema3_fields() -> None:
 
 def test_dialog_data_carries_known_schema3_fields() -> None:
     d = settings_to_dialog_data(validate({'click_sound': True, 'auto_pause_s': 10}))
-    if hasattr(d, 'click_sound'):
-        assert d.click_sound is True and d.auto_pause_s == 10
+    assert d.click_sound is True and d.auto_pause_s == 10
+    assert (d.swipe_profile, d.dwell_click, d.dwell_ms, d.cursor_feedback) == ('auto', False, 1000, True)
 
 
 def test_save_settings_writes_schema3_fields(qt, tmp_path) -> None:
@@ -249,3 +249,22 @@ def test_single_instance_lock(tmp_path) -> None:
     again = acquire_single_instance(tmp_path)
     assert again is not None
     again.unlock()
+
+
+def test_show_or_reuse_dialog_opens_only_one(qt) -> None:
+    from PySide6.QtWidgets import QDialog
+    from handcontrol.app import show_or_reuse_dialog
+    ref: list = []
+    made: list = []
+
+    def build():
+        d = QDialog()
+        made.append(d)
+        return d
+    a = show_or_reuse_dialog(ref, build)
+    b = show_or_reuse_dialog(ref, build)
+    assert a is b and len(made) == 1
+    a.close()
+    c = show_or_reuse_dialog(ref, build)
+    assert c is not a and len(made) == 2
+    c.close()

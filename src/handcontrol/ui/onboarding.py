@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from handcontrol.ui.dpi import physical_to_logical
+from handcontrol.ui.viewmodel import COMMANDS_GUIDE_TR
 
 
 class OnboardingStep(Enum):
@@ -500,9 +501,7 @@ class OnboardingDialog(QDialog):
             "Pinch yap ve eli yukarı ya da aşağı taşı: sayfa dikey kayar.", "K"))
         col.addWidget(_card(
             "Komutlar modu",
-            "Sola/sağa kaydır: Önceki/Sonraki (profile göre tarayıcı geri/ileri, parça, masaüstü) · "
-            "Yukarı: Görev görünümü · Aşağı: Masaüstünü göster · Kısa pinch: Oynat/Duraklat "
-            "(Sunumda Sonraki).", "C"))
+            " · ".join(f"{g}: {r}" for g, r in COMMANDS_GUIDE_TR), "C"))
         col.addWidget(_card(
             "Bekleyerek tıkla",
             "Ayarlar > İmleç'ten açarsan imleci sabit tutman sol tık yapar; halka dolunca tıklar.", "B"))
