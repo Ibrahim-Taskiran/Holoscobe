@@ -11,7 +11,7 @@ from handcontrol.config import Settings, SettingsStore, validate
 
 def test_defaults():
     s = Settings()
-    assert s.schema_version == C.SCHEMA_VERSION == 2 and s.emergency_hotkey == "Ctrl+Alt+Shift+F12"
+    assert s.schema_version == C.SCHEMA_VERSION == 3 and s.emergency_hotkey == "Ctrl+Alt+Shift+F12"
     assert s.pointer_mode == "relative" and s.pointer_speed == 1.0
     assert s.monitor_mapping.mode == "virtual_desktop"
     assert (s.pinch_on_threshold, s.pinch_off_threshold) == (0.33, 0.48)
@@ -169,7 +169,7 @@ def test_pointer_settings_validation_and_round_trip(settings_path):
     st.save(s)
     loaded = st.load()
     assert loaded.pointer_speed == 1.6 and loaded.pointer_mode == "absolute"
-    assert json.loads(settings_path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["schema_version"] == C.SCHEMA_VERSION
 
 
 def test_bad_schema_version_treated_as_v1(settings_path):
@@ -181,3 +181,26 @@ def test_bad_schema_version_treated_as_v1(settings_path):
 def test_default_path_uses_localappdata(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Yerel Veri"))
     assert C.default_settings_path() == tmp_path / "Yerel Veri" / "Holoscobe" / "settings.json"
+
+
+# ---------- schema 3 (round 6) ----------
+
+def test_schema3_defaults_and_clamps():
+    from handcontrol.config import validate
+    s = validate({})
+    assert (s.swipe_profile, s.auto_pause_s, s.dwell_click, s.dwell_ms) == ("auto", 0, False, 1000)
+    assert s.cursor_feedback and not s.click_sound and not s.onboarding_done
+    s = validate({"swipe_profile": "SLIDES", "auto_pause_s": 3, "dwell_ms": 50, "default_mode": "commands"})
+    assert (s.swipe_profile, s.auto_pause_s, s.dwell_ms, s.default_mode) == ("slides", 10, 400, "commands")
+    assert validate({"swipe_profile": "bogus", "auto_pause_s": 99999}).swipe_profile == "auto"
+    assert validate({"auto_pause_s": 99999}).auto_pause_s == 3600
+
+
+def test_schema2_file_migrates_with_onboarding_done(tmp_path):
+    import json
+    from handcontrol.config import SCHEMA_VERSION, SettingsStore
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"schema_version": 2, "pointer_speed": 1.5}), encoding="utf-8")
+    s = SettingsStore(p).load()
+    assert s.onboarding_done is True and s.pointer_speed == 1.5 and s.schema_version == SCHEMA_VERSION == 3
+    assert SettingsStore(tmp_path / "new.json").load().onboarding_done is False

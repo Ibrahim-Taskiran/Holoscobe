@@ -63,6 +63,23 @@ class Mode(Enum):
     ZOOM = "zoom"
     VOLUME = "volume"
     WINDOWS = "windows"
+    COMMANDS = "commands"     # swipe/pinch -> keyboard and media commands (round 6)
+
+
+class KeyCommand(Enum):
+    """Named keyboard/media commands. Action.command carries the .value; the sink owns the key mapping."""
+    NEXT = "next"                         # Right arrow (slides, PDF, photos)
+    PREVIOUS = "previous"                 # Left arrow
+    BROWSER_BACK = "browser_back"         # Alt+Left
+    BROWSER_FORWARD = "browser_forward"   # Alt+Right
+    TASK_VIEW = "task_view"               # Win+Tab
+    SHOW_DESKTOP = "show_desktop"         # Win+D
+    DESKTOP_LEFT = "desktop_left"         # Ctrl+Win+Left
+    DESKTOP_RIGHT = "desktop_right"       # Ctrl+Win+Right
+    MEDIA_PLAY_PAUSE = "media_play_pause"
+    MEDIA_NEXT = "media_next"
+    MEDIA_PREVIOUS = "media_previous"
+    VOLUME_MUTE = "volume_mute"
 
 
 # ---------- tracking output (camera.py / tracking.py produce) ----------
@@ -169,6 +186,7 @@ class ActionKind(Enum):
     WINDOW_MOVE_TO_OTHER_MONITOR = "window_move_to_other_monitor"
     WINDOW_CLOSE = "window_close"                   # normal close request only
     RELEASE_ALL = "release_all"                     # release every app-owned input
+    KEY_COMMAND = "key_command"                     # command (KeyCommand value); press+release, never held
 
 
 @dataclass(frozen=True)
@@ -181,6 +199,7 @@ class Action:
     steps: int = 0
     value: float = 0.0
     target: Optional[WindowTarget] = None
+    command: str = ""                       # KeyCommand value for KEY_COMMAND
 
 
 class Clock(Protocol):
@@ -225,3 +244,7 @@ class WindowQuery(Protocol):
 class VolumeControl(Protocol):
     def get_volume(self) -> float: ...                # 0.0..1.0 of current default render endpoint
     def set_volume(self, value: float) -> bool: ...
+
+
+class ProcessNames(Protocol):
+    def process_name(self, pid: int) -> Optional[str]: ...   # lower-case exe name, e.g. "chrome.exe"

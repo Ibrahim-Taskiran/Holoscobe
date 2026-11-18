@@ -14,16 +14,17 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APP_DIR_NAME = "Holoscobe"
 SETTINGS_FILE = "settings.json"
 
 BACKENDS = ("msmf", "dshow", "auto")
 HANDS = ("right", "left")
 DIRECTIONS = ("normal", "reversed")
-MODES = ("pointer", "scroll", "zoom", "volume", "windows")
+MODES = ("pointer", "scroll", "zoom", "volume", "windows", "commands")
 MONITOR_MODES = ("primary", "virtual_desktop", "monitor")
 POINTER_MODES = ("relative", "absolute")
+SWIPE_PROFILES = ("auto", "slides", "browser", "media", "desktops")
 PINCH_ON_DEFAULT, PINCH_OFF_DEFAULT = 0.33, 0.48
 # (on, off) pairs that were written as defaults by schema 1 (settings defaults and the dialog defaults)
 _V1_DEFAULT_PINCH = ((0.30, 0.45), (0.28, 0.42))
@@ -74,6 +75,14 @@ class Settings:
     monitor_mapping: MonitorMapping = field(default_factory=MonitorMapping)
     calibration: CalibrationBounds = field(default_factory=CalibrationBounds)
     start_with_windows: bool = False
+    # schema 3 (round 6)
+    swipe_profile: str = "auto"           # Komutlar mode swipe meaning; "auto" picks by foreground app
+    auto_pause_s: int = 0                 # pause after this many seconds without a usable hand; 0 = off
+    dwell_click: bool = False             # left click when the engaged cursor rests still for dwell_ms
+    dwell_ms: int = 1000
+    click_sound: bool = False             # short system sound on click/command
+    cursor_feedback: bool = True          # progress ring next to the cursor for hold gestures
+    onboarding_done: bool = False         # first-run tutorial finished or skipped
 
 
 # ---------- validation helpers ----------
@@ -135,6 +144,15 @@ def validate(data: Any) -> Settings:
     s.overlay_visible = _bool(d.get("overlay_visible"), s.overlay_visible)
     s.mascot_visible = _bool(d.get("mascot_visible"), s.mascot_visible)
     s.start_with_windows = _bool(d.get("start_with_windows"), False)
+    s.swipe_profile = _choice(d.get("swipe_profile"), SWIPE_PROFILES, s.swipe_profile)
+    s.auto_pause_s = _int(d.get("auto_pause_s"), s.auto_pause_s, 0, 3600)
+    if 0 < s.auto_pause_s < 10:
+        s.auto_pause_s = 10
+    s.dwell_click = _bool(d.get("dwell_click"), s.dwell_click)
+    s.dwell_ms = _int(d.get("dwell_ms"), s.dwell_ms, 400, 3000)
+    s.click_sound = _bool(d.get("click_sound"), s.click_sound)
+    s.cursor_feedback = _bool(d.get("cursor_feedback"), s.cursor_feedback)
+    s.onboarding_done = _bool(d.get("onboarding_done"), s.onboarding_done)
 
     m, md = s.monitor_mapping, _dict(d.get("monitor_mapping"))
     m.mode = _choice(md.get("mode"), MONITOR_MODES, m.mode)
@@ -168,7 +186,13 @@ def _migrate_v1(data: dict[str, Any]) -> dict[str, Any]:
 
 
 # Maps a stored schema_version to a function upgrading its dict to version + 1.
-MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1}
+def _migrate_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """Schema 2 -> 3: new fields only. An existing user has already used the app, so skip onboarding."""
+    data.setdefault("onboarding_done", True)
+    return data
+
+
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1, 2: _migrate_v2}
 
 
 def migrate(data: dict[str, Any]) -> dict[str, Any]:

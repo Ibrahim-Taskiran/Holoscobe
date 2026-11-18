@@ -117,3 +117,18 @@ Ortak sözleşme: `ControllerSnapshot` (controller.py) sonuna varsayılanlı ü�
 `pointer_engaged: bool = False`, `tracking_ok: bool = True`, `last_cancel: str = ""`.
 L ve M bu alanları `getattr(snap, "<ad>", <varsayılan>)` ile okur; J bitmeden de çalışır.
 Ek: Claude K ayrıca `src/handcontrol/tools/profile_compare.py` dosyasına yazabilir.
+
+## 6. tur — final sürüm (2026-11-18)
+
+Kullanıcı: projeyi araştırma ve muadillere göre final hâline getir. Yönetici Claude (Opus 5.5); kod yazmaz, yalnız
+`contracts.py` ve `config.py` şema 3 temelini kendisi yazdı. Bu turda Codex ve Antigravity yok.
+
+| Sahip | Yazabileceği yollar |
+|---|---|
+| Claude P (denetleyici) | `controller.py`, `gestures.py`, `pipeline.py`, `src/handcontrol/swipe.py` (yeni), `src/handcontrol/dwell.py` (yeni), `tests/controller/**`, `tests/gestures/**`, `tests/integration/**` |
+| Claude Q (Windows) | `src/handcontrol/windows/**`, `tests/windows/**`, `src/handcontrol/dryrun.py` |
+| Claude R (arayüz) | `src/handcontrol/ui/**`, `tests/ui/**` |
+| Claude S (uygulama + tanılama) | `app.py`, `tests/app/**`, `src/handcontrol/diagnostics.py` (yeni), `src/handcontrol/logsetup.py` (yeni), `src/handcontrol/telemetry.py` |
+
+Sözleşme (yönetici yazdı): `Mode.COMMANDS`, `KeyCommand`, `ActionKind.KEY_COMMAND`, `Action.command`, `ProcessNames`.
+Ayarlar şema 3: `swipe_profile`, `auto_pause_s`, `dwell_click`, `dwell_ms`, `click_sound`, `cursor_feedback`, `onboarding_done`.
