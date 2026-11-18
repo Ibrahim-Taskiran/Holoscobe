@@ -7,7 +7,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$pythonPath = Join-Path $projectRoot '.venv\Scripts\python.exe'
+# CI sets HOLOSCOBE_PYTHON to its interpreter; locally the project .venv is used.
+$pythonPath = if ($env:HOLOSCOBE_PYTHON) { (Get-Command $env:HOLOSCOBE_PYTHON).Source } else { Join-Path $projectRoot '.venv\Scripts\python.exe' }
 $manifestPath = Join-Path $projectRoot 'assets\model_manifest.json'
 $specPath = Join-Path $projectRoot 'packaging\holoscobe.spec'
 
@@ -37,7 +38,10 @@ Push-Location -LiteralPath $projectRoot
 try {
     & $pythonPath -B -c "import PyInstaller; assert PyInstaller.__version__ == '6.22.3', 'PyInstaller 6.22.3 is required'"
     if ($LASTEXITCODE -ne 0) { throw 'The pinned PyInstaller is unavailable. No packages will be installed.' }
+    # PyInstaller logs to stderr; do not let PowerShell turn that into a terminating error.
+    $ErrorActionPreference = 'Continue'
     & $pythonPath -B -m PyInstaller --noconfirm --distpath (Join-Path $projectRoot 'dist') --workpath (Join-Path $projectRoot 'build') $specPath
+    $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
     $exePath = Join-Path $projectRoot 'dist\Holoscobe\Holoscobe.exe'
     if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) { throw 'Expected executable was not produced.' }

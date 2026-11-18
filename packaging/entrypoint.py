@@ -36,7 +36,45 @@ def packaging_check(output: Path) -> int:
     return 0 if result["ok"] else 1
 
 
+def self_test(report: Path) -> int:
+    """Window-free, camera-free check: packaging check + model inference on a blank image.
+
+    The exe is windowed (no stdout), so the result line is written to `report`.
+    """
+    import tempfile
+
+    def finish(line: str, code: int) -> int:
+        report.write_text(line + "\n", encoding="utf-8")
+        if sys.stdout is not None:
+            print(line)
+        return code
+
+    check = Path(tempfile.gettempdir()) / "holoscobe_packaging_check.json"
+    if packaging_check(check) != 0:
+        return finish("SELF-TEST FAILED: " + check.read_text(encoding="utf-8"), 1)
+    try:
+        import mediapipe as mp
+        import numpy as np
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python import vision
+        from handcontrol.tracking import default_model_path
+
+        # Load from bytes: MediaPipe cannot open non-ASCII paths on Windows.
+        options = vision.HandLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_buffer=default_model_path().read_bytes()),
+            num_hands=1)
+        with vision.HandLandmarker.create_from_options(options) as landmarker:
+            frame = np.zeros((240, 320, 3), dtype=np.uint8)
+            result = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=frame))
+        hands = len(result.hand_landmarks)
+    except Exception:
+        return finish("SELF-TEST FAILED: " + traceback.format_exc(), 1)
+    return finish(f"OK self-test hands={hands} frozen={bool(getattr(sys, 'frozen', False))}", 0)
+
+
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
+        return self_test(Path(sys.argv[2]))
     if len(sys.argv) == 3 and sys.argv[1] == "--packaging-check":
         return packaging_check(Path(sys.argv[2]))
     from handcontrol.app import main as app_main

@@ -1,0 +1,37 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --require-hashes -r requirements.lock
+      # The hand model is not in git: download it from the manifest URL and verify SHA-256.
+      - name: Fetch hand model
+        shell: pwsh
+        run: |
+          $m = (Get-Content assets/model_manifest.json -Raw | ConvertFrom-Json).models[0]
+          New-Item -ItemType Directory -Force (Split-Path $m.local_path) | Out-Null
+          Invoke-WebRequest -Uri $m.url -OutFile $m.local_path
+          if ((Get-FileHash $m.local_path -Algorithm SHA256).Hash -ine $m.sha256) { throw 'Model SHA-256 mismatch' }
+      - name: Build release
+        shell: pwsh
+        env:
+          HOLOSCOBE_PYTHON: python
+        run: ./scripts/release.ps1
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $zip = Get-ChildItem dist/Holoscobe-*-win64.zip | Select-Object -First 1
+          gh release create "$env:GITHUB_REF_NAME" $zip.FullName "$($zip.FullName).sha256" --title "Holoscobe $env:GITHUB_REF_NAME" --generate-notes
