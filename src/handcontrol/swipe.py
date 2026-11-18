@@ -10,6 +10,13 @@ axis_ratio times the other one and a peak frame-to-frame speed >= min_peak_speed
 swipe nothing fires for cooldown_ms and the opposite direction stays locked for opposite_lock_ms:
 motion made inside those spans never counts as the start of a later swipe, so the return stroke
 of a swipe does not fire.
+
+Rest arm: the recognizer starts disarmed and is disarmed again by every fire and every reset (mode
+entry, tracking gap, pinch, ...). It re-arms only once the palm has been at rest (frame-to-frame
+speed below rest_speed_pu_s) continuously for rest_arm_ms; motion from before that rest never counts.
+Vertical swipes (Task View / Show Desktop) are stricter: travel >= vertical_min_travel_pu, and the
+motion must start from a rest of at least vertical_rest_ms, so lowering or raising the hand after
+any activity, or a hand entering the frame, does not fire.
 """
 from __future__ import annotations
 
@@ -47,6 +54,10 @@ class SwipeConfig:
     opposite_lock_ms: float = 700.0
     min_open_fingers: int = 3
     max_gap_ms: float = 150.0      # a longer pause between frames is a tracking gap: history dropped
+    rest_speed_pu_s: float = 0.8   # frame-to-frame palm speed below this is "at rest"
+    rest_arm_ms: float = 180.0     # continuous rest that arms the recognizer (start, after reset / fire)
+    vertical_min_travel_pu: float = 1.6
+    vertical_rest_ms: float = 150.0   # a vertical swipe must start from at least this much rest
 
 
 def open_palm(h: HandFeatures, min_open: int = 3) -> bool:
@@ -70,12 +81,21 @@ class SwipeRecognizer:
         self._hist: deque[tuple[float, float, float]] = deque()   # (t, x px, y px)
         self._hand: Optional[int] = None
         self._last_fire: Optional[tuple[float, SwipeDirection]] = None
+        self._prev: Optional[tuple[float, float, float]] = None   # last accepted sample (survives a fire)
+        self._rest_since: Optional[float] = None     # start of the current still run
+        self._armed_at: Optional[float] = None       # start of the rest that armed us; None = disarmed
+        self._run: Optional[tuple[float, float]] = None   # (start, end) of the still run motion last left
 
     def reset(self) -> None:
-        """Drop the motion history (tracking gap, ambiguity, pinch, mode change). The cooldown and
-        the opposite-direction lock survive: a reset never makes a return stroke fire."""
+        """Drop the motion history (tracking gap, ambiguity, pinch, mode change) and disarm: the
+        next swipe needs the palm at rest first. The cooldown and the opposite-direction lock
+        survive: a reset never makes a return stroke fire."""
         self._hist.clear()
         self._hand = None
+        self._prev = None
+        self._rest_since = None
+        self._armed_at = None
+        self._run = None
 
     def update(self, t_ms: float, hand: Optional[HandFeatures]) -> Optional[SwipeDirection]:
         """One frame of the dominant hand (None = not seen). Returns the swipe that fired, if any."""
@@ -93,6 +113,7 @@ class SwipeRecognizer:
         self._hand = hand.hand_id
         if self._hist and t_ms <= self._hist[-1][0]:
             return None   # duplicate / out-of-order frame
+        self._track_rest(t_ms, x, y, hand.palm_scale_px)
         self._hist.append((t_ms, x, y))
         while self._hist and t_ms - self._hist[0][0] > cfg.max_window_ms:
             self._hist.popleft()
@@ -100,9 +121,34 @@ class SwipeRecognizer:
         if hit is not None:
             self._last_fire = (t_ms, hit)
             self._hist.clear()
+            self._armed_at = None    # every fire needs a fresh rest before the next one
+            self._run = None
         return hit
 
+    def _track_rest(self, t: float, x: float, y: float, scale: float) -> None:
+        cfg = self.cfg
+        p, self._prev = self._prev, (t, x, y)
+        if p is None:
+            return
+        v = math.hypot(x - p[1], y - p[2]) / scale / ((t - p[0]) / 1000.0)
+        if v < cfg.rest_speed_pu_s:
+            if self._rest_since is None:
+                self._rest_since = p[0]
+            if self._armed_at is None and t - self._rest_since >= cfg.rest_arm_ms:
+                self._armed_at = self._rest_since
+        elif self._rest_since is not None:
+            self._run = (self._rest_since, p[0])   # motion onset at p[0]
+            self._rest_since = None
+
     def _blocked(self, start_t: float, d: SwipeDirection) -> bool:
+        if self._armed_at is None or start_t < self._armed_at:
+            return True
+        if d in (SwipeDirection.UP, SwipeDirection.DOWN):
+            # measured from inside the rest that the motion left: all motion since onset counts
+            run = self._run
+            if (run is None or run[1] - run[0] < self.cfg.vertical_rest_ms
+                    or not run[0] <= start_t <= run[1]):
+                return True
         lf = self._last_fire
         if lf is None:
             return False
@@ -132,6 +178,8 @@ class SwipeRecognizer:
             if peak < cfg.min_peak_speed_pu_s:
                 continue
             d = direction_of(dx, dy)
+            if abs(dy) > abs(dx) and major / scale < cfg.vertical_min_travel_pu:
+                continue
             if self._blocked(ta, d):
                 continue
             best = d

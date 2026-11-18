@@ -18,6 +18,7 @@ def _commands(exe: str = "chrome.exe") -> Rig:
     rig = Rig(process_names=Names(exe))
     rig.pipe.set_mode(Mode.COMMANDS)
     rig.activate([hand(OPEN, (220.0, 300.0))])
+    rig.run(250, [hand(OPEN, (220.0, 300.0))])   # open palm at rest arms the swipe recognizer
     rig.sink.clear()
     return rig
 

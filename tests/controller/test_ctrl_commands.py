@@ -31,6 +31,7 @@ def crig(profile: str = "auto", exe: Optional[str] = None, active: bool = True, 
     r.ctl.set_mode(Mode.COMMANDS)
     if active:
         r.settle(rh(PALM, "open"))
+        hold(r, PALM, 250, 33.4, "open")     # palm at rest arms the swipe recognizer
     r.sink.clear()
     return r
 
@@ -92,6 +93,53 @@ def test_return_stroke_does_not_fire():
     swipe(r, -1.8, start=end, ms=250)
     hold(r, PALM, 600, 33.4, "open")
     assert cmds(r) == ["next"]
+
+
+def _sway(r: Rig, at, ms: float, amp_pu: float = 0.05) -> None:
+    """Hand held up after a swipe but never still (frame-to-frame tremor ~1.5 pu/s)."""
+    for k in range(int(round(ms / 33.4))):
+        r.frame(rh((at[0] + (amp_pu * PU if k % 2 else 0.0), at[1]), "open"))
+
+
+def test_swipe_hold_then_lowering_the_hand_sends_one_command():
+    """Reported bug: browser swipe left, hand kept up ~0.7 s, then lowered -> Show Desktop fired."""
+    r = crig("browser")
+    end = swipe(r, +1.8)
+    _sway(r, end, 700)
+    low = swipe(r, 0.0, +2.0, ms=300, start=end)
+    assert cmds(r) == ["browser_forward"]
+    swipe(r, 0.0, -2.0, ms=300, start=low)            # raising it again
+    assert cmds(r) == ["browser_forward"]
+
+
+@pytest.mark.parametrize("dy", [-2.0, 2.0], ids=["raise", "drop"])
+def test_swipe_then_immediate_vertical_motion_sends_one_command(dy):
+    r = crig("browser")
+    end = swipe(r, +1.8)
+    swipe(r, 0.0, dy, ms=300, start=end)
+    assert cmds(r) == ["browser_forward"]
+
+
+def test_deliberate_down_swipe_from_rest_shows_the_desktop():
+    r = crig("browser")
+    swipe(r, 0.0, +1.8, ms=250)
+    assert cmds(r) == ["show_desktop"]
+
+
+def test_two_swipes_separated_by_rest_send_two_commands():
+    r = crig("slides")
+    end = swipe(r, +1.8)
+    hold(r, end, 600, 33.4, "open")
+    swipe(r, +1.8, start=end)
+    assert cmds(r) == ["next", "next"]
+
+
+def test_hand_entering_the_frame_moving_down_sends_nothing():
+    r = crig("browser")
+    for _ in range(5):
+        r.frame()                                      # no hand
+    swipe(r, 0.0, +2.0, ms=300, start=(PALM[0], PALM[1] - 120.0))
+    assert cmds(r) == []
 
 
 def test_slow_drift_sends_nothing():

@@ -12,6 +12,7 @@ from handcontrol.swipe import (SwipeDirection as D, SwipeRecognizer, direction_o
 
 S = 100.0   # palm scale px
 DT = 33.3
+REST = 250.0   # palm still long enough to arm the recognizer (rest_arm_ms = 180)
 
 
 def palm(x: float, y: float, *, hid: int = 1, extended: int = 4, quality: Quality = Quality.USABLE) -> HandFeatures:
@@ -61,41 +62,41 @@ def test_user_left_is_increasing_image_x_on_the_unmirrored_frame():
     assert direction_of(0, -50) is D.UP
     assert direction_of(0, +50) is D.DOWN
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(+1.6, 0.0, 200) == [D.LEFT]
 
 
-@pytest.mark.parametrize("dx,dy,want", [(-1.6, 0, D.RIGHT), (0, -1.6, D.UP), (0, 1.6, D.DOWN), (1.6, 0.3, D.LEFT)])
+@pytest.mark.parametrize("dx,dy,want", [(-1.6, 0, D.RIGHT), (0, -1.8, D.UP), (0, 1.8, D.DOWN), (1.6, 0.3, D.LEFT)])
 def test_each_direction_fires_once(dx, dy, want):
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(dx, dy, 250) == [want]
 
 
 def test_short_travel_does_not_fire():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(1.0, 0.0, 200) == []
 
 
 def test_slow_drift_does_not_fire():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(3.0, 0.0, 1500) == []      # 2 pu/s: never 1.2 pu inside 400 ms
 
 
 def test_travel_just_inside_the_window_fires_but_spread_over_longer_does_not():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(1.3, 0.0, 370) == [D.LEFT]
     w2 = Run()
-    w2.hold(100)
+    w2.hold(REST)
     assert w2.move(1.3, 0.0, 600) == []
 
 
 def test_diagonal_motion_fails_the_axis_ratio():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(1.5, 1.0, 250) == []       # 1.5 : 1.0 < 2 : 1
 
 
@@ -104,7 +105,7 @@ def test_closed_hand_does_not_swipe():
     w.hold(100, extended=2)
     assert w.move(1.6, 0.0, 200, extended=2) == []
     w2 = Run()
-    w2.hold(100, extended=3)
+    w2.hold(REST, extended=3)
     assert w2.move(1.6, 0.0, 200, extended=3) == [D.LEFT]   # 3 of 4 open is enough
 
 
@@ -116,7 +117,7 @@ def test_degraded_hand_does_not_swipe():
 
 def test_return_stroke_is_locked_and_cooldown_blocks_repeats():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(1.6, 0.0, 200) == [D.LEFT]
     assert w.move(-1.6, 0.0, 250) == []      # return stroke inside the 700 ms opposite lock
     w.hold(500)
@@ -125,7 +126,7 @@ def test_return_stroke_is_locked_and_cooldown_blocks_repeats():
 
 def test_same_direction_repeats_after_the_cooldown():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(1.6, 0.0, 200) == [D.LEFT]
     assert w.move(1.6, 0.0, 200) == []       # inside the 500 ms cooldown
     w.hold(400)
@@ -135,19 +136,19 @@ def test_same_direction_repeats_after_the_cooldown():
 
 def test_vertical_swipe_inside_the_cooldown_is_blocked():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(1.6, 0.0, 200) == [D.LEFT]
     assert w.move(0.0, -1.6, 200) == []
 
 
 def test_tracking_gap_resets_history():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     w.move(0.8, 0.0, 120)
     w.step(None)                               # hand lost for a frame
     assert w.move(0.8, 0.0, 120) == []
     w2 = Run()
-    w2.hold(100)
+    w2.hold(REST)
     w2.move(0.8, 0.0, 120)
     w2.t += 200.0                              # frame gap longer than max_gap_ms
     assert w2.move(0.8, 0.0, 120) == []
@@ -155,17 +156,124 @@ def test_tracking_gap_resets_history():
 
 def test_new_hand_id_resets_history():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     w.move(0.8, 0.0, 120)
     assert w.move(0.8, 0.0, 120, hid=2) == []
 
 
 def test_reset_keeps_the_opposite_lock():
     w = Run()
-    w.hold(100)
+    w.hold(REST)
     assert w.move(1.6, 0.0, 200) == [D.LEFT]
     w.r.reset()
+    w.hold(300)                                # re-armed, still inside the 700 ms opposite lock
     assert w.move(-1.6, 0.0, 250) == []
+
+
+# ---------------------------------------------------------------- rest arm / strict vertical
+
+
+def sway(w: Run, ms: float, amp_pu: float = 0.05) -> None:
+    """A raised hand that is held but never still: frame-to-frame tremor of ~1.5 pu/s."""
+    end, k = w.t + ms, 0
+    while w.t < end:
+        k += 1
+        w.x += (amp_pu if k % 2 else -amp_pu) * S
+        w.step(palm(w.x, w.y))
+
+
+def test_fresh_recognizer_needs_rest_before_the_first_swipe():
+    w = Run()
+    assert w.move(1.6, 0.0, 200) == []         # no rest seen yet
+    w.hold(REST)
+    assert w.move(1.6, 0.0, 200) == [D.LEFT]
+
+
+def test_reset_requires_rest_again():
+    w = Run()
+    w.hold(REST)
+    w.r.reset()
+    assert w.move(1.6, 0.0, 200) == []
+    w.hold(REST)
+    assert w.move(1.6, 0.0, 200) == [D.LEFT]
+
+
+def test_swipe_then_held_hand_then_drop_fires_once():
+    """The reported bug: swipe left, keep the hand up ~0.7 s, then lower it -> only the swipe."""
+    w = Run()
+    w.hold(REST)
+    assert w.move(1.6, 0.0, 200) == [D.LEFT]
+    sway(w, 700)
+    assert w.move(0.0, 2.0, 300) == []
+    assert w.move(0.0, -2.0, 300) == []        # and raising it again
+    assert [d for _, d in w.fired] == [D.LEFT]
+
+
+@pytest.mark.parametrize("dy", [-2.0, 2.0], ids=["raise", "drop"])
+def test_swipe_then_immediate_raise_or_drop_fires_once(dy):
+    w = Run()
+    w.hold(REST)
+    assert w.move(1.6, 0.0, 200) == [D.LEFT]
+    assert w.move(0.0, dy, 300) == []
+    assert w.move(0.0, -dy, 600) == []         # slower way back, still no rest
+    assert len(w.fired) == 1
+
+
+def test_any_fire_blocks_every_direction_until_rest():
+    w = Run()
+    w.hold(REST)
+    assert w.move(1.6, 0.0, 200) == [D.LEFT]
+    sway(w, 700)                               # past cooldown and opposite lock, never still
+    assert w.move(-1.6, 0.0, 200) == []
+    assert w.move(1.6, 0.0, 200) == []
+    w.hold(REST)
+    assert w.move(-1.6, 0.0, 200) == [D.RIGHT]
+
+
+def test_deliberate_vertical_swipe_from_rest_fires():
+    w = Run()
+    w.hold(REST)
+    assert w.move(0.0, 1.8, 250) == [D.DOWN]
+    assert swipe_command("browser", D.DOWN) is KeyCommand.SHOW_DESKTOP
+
+
+def test_vertical_needs_more_travel_than_horizontal():
+    w = Run()
+    w.hold(REST)
+    assert w.move(0.0, 1.4, 200) == []         # enough for a horizontal swipe, not a vertical one
+    w2 = Run()
+    w2.hold(REST)
+    assert w2.move(1.4, 0.0, 200) == [D.LEFT]
+
+
+def test_vertical_after_activity_without_a_fresh_rest_does_not_fire():
+    w = Run()
+    w.hold(REST)                               # armed
+    w.move(0.6, 0.0, 300)                      # some activity, no swipe
+    assert w.fired == []
+    assert w.move(0.0, 2.0, 300) == []         # drop straight after: not from rest
+    w.hold(REST)
+    assert w.move(0.0, 1.8, 250) == [D.DOWN]
+
+
+def test_two_left_swipes_separated_by_rest_fire_twice():
+    w = Run()
+    w.hold(REST)
+    assert w.move(1.6, 0.0, 200) == [D.LEFT]
+    w.hold(REST)
+    w.move(-1.6, 0.0, 600)                     # slow return, no swipe
+    w.hold(REST)
+    assert w.move(1.6, 0.0, 200) == [D.LEFT]
+    assert len(w.fired) == 2
+
+
+def test_hand_entering_the_frame_moving_down_does_not_fire():
+    w = Run()
+    w.step(None)
+    w.step(None)
+    assert w.move(0.0, 2.0, 300) == []
+    assert w.move(1.6, 0.0, 200) == []         # still never at rest
+    assert w.fired == []
 
 
 def test_open_palm_counts_index_to_little():
