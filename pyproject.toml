@@ -1,6 +1,6 @@
 [project]
 name = "handcontrol"
-version = "0.1.0"
+version = "1.0.0"
 requires-python = ">=3.11,<3.12"
 # Tested pins (Phase 0, 2026-11-12). Full transitive lock with hashes: requirements.lock.
 # opencv-contrib-python (not opencv-python): mediapipe requires it; both share the cv2/ folder.

@@ -1,43 +1,56 @@
-# Yönetici teslim durumu — 2026-11-12
+# Yönetici durumu: Holoscobe 1.0.0 (2026-11-18)
 
-Pipeline tamamlandı; `python -m handcontrol.app` girişi kamera/takip, pipeline, Qt köprüsü,
-tepsi, önizleme, ayarlar, kalibrasyon ve katmanları bağlıyor. Dry-run varsayılan; gerçek sink
-yalnız `--live` ve başarılı global kısayol kaydından sonra oluşturulur. Bağımsız watchdog,
-epoch eşleme, oturum/askıya alma/ekran değişimi iptali ve sıralı kapanış bağlıdır.
-Kamera hatası Paused'a döner; kurtarma kendiliğinden etkinleştirmez.
+Özet: Yazılım tamam ve otomatik testlerden geçti. **Gerçek kamera ve gerçek ellerle donanım kabulü bekliyor.** Bu belgedeki hiçbir "geçti" donanım kanıtı değildir.
 
-| Yol haritası | Yazılım/sahte veri doğrulaması | Gerçek kabul kapısı |
+Otomatik test: **1416 geçti, 3 manuel seçilmedi, 0 başarısız** (`QT_QPA_PLATFORM=offscreen`, sahte donanım).
+Komut: `$env:QT_QPA_PLATFORM="offscreen"; .venv\Scripts\python.exe -m pytest tests -q`.
+
+Varsayılan dry-run. Gerçek komutlar yalnız `--live` ve başarılı acil durdurma kısayolu kaydından sonra çalışır. Kamera hatası Paused'a döner; kurtarma kendiliğinden etkinleştirmez.
+
+## Özellik alanları
+
+| Alan | Otomatik durum | Donanım kabulü |
 |---|---|---|
-| Aşama 0 — Teknik temel | geçti: mevcut bağımlılıklar, yerel zincir | bekliyor: bu teslimde donanım yeniden ölçülmedi |
-| Aşama 1 — Kamera/on parmak | geçti: kamera, takip, özellik testleri | bekliyor: 400 sunum, beş dakika iki el, handedness |
-| Aşama 2 — Güvenlik/komutsuz jest | geçti: pipeline, watchdog, epoch, dry-run | bekliyor: gerçek clap, acil durdurma ve zaman sınırları |
-| Aşama 3 — İmleç/tıklama | geçti: eşleme/filtre/eylem testleri | bekliyor: gerçek imleç doğruluğu ve tıklama |
-| Aşama 4 — Kaydırma/zoom/ses | geçti: denetleyici ve sahte bağdaştırıcılar | bekliyor: tarayıcı zoom, aygıt değişimi, fiziksel tuşlar |
-| Aşama 5 — Pencere/iki monitör | geçti: hedef kimliği ve yerleşim testleri | bekliyor: iki yön, karma DPI, boşluklar, takılan hedef |
-| Aşama 6 — Sağlamlaştırma/dağıtım | bekliyor: paketleme, uzun süreli kullanım, çevrimdışı dağıtım kabulü | bekliyor |
-| Aşama 7 — İsteğe bağlı maskot | bekliyor: ürün kapsamı ve animasyon | bekliyor |
+| Kamera, takip, on parmak özellikleri | geçti (sahte veri) | bekliyor |
+| Güvenlik: acil durdurma, eski örnek reddi, watchdog | geçti | bekliyor |
+| İşaretçi: göreli imleç, debriyaj | geçti | bekliyor |
+| Tıklama: sol, çift, sağ, sürükle bırak | geçti | bekliyor |
+| Bekleyerek tıkla (`dwell.py`) | geçti | bekliyor |
+| Kaydırma, yakınlaştırma, ses | geçti | bekliyor |
+| Pencereler, yumruk küçült/geri aç, iki monitör | geçti | bekliyor |
+| Komutlar modu ve uygulama profilleri (`swipe.py`) | geçti | bekliyor |
+| Otomatik duraklatma | geçti | bekliyor |
+| İlk açılış eğitimi | geçti (offscreen UI) | bekliyor |
+| İmleç halkası, komut bildirimi, tık sesi | geçti (offscreen UI) | bekliyor |
+| Sekmeli ayarlar, ön ayarlar, içe/dışa aktarma | geçti | bekliyor |
+| Günlükleme, tanılama paketi, tek örnek koruması | geçti | bekliyor |
+| Paketleme: build, self-test, release zip, install/uninstall | betikler yazıldı, CI tanımlı | bekliyor |
+| Lisans | karar yok | sahip karar verecek |
 
-Başarısız otomatik test: **0**. Tam takım: **665 toplanan, 662 geçen, 3 manuel seçilmeyen**;
-`QT_QPA_PLATFORM=offscreen`, pytest geçici/önbellek dizinleri `tests/.tmp_full_manager` ve
-`tests/.cache_manager`. Komut: `.venv\Scripts\python.exe -m pytest -q`.
-İlk kapsam çalıştırması sandbox geçici dizin erişimi nedeniyle hata verdi; aynı kapsam izinli
-ortamda 644/644, UI 10/10 geçti. Yeni uygulama testleri 8/8 geçti. Eşikler/test beklentileri
-zayıflatılmadı. Gerçek kamera açılmadı, pencere gösterilmedi ve OS girdisi gönderilmedi.
+Bilinen sınırlar: tek RGB kamera, yönetici yetkili uygulamalar kapsam dışı, exe imzasız (SmartScreen uyarısı olabilir).
 
-İlk commit: `f454a82 feat(pipeline): complete headless gesture controller integration`.
-İkinci teslim commit'i app, uygulama testleri, kamera-hatası Paused politikası, menü seçim
-alanı/imleç örtüşmesi için küçük UI düzeltmesi ve bu belgeleri içerir.
+## Elle test listesi (gerçek ellerle, sen yap)
 
-Elle yapılacaklar: README'deki dry-run komutuyla başlatıp tepsi, ayarlar, kalibrasyon ve
-kamera yaşam döngüsünü kontrol edin. Ardından `finger_test`, `stability_test`, `clap_test`,
-`profile_compare` araçlarını çalıştırın; raporları `Docs/reports/hw_*` altında saklayın.
-Windows canlı kabul adımları `windows_manual_tests.md` içindeki 12 bekleyen senaryodur.
-Canlı çalıştırma: `.venv\Scripts\python.exe -m handcontrol.app --live` (önce PYTHONPATH=src).
-Varsayılan F12 kaydı OS/debugger nedeniyle reddedilebilir; dry-run ayarlarından serbest
-bir kombinasyon atayın ve live'ı yeniden başlatın.
+Hazırlık: dahili kamera, dirsek masada, 40–70 cm, yüz önden aydınlık. Önce `--live` olmadan dene, sonra `--live`.
 
-Sınırlar: donanım kabulü tamamlanmadı; UI'deki smoothing/detection/tracking eşiği ve
-Windows başlangıç/isteğe bağlı maskot seçenekleri bu bağlamada yeni işletim sistemi
-özelliğine dönüştürülmedi. Kalıcı config sözleşmesindeki alanlar kaydedilir ve pipeline'a
-uygulanır. `.claude/` ve `CLAUDE.md` kullanıcıya ait mevcut untracked dosyalar olarak bırakıldı.
-Paket kurulmadı, ücretli araç/API/bulut servisi kullanılmadı.
+- [ ] **Eğitim:** Temiz ayarla ilk açılış. `%LOCALAPPDATA%\Holoscobe` altındaki ayar dosyasını yedekleyip sil. 8 adımı tamamla; Atla'yı da dene. Yeniden açınca eğitim çıkmamalı.
+- [ ] **İmleç halkası:** Pinch'i ya da sabit imleci tut; halka dolmalı. Ayarlardan kapatınca görünmemeli.
+- [ ] **Komutlar modu, PowerPoint:** Sunumu başlat. Sola kaydır = sonraki slayt, sağa = önceki. Kısa pinch = sonraki.
+- [ ] **Komutlar modu, Chrome:** Sola = ileri, sağa = geri. Dönüş hareketi ters komut üretmemeli.
+- [ ] **Komutlar modu, Spotify:** Sola = sonraki parça, sağa = önceki. Kısa pinch = oynat/duraklat.
+- [ ] **Komutlar modu, diğer uygulama (ör. Not Defteri):** Sola/sağa = masaüstü değiştir. Yukarı = Görev görünümü, aşağı = Masaüstünü göster.
+- [ ] **Komut bildirimi:** Her komutta doğru metin görünmeli. Tık sesini aç, duy.
+- [ ] **Bekleyerek tıkla:** Ayarlardan aç. İmleci 1 sn sabit tut; sol tık gelmeli.
+- [ ] **Otomatik duraklatma:** Süre seç, eli kadrajdan çıkar; kontrol duraklamalı.
+- [ ] **Tanılama paketi:** Ayarlar > Gelişmiş > Tanılama raporu oluştur. Masaüstünde `Holoscobe-tanilama-*.zip` olmalı; içinde günlük olmalı, görüntü olmamalı.
+- [ ] **İkinci örnek:** Çalışırken ikinci kez başlat. "Holoscobe zaten çalışıyor" demeli ve kapanmalı.
+- [ ] **install.ps1:** `scripts\release.ps1` ile zip üret, aç, `install.ps1 -Desktop` çalıştır. Kısayoldan aç. `uninstall.ps1` sonrası klasör ve kısayollar gitmeli.
+- [ ] **Eski kabul araçları:** `finger_test`, `stability_test`, `clap_test`, `profile_compare` (sonuçlar `Docs/reports/hw_*`).
+- [ ] **Windows senaryoları:** `windows_manual_tests.md` içindeki bekleyen senaryolar (tarayıcı zoom, iki monitör, karma DPI, acil durdurma).
+
+Bir madde başarısız olursa tanılama zip'ini ve ne yaptığını yaz.
+
+## Sonraki karar
+
+- Proje lisansı (sahip).
+- Exe imzalama (ücretsiz yol yok; şimdilik SmartScreen notu yeterli).
