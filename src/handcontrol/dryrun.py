@@ -7,7 +7,8 @@ from __future__ import annotations
 import threading
 from typing import Optional, Sequence
 
-from handcontrol.contracts import Action, ActionKind, Monitor, Rect, WindowTarget
+from handcontrol.contracts import Action, ActionKind, KeyCommand, Monitor, Rect, WindowTarget
+from handcontrol.windows.commands import COMMAND_KEYS_TR, COMMAND_LABELS_TR
 
 
 def describe_action(action: Action) -> str:
@@ -50,6 +51,12 @@ def describe_action(action: Action) -> str:
         return f"Pencereyi diğer ekrana taşı{tgt}"
     if k is ActionKind.WINDOW_CLOSE:
         return f"Pencereyi kapat (normal kapatma isteği){tgt}"
+    if k is ActionKind.KEY_COMMAND:
+        try:
+            cmd = KeyCommand(action.command)
+        except ValueError:
+            return f"Komut: bilinmeyen ({action.command or 'boş'})"
+        return f"Komut: {COMMAND_LABELS_TR[cmd]} ({COMMAND_KEYS_TR[cmd]})"
     if k is ActionKind.RELEASE_ALL:
         return "Tüm girdileri bırak"
     return k.value

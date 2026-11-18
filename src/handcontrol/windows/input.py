@@ -15,6 +15,11 @@ MOVE, LEFTDOWN, LEFTUP, WHEEL = 0x1, 0x2, 0x4, 0x800
 RIGHTDOWN, RIGHTUP = 0x8, 0x10
 VIRTUALDESK, ABSOLUTE, KEYUP = 0x4000, 0x8000, 0x2
 VK_CONTROL = 0x11
+KEYEXTENDED = 0x1
+# Keys that need KEYEVENTF_EXTENDEDKEY: arrows, Win keys, media and volume keys.
+EXTENDED_VKS = frozenset({0x25, 0x26, 0x27, 0x28, 0x5B, 0x5C, 0xAD, 0xAE, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3})
+# Win keys are not covered by modifiers_down(); a held Win key would corrupt a chord.
+WIN_VKS = (0x5B, 0x5C)
 
 
 def mouse(flags: int, x: int = 0, y: int = 0, data: int = 0) -> INPUT:
@@ -25,7 +30,8 @@ def mouse(flags: int, x: int = 0, y: int = 0, data: int = 0) -> INPUT:
 
 def key(vk: int, up: bool = False) -> INPUT:
     event = INPUT(type=1)
-    event.ki = KEYBDINPUT(vk, 0, KEYUP if up else 0, 0, 0)
+    flags = (KEYUP if up else 0) | (KEYEXTENDED if vk in EXTENDED_VKS else 0)
+    event.ki = KEYBDINPUT(vk, 0, flags, 0, 0)
     return event
 
 
@@ -156,6 +162,51 @@ class WindowsInput:
             finally:
                 released = self._release(token)
             return success and released
+
+    def _send_batch(self, events: list[INPUT]) -> int:
+        """Send events in one SendInput call; return how many were accepted (0 on failure)."""
+        array = (INPUT * len(events))(*events)
+        try:
+            count = int(self.api.SendInput(len(events), array, C.sizeof(INPUT)))
+            if count != len(events):
+                self._report(f"SendInput accepted {count}/{len(events)} key events (error={last_error()})")
+            return max(0, count)
+        except Exception as exc:
+            self._report(f"SendInput failed: {exc}")
+            return 0
+
+    def key_combo(self, vks: tuple[int, ...] | list[int]) -> bool:
+        """Press vks in order, release in reverse, as one SendInput batch.
+
+        Refused (False, nothing sent) when empty, when a Shift/Ctrl/Alt/Win key is already
+        physically down (same semantics as zoom: never merge with a user-held modifier),
+        or when the ledger is non-empty (app-held mouse button or pending cleanup).
+        On partial acceptance every key left down is recorded in the ledger and released
+        immediately; failed releases stay in the ledger so release_all() retries them.
+        """
+        vks = tuple(int(v) for v in vks)
+        if not vks or len(set(vks)) != len(vks) or any(not 0 < v < 0xFF for v in vks):
+            return False
+        with self._lock:
+            if self._ledger or self.modifiers_down() or any(
+                    self.api.GetAsyncKeyState(vk) & 0x8000 for vk in WIN_VKS):
+                self._report("Key command skipped: a modifier or app-held input is already down")
+                return False
+            events = [key(v) for v in vks] + [key(v, up=True) for v in reversed(vks)]
+            sent = self._send_batch(events)
+            if sent == len(events):
+                return True
+            downs_sent = vks[:min(sent, len(vks))]
+            ups_sent = set(tuple(reversed(vks))[:max(0, sent - len(vks))])
+            for vk in downs_sent:
+                if vk not in ups_sent:
+                    self._ledger.append(("key", vk))
+            for token in reversed(tuple(self._ledger)):
+                try:
+                    self._release(token)
+                except Exception:
+                    log.exception("Key combo cleanup failed")
+            return False
 
     def release_all(self) -> None:
         """Never raise; retain failed releases so the next cleanup can retry them."""
