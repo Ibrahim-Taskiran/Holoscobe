@@ -84,7 +84,7 @@ def desktop(tip: tuple[float, float]) -> tuple[int, int]:
 class Rig:
     def __init__(self, cfg: Optional[ControllerConfig] = None, monitors: Optional[Sequence[Monitor]] = None,
                  windows: Optional[FakeWindows] = None, volume: float = 0.5, smoother=None,
-                 camera: bool = True, active: bool = True, cursor_source=None) -> None:
+                 camera: bool = True, active: bool = True, cursor_source=None, process_names=None) -> None:
         self.clock = FakeClock()
         self.sink = DryRunSink()
         self.displays = FakeDisplays(monitors)
@@ -94,7 +94,8 @@ class Rig:
         self.volume = FakeVolume(volume)
         self.smoother = smoother if smoother is not None else Identity()
         self.ctl = Controller(self.clock, self.sink, self.displays, self.windows, self.volume,
-                              cfg or tcfg(), smoother=self.smoother, cursor_source=cursor_source)
+                              cfg or tcfg(), smoother=self.smoother, cursor_source=cursor_source,
+                              process_names=process_names)
         if camera:
             self.ctl.set_camera_state(CameraState.RUNNING)
         if active:

@@ -30,8 +30,10 @@ def deg(palm, **kw):
 
 def test_new_defaults_and_snapshot_fields_are_appended_with_defaults():
     assert ControllerConfig().clutch_release_ms == 200.0
-    tail = [(f.name, f.default) for f in dataclasses.fields(ControllerSnapshot)[-3:]]
-    assert tail == [("pointer_engaged", False), ("tracking_ok", True), ("last_cancel", "")]
+    tail = [(f.name, f.default) for f in dataclasses.fields(ControllerSnapshot)[-8:]]
+    assert tail == [("pointer_engaged", False), ("tracking_ok", True), ("last_cancel", ""),
+                    ("hold_kind", ""), ("hold_progress", 0.0), ("last_command", ""), ("command_seq", 0),
+                    ("swipe_profile_active", "")]
 
 
 @FPS

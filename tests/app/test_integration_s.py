@@ -45,13 +45,10 @@ def make(qt, tmp_path, settings=None, **kw) -> Runtime:
 # ---- mapping
 
 def test_controller_config_gets_schema3_fields() -> None:
-    cfg = extend_controller_config(ControllerConfig(), validate({'auto_pause_s': 5, 'dwell_click': True,
+    cfg = extend_controller_config(ControllerConfig(), validate({'auto_pause_s': 15, 'dwell_click': True,
         'dwell_ms': 800, 'swipe_profile': 'media'}))
-    names = set(ControllerConfig.__dataclass_fields__)
-    if 'auto_pause_ms' in names:
-        assert cfg.auto_pause_ms == 5000.0
-    if 'dwell_ms' in names:
-        assert cfg.dwell_ms == 800.0 and cfg.dwell_click is True and cfg.swipe_profile == 'media'
+    assert cfg.auto_pause_ms == 15000.0
+    assert cfg.dwell_ms == 800.0 and cfg.dwell_click is True and cfg.swipe_profile == 'media'
 
 
 def test_dialog_data_carries_known_schema3_fields() -> None:

@@ -48,6 +48,7 @@ from handcontrol.contracts import (
     GestureKind,
     Handedness,
     Mode,
+    ProcessNames,
     VolumeControl,
     WindowQuery,
 )
@@ -140,9 +141,11 @@ class Pipeline:
         *,
         smoother: Optional[Any] = None,
         cursor_source: Optional[Callable[[], Optional[tuple[int, int]]]] = None,
+        process_names: Optional[ProcessNames] = None,
     ) -> None:
         """cursor_source: optional reader of the real OS cursor (physical px), used by the relative
-        pointer to start and re-engage from where the cursor really is."""
+        pointer to start and re-engage from where the cursor really is.
+        process_names: optional foreground process lookup for the COMMANDS mode "auto" profile."""
         self.settings = settings if settings is not None else Settings()
         self._clock = clock
         self._lock = threading.RLock()          # serializes process()/reset() (tracking thread)
@@ -158,7 +161,8 @@ class Pipeline:
             smoother = OneEuroPointerSmoother(float(box.right - box.left) if box else 1920.0)
         # Controller wraps `sink` in safety.GuardedSink itself: do not wrap it here.
         self.controller = Controller(clock, sink, displays, windows, volume, controller_config(self.settings),
-                                     smoother=smoother, cursor_source=cursor_source)
+                                     smoother=smoother, cursor_source=cursor_source,
+                                     process_names=process_names)
         self.last_features: Optional[FrameFeatures] = None
         self.last_events: tuple[GestureEvent, ...] = ()
         self.gesture_resets = 0

@@ -30,13 +30,18 @@ from handcontrol.contracts import (
     GestureKind,
     HandFeatures,
     Handedness,
+    KeyCommand,
     Mode,
     Monitor,
+    ProcessNames,
     Quality,
     VolumeControl,
     WindowQuery,
     WindowTarget,
 )
+from handcontrol.dwell import DwellClicker
+from handcontrol.swipe import (COMMAND_LABELS, PROFILES, SwipeRecognizer, pinch_command, resolve_profile,
+                               swipe_command)
 from handcontrol.mapping import (CalibrationRect, map_normalized, normalize_camera_point, project_to_monitors,
                                  threshold_physical_px)
 from handcontrol.safety import GuardedSink, Watchdog
@@ -148,6 +153,11 @@ class ControllerConfig:
     # clutches; unknown or mixed finger states keep the pointer engaged
     clutch_release_ms: float = 200.0
     frame_margin: float = 0.03             # palm center this close to the frame edge = out of frame (clutch)
+    # schema 3 (round 6 features); the app maps config.Settings onto these
+    swipe_profile: str = "auto"            # COMMANDS mode: "auto" (by foreground process) or a swipe.PROFILES item
+    auto_pause_ms: float = 0.0             # ACTIVE without any usable hand this long -> paused; 0 = off
+    dwell_click: bool = False              # POINTER: the engaged cursor resting still dwell_ms left-clicks
+    dwell_ms: float = 1000.0
 
 
 class MenuKind(Enum):
@@ -197,6 +207,12 @@ class ControllerSnapshot:
     pointer_engaged: bool = False  # POINTER mode, relative pointer: the cursor follows the hand
     tracking_ok: bool = True       # dominant hand usable in the last frame (or inside the short-gap tolerance)
     last_cancel: str = ""          # Turkish reason of the last cancelled/refused click, drag or right click
+    # hold feedback: "right_click" | "grab" | "fist" | "dwell" | "window_drag" | "" and its 0..1 progress
+    hold_kind: str = ""
+    hold_progress: float = 0.0
+    last_command: str = ""         # KeyCommand value of the last dispatched command
+    command_seq: int = 0           # +1 per dispatched command (toast repeats of the same command)
+    swipe_profile_active: str = "" # COMMANDS mode: concrete profile in use ("slides", ...), else ""
 
 
 # ---------------------------------------------------------------- smoothing / rate
@@ -273,6 +289,7 @@ class _EngKind(Enum):
     RIGHT_TAP = "right_tap"      # thumb+middle pinch: right click candidate
     GRAB = "grab"                # thumb with index and middle tips together: drag being confirmed
     BLOCKED = "blocked"      # cancelled or refused; waits for the pinch release
+    CMD_PINCH = "cmd_pinch"  # COMMANDS mode: a short dominant pinch sends the profile's pinch command
 
 
 _MOUSE_KINDS = (_EngKind.MOUSE_PENDING, _EngKind.MOUSE_TAP, _EngKind.MOUSE_DRAG, _EngKind.RIGHT_TAP,
@@ -294,7 +311,11 @@ _ENG_TEXT = {
     _EngKind.WIN_PINCH: "Pencere seçiliyor",
     _EngKind.DRAG: "Pencere taşınıyor",
     _EngKind.BLOCKED: "Bırakmanız bekleniyor",
+    _EngKind.CMD_PINCH: "Komut bekleniyor",
 }
+_HOLD_SHOW_MS = 150.0            # hold progress (long press right click, dwell) shows after this
+_FIST_HOLD_MS = 350.0            # _fist_frame: closed this long fires
+AUTO_PAUSE_REASON = "Otomatik duraklatıldı: el görülmedi"
 
 
 @dataclass
@@ -361,6 +382,7 @@ _MODE_LABELS = {
     Mode.ZOOM: "Yakınlaştırma",
     Mode.VOLUME: "Ses",
     Mode.WINDOWS: "Pencereler",
+    Mode.COMMANDS: "Komutlar",
 }
 _WINDOW_ACTIONS = {
     "minimize": ActionKind.WINDOW_MINIMIZE,
@@ -455,10 +477,13 @@ class Controller:
         config: ControllerConfig = ControllerConfig(),
         smoother: Optional[PointSmoother] = None,
         cursor_source: Optional[Callable[[], Optional[tuple[int, int]]]] = None,
+        process_names: Optional[ProcessNames] = None,
     ) -> None:
         """cursor_source (optional): returns the real OS cursor position (physical px) or None.
         Relative mode starts from it and re-syncs to it whenever the pointer re-engages; without it
-        the pointer starts at the centre of the primary monitor."""
+        the pointer starts at the centre of the primary monitor.
+        process_names (optional): foreground process lookup for the COMMANDS "auto" profile; without
+        it "auto" resolves to the "desktops" profile."""
         self._lock = threading.RLock()
         self._cfg = config
         self._clock = clock
@@ -522,6 +547,16 @@ class Controller:
         self._dom_ok_id: Optional[int] = None         # ... and its hand id
         self._tracking_ok = True
         self._last_cancel = ""
+        # COMMANDS mode, dwell click, auto pause
+        self._process_names = process_names
+        self._swipe = SwipeRecognizer()
+        self._swipe_fed = False                # set when this frame fed the swipe recognizer
+        self._dwell = DwellClicker()
+        self._dwell_fed = False                # set when this frame fed the dwell clicker
+        self._last_command = ""
+        self._command_seq = 0
+        self._profile_active = ""
+        self._hand_seen_ms: Optional[float] = None    # clock ms of the last frame with a usable hand
 
     # ------------------------------------------------------------ public API
 
@@ -540,6 +575,7 @@ class Controller:
         with self._lock:
             self._in_call += 1
             self._rel_used = False
+            self._swipe_fed = self._dwell_fed = False
             try:
                 self._frame(frame, tuple(events))
             except Exception as exc:  # never let a bug keep input owned
@@ -547,6 +583,10 @@ class Controller:
             finally:
                 if not self._rel_used:   # any frame without relative motion is a clutch: re-anchor later
                     self._rel.reset()
+                if not self._swipe_fed:  # gap, ambiguity, pinch, menu, clap candidate, other mode
+                    self._swipe.reset()
+                if not self._dwell_fed:  # disengaged, pinched, gap, menu, other mode
+                    self._dwell.cancel()
                 self._in_call -= 1
         self._notify()
 
@@ -557,7 +597,7 @@ class Controller:
             try:
                 now = self._clock.now_ms()
                 self.watchdog.check(now)
-                if self._state is ControlState.ACTIVE:
+                if self._state is ControlState.ACTIVE and not self._auto_pause_check(now):
                     self._expire_menu(now)
             finally:
                 self._in_call -= 1
@@ -683,6 +723,7 @@ class Controller:
     def snapshot(self) -> ControllerSnapshot:
         with self._lock:
             now = self._clock.now_ms()
+            hold_kind, hold_progress = self._hold(now)
             return ControllerSnapshot(
                 state=self._state,
                 camera_state=self._camera,
@@ -701,7 +742,38 @@ class Controller:
                 pointer_engaged=self._engaged and self._mode is Mode.POINTER and self._cfg.pointer_relative,
                 tracking_ok=self._tracking_ok,
                 last_cancel=self._last_cancel,
+                hold_kind=hold_kind,
+                hold_progress=hold_progress,
+                last_command=self._last_command,
+                command_seq=self._command_seq,
+                swipe_profile_active=self._profile_active if self._mode is Mode.COMMANDS else "",
             )
+
+    def _hold(self, now: float) -> tuple[str, float]:
+        """(hold kind, 0..1 progress) of the hold running now, for UI feedback."""
+        if self._state is not ControlState.ACTIVE or self._menu is not None:
+            return "", 0.0
+        cfg = self._cfg
+
+        def frac(elapsed: float, total: float) -> float:
+            return _clamp(elapsed / total, 0.0, 1.0) if total > 0 else 1.0
+
+        e = self._eng
+        if e is not None:
+            if e.kind is _EngKind.MOUSE_TAP:
+                held = now - e.t0
+                return ("right_click", frac(held, cfg.right_long_press_ms)) if held >= _HOLD_SHOW_MS else ("", 0.0)
+            if e.kind is _EngKind.GRAB and e.grab_since is not None:
+                return "grab", frac(now - e.grab_since, cfg.grab_confirm_ms)
+            if e.kind is _EngKind.WIN_PINCH:
+                return "window_drag", frac(now - e.t0, cfg.drag_hold_ms)
+            return "", 0.0
+        c = self._fist_candidate
+        if c is not None:
+            return "fist", frac(now - c[2], _FIST_HOLD_MS)
+        if cfg.dwell_click and self._mode is Mode.POINTER and self._dwell.held_ms(now) >= _HOLD_SHOW_MS:
+            return "dwell", self._dwell.progress(now, cfg.dwell_ms)
+        return "", 0.0
 
     # ------------------------------------------------------------ state transitions
 
@@ -741,6 +813,21 @@ class Controller:
         self._neutral_since = None
         self._clap_pending = False
         self._smoother.reset()
+        self._swipe.reset()
+        self._dwell.cancel()
+
+    def _auto_pause_check(self, now: float) -> bool:
+        """ACTIVE without any usable hand for auto_pause_ms -> Paused. True when it paused."""
+        ms = self._cfg.auto_pause_ms
+        if ms <= 0 or self._state is not ControlState.ACTIVE:
+            return False
+        if self._hand_seen_ms is None or now < self._hand_seen_ms:
+            self._hand_seen_ms = now
+            return False
+        if now - self._hand_seen_ms < ms:
+            return False
+        self._do_pause(AUTO_PAUSE_REASON)
+        return True
 
     def _hard_reset(self, reason: str) -> None:
         """Pause-class reset: new epoch, drop everything, always RELEASE_ALL."""
@@ -761,6 +848,7 @@ class Controller:
         self._state = ControlState.ACTIVE
         self._reason = reason
         self._notice = ""
+        self._hand_seen_ms = self._clock.now_ms()
 
     def _enter_fault(self, reason: str, camera: bool = False) -> None:
         self._state = ControlState.FAULT
@@ -779,6 +867,10 @@ class Controller:
         self._need_neutral = True
         self._neutral_since = None
         self._smoother.reset()
+        self._swipe.reset()
+        self._dwell.cancel()
+        if mode is Mode.COMMANDS:
+            self._profile_active = self._command_profile()
         self._reason = f"Kip: {_MODE_LABELS[mode]}"
 
     def _note_cancel(self, e: Optional[_Eng], why: str) -> None:
@@ -809,6 +901,7 @@ class Controller:
         self._engaged = False
         self._clutch_since = None
         self._release_since = None
+        self._dwell.cancel()
 
     # ------------------------------------------------------------ relative pointer
 
@@ -1022,9 +1115,10 @@ class Controller:
     # ------------------------------------------------------------ dispatch helpers
 
     def _dispatch(self, kind: ActionKind, capture_ms: float, *, x: Optional[int] = None, y: Optional[int] = None,
-                  steps: int = 0, value: float = 0.0, target: Optional[WindowTarget] = None) -> bool:
+                  steps: int = 0, value: float = 0.0, target: Optional[WindowTarget] = None,
+                  command: str = "") -> bool:
         ok = self._guard.dispatch(Action(kind, self._epoch, capture_ms, x=x, y=y, steps=steps, value=value,
-                                         target=target))
+                                         target=target, command=command))
         if ok:
             if kind is ActionKind.WINDOW_MINIMIZE and target is not None:
                 self._minimized_history = [t for t in self._minimized_history if t != target]
@@ -1104,9 +1198,13 @@ class Controller:
 
         if self._state is not ControlState.ACTIVE:
             return
+        stale = now - frame.capture_ms > self._cfg.stale_ms
+        if not stale and any(h.quality is Quality.USABLE for h in frame.hands):
+            self._hand_seen_ms = now
+        elif self._auto_pause_check(now):
+            return
         self._expire_menu(now)
 
-        stale = now - frame.capture_ms > self._cfg.stale_ms
         certain = not stale and not frame.identity_ambiguous
         if certain and self._pointer_geometry_frame(frame, events, now):
             return
@@ -1221,6 +1319,10 @@ class Controller:
             self._open_mode_menu(dom, palm_uv, now)
             return
 
+        if self._mode is Mode.COMMANDS:   # swipes and short pinches only; the pointer never moves
+            self._commands_frame(frame, events, dom)
+            return
+
         if self._need_neutral or dom is None or pos is None:
             if self._need_neutral:
                 self._swallowed(events, dom, mid_ev, "takip yeni döndü, eli bir an açık tutun")
@@ -1255,6 +1357,7 @@ class Controller:
             if self._engaged and dom.hand_id not in self._pinched:
                 if self._release_since is None:
                     self._rel_move_cursor(frame.capture_ms)
+                    self._dwell_step(frame.capture_ms)
                 else:   # release candidate: frozen, but keep the reference current (no replay on resume)
                     self._rel_delta(frame.capture_ms)
             return
@@ -1415,7 +1518,7 @@ class Controller:
             self._fist_candidate = (hand.hand_id, hand.handedness, frame.capture_ms, target)
             self._notice = 'Sağ yumruk: küçültmek için tut' if hand.handedness is Handedness.RIGHT else 'Sol yumruk: geri açmak için tut'
             return True
-        if frame.capture_ms - candidate[2] < 350:
+        if frame.capture_ms - candidate[2] < _FIST_HOLD_MS:
             return True
         self._fist_ready.discard(hand.hand_id)
         self._fist_candidate = None
@@ -1462,6 +1565,80 @@ class Controller:
     def _block(self, e: _Eng, notice: str) -> None:
         e.kind = _EngKind.BLOCKED
         self._notice = notice
+
+    # ------------------------------------------------------------ COMMANDS mode / dwell click
+
+    def _command_profile(self) -> str:
+        """Concrete swipe profile: the configured one, or for "auto" the foreground process's."""
+        setting = self._cfg.swipe_profile
+        name: Optional[str] = None
+        if setting not in PROFILES and self._process_names is not None:
+            try:
+                fg = self._windows.foreground_window()
+                if fg is not None:
+                    name = self._process_names.process_name(fg.pid)
+            except Exception:
+                name = None
+        return resolve_profile(setting, name)
+
+    def _send_command(self, cmd: KeyCommand, t: float, profile: str) -> None:
+        self._profile_active = profile
+        if self._dispatch(ActionKind.KEY_COMMAND, t, command=cmd.value):
+            self._last_command = cmd.value
+            self._command_seq += 1
+            self._notice = f"Komut: {COMMAND_LABELS.get(cmd, cmd.value)}"
+        else:
+            self._notice = "Komut gönderilemedi"
+
+    def _commands_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...],
+                        dom: Optional[HandFeatures]) -> None:
+        """COMMANDS mode, ACTIVE, no menu / engagement / clap candidate: feed the swipe recognizer
+        with the open dominant hand; a dominant PINCH_START opens a short-pinch command candidate."""
+        if dom is None or self._need_neutral:
+            return
+        for ev in events:
+            if ev.kind is GestureKind.PINCH_START and ev.hand_id == dom.hand_id:
+                self._eng = _Eng(_EngKind.CMD_PINCH, dom.hand_id, ev.t_ms, palm0=dom.palm_center_px)
+                return
+        if dom.hand_id in self._pinched:
+            return
+        self._swipe_fed = True
+        d = self._swipe.update(frame.capture_ms, dom)
+        if d is not None:
+            profile = self._command_profile()
+            self._send_command(swipe_command(profile, d), frame.capture_ms, profile)
+
+    def _cmd_pinch_frame(self, e: _Eng, ends: list[GestureEvent], hand: Optional[HandFeatures],
+                         t: float) -> None:
+        cfg = self._cfg
+        moved = (hand is not None and e.palm0 is not None and hand.palm_scale_px > 0
+                 and math.dist(hand.palm_center_px, e.palm0) / hand.palm_scale_px > cfg.mouse_drag_move_palm)
+        if ends:
+            self._eng = None
+            if moved:
+                self._notice = "Komut iptal: el fazla hareket etti"
+            elif ends[0].t_ms - e.t0 > cfg.click_max_ms:
+                self._notice = "Komut iptal: uzun tutuldu"
+            else:
+                profile = self._command_profile()
+                self._send_command(pinch_command(profile), t, profile)
+        elif moved:
+            self._block(e, "Komut iptal: el fazla hareket etti")
+        elif t - e.t0 > cfg.click_max_ms:
+            self._block(e, "Komut iptal: uzun tutuldu")
+
+    def _dwell_step(self, t: float) -> None:
+        """POINTER, relative, engaged, cursor following, no pinch / engagement / menu (caller)."""
+        cfg = self._cfg
+        if not cfg.dwell_click or self._mode is not Mode.POINTER or self._eng is not None or self._menu is not None:
+            return
+        self._dwell_fed = True
+        hit = self._dwell.update(t, self._pointer, cfg.dwell_ms)
+        if hit is None:
+            return
+        if self._dispatch(ActionKind.LEFT_CLICK, t, x=hit[0], y=hit[1]):
+            self._set_pointer(hit)
+            self._notice = "Bekleme tıklaması: sol tık"
 
     # ------------------------------------------------------------ pinch mouse (POINTER)
 
@@ -1931,6 +2108,10 @@ class Controller:
         if e.kind is _EngKind.BLOCKED:
             if ends:
                 self._eng = None
+            return
+
+        if e.kind is _EngKind.CMD_PINCH:
+            self._cmd_pinch_frame(e, ends, hand, frame.capture_ms)
             return
 
         if e.kind in (_EngKind.CLICK, _EngKind.WIN_PINCH):

@@ -120,16 +120,17 @@ def test_mode_menu_pick_by_pinch_then_pointer_recovers(rig):
     selecting hand as pinched forever (it would freeze the pointer and block neutral)."""
     rig.activate([hand(POINT, R0), hand(POINT, LP, side="left")])
     _dwell(rig)
-    rig.run(200, lambda u: [hand(POINT, (220, lerp(260, 345, u))), hand(FIST := {"thumb": 1, "index": 1, "middle": 1, "ring": 1, "little": 1}, LP, side="left")])
+    # 6 rows (commands is the last); windows is row 4 = pointer y in [4/6, 5/6)
+    rig.run(200, lambda u: [hand(POINT, (220, lerp(260, 302, u))), hand(FIST := {"thumb": 1, "index": 1, "middle": 1, "ring": 1, "little": 1}, LP, side="left")])
     menu = _menu(rig)
     assert menu.items[menu.hovered].key == "windows"
-    rig.run(150, [hand(PINCH, (220, 345))])
+    rig.run(150, [hand(PINCH, (220, 302))])
     assert rig.mode is Mode.WINDOWS and _menu(rig) is None
     assert set(rig.kinds()) <= {A.MOVE_POINTER}
     n = rig.count(A.MOVE_POINTER)
-    rig.run(400, [hand(PINCH, (220, 345))])                          # still holding the selecting pinch
-    rig.run(400, [hand(POINT, (220, 345))])                          # release + neutral
-    rig.run(400, lambda u: [hand(POINT, (lerp(220, 320, u), 345))])
+    rig.run(400, [hand(PINCH, (220, 302))])                          # still holding the selecting pinch
+    rig.run(400, [hand(POINT, (220, 302))])                          # release + neutral
+    rig.run(400, lambda u: [hand(POINT, (lerp(220, 320, u), 302))])
     assert rig.count(A.MOVE_POINTER) > n + 3
     assert rig.count(A.WINDOW_DRAG_BEGIN) == 0 and _menu(rig) is None
 
