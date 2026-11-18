@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Slot
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget
 
 from handcontrol.contracts import Mode
 from handcontrol.ui.viewmodel import (
+    COMMANDS_GUIDE_TITLE_TR,
+    COMMANDS_GUIDE_TR,
     GESTURE_GUIDE_TR,
     MODE_LABELS_TR,
     TRAY_ICON_STATE_LABELS_TR,
@@ -109,8 +111,76 @@ def create_tray_icon(state: TrayIconState, size: int = 64) -> QIcon:
     return QIcon(create_tray_pixmap(state, size=size))
 
 
+MODE_ICON_COLORS: dict[Mode, QColor] = {
+    Mode.POINTER: QColor(72, 172, 242),
+    Mode.SCROLL: QColor(82, 214, 148),
+    Mode.ZOOM: QColor(255, 198, 88),
+    Mode.VOLUME: QColor(178, 132, 255),
+    Mode.WINDOWS: QColor(240, 148, 72),
+    Mode.COMMANDS: QColor(236, 94, 140),
+}
+
+
+def create_mode_pixmap(mode: Mode, size: int = 32) -> QPixmap:
+    """Procedural glyph per mode (arrow, scroll, magnifier, speaker, window, keys)."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    s = float(size)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(MODE_ICON_COLORS.get(mode, QColor(150, 160, 170)))
+    p.drawRoundedRect(QRectF(s * 0.04, s * 0.04, s * 0.92, s * 0.92), s * 0.22, s * 0.22)
+    pen = QPen(QColor(255, 255, 255), max(1.6, s * 0.08))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+    def pt(x: float, y: float) -> QPointF:
+        return QPointF(s * x, s * y)
+
+    if mode == Mode.POINTER:
+        p.setBrush(QColor(255, 255, 255))
+        p.drawPolygon([pt(0.32, 0.22), pt(0.32, 0.74), pt(0.45, 0.61), pt(0.56, 0.80),
+                       pt(0.64, 0.76), pt(0.54, 0.57), pt(0.71, 0.57)])
+    elif mode == Mode.SCROLL:
+        p.drawLine(pt(0.5, 0.22), pt(0.5, 0.78))
+        p.drawPolyline([pt(0.34, 0.36), pt(0.5, 0.22), pt(0.66, 0.36)])
+        p.drawPolyline([pt(0.34, 0.64), pt(0.5, 0.78), pt(0.66, 0.64)])
+    elif mode == Mode.ZOOM:
+        p.drawEllipse(pt(0.44, 0.44), s * 0.18, s * 0.18)
+        p.drawLine(pt(0.57, 0.57), pt(0.76, 0.76))
+        p.drawLine(pt(0.36, 0.44), pt(0.52, 0.44))
+        p.drawLine(pt(0.44, 0.36), pt(0.44, 0.52))
+    elif mode == Mode.VOLUME:
+        p.setBrush(QColor(255, 255, 255))
+        p.drawPolygon([pt(0.22, 0.42), pt(0.34, 0.42), pt(0.50, 0.28), pt(0.50, 0.72),
+                       pt(0.34, 0.58), pt(0.22, 0.58)])
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(QRectF(s * 0.46, s * 0.34, s * 0.24, s * 0.32), -60 * 16, 120 * 16)
+        p.drawArc(QRectF(s * 0.44, s * 0.24, s * 0.38, s * 0.52), -60 * 16, 120 * 16)
+    elif mode == Mode.WINDOWS:
+        p.drawRoundedRect(QRectF(s * 0.22, s * 0.26, s * 0.56, s * 0.48), s * 0.06, s * 0.06)
+        p.drawLine(pt(0.22, 0.38), pt(0.78, 0.38))
+    elif mode == Mode.COMMANDS:
+        p.drawRoundedRect(QRectF(s * 0.18, s * 0.30, s * 0.64, s * 0.40), s * 0.08, s * 0.08)
+        p.drawPolyline([pt(0.40, 0.42), pt(0.30, 0.50), pt(0.40, 0.58)])
+        p.drawPolyline([pt(0.60, 0.42), pt(0.70, 0.50), pt(0.60, 0.58)])
+    p.end()
+    return pixmap
+
+
+def create_mode_icon(mode: Mode, size: int = 32) -> QIcon:
+    """QIcon for a Mode (tray mode menu, settings default-mode list)."""
+    return QIcon(create_mode_pixmap(mode, size=size))
+
+
 class HandControlTray(QSystemTrayIcon):
     """System tray icon controller bound to a UiBridge."""
+
+    # Tray-level request signal ("Eğitimi başlat"); the same click also calls bridge.request_tutorial().
+    tutorial_requested = Signal()
 
     def __init__(
         self,
@@ -131,6 +201,7 @@ class HandControlTray(QSystemTrayIcon):
         self.action_camera_toggle = QAction("Kamerayı Başlat", self.menu)
         self.action_settings = QAction("Ayarlar", self.menu)
         self.action_calibrate = QAction("Kalibre Et", self.menu)
+        self.action_tutorial = QAction("Eğitimi başlat", self.menu)
         self.action_exit = QAction("Çıkış", self.menu)
 
         # Equivalent tray mode selection submenu (per spec §5)
@@ -139,7 +210,7 @@ class HandControlTray(QSystemTrayIcon):
         self.mode_action_group.setExclusive(True)
         self.mode_actions: dict[Mode, QAction] = {}
         for mode in Mode:
-            act = QAction(MODE_LABELS_TR[mode], self.mode_menu)
+            act = QAction(create_mode_icon(mode), MODE_LABELS_TR[mode], self.mode_menu)
             act.setCheckable(True)
             act.setData(mode)
             act.triggered.connect(self._make_mode_trigger(mode))
@@ -153,6 +224,12 @@ class HandControlTray(QSystemTrayIcon):
             entry = QAction(f"{gesture} → {result}", self.guide_menu)
             entry.setEnabled(False)
             self.guide_menu.addAction(entry)
+        self.guide_commands_section = self.guide_menu.addSection(
+            create_mode_icon(Mode.COMMANDS), COMMANDS_GUIDE_TITLE_TR)
+        for gesture, result in COMMANDS_GUIDE_TR:
+            entry = QAction(f"{gesture} → {result}", self.guide_menu)
+            entry.setEnabled(False)
+            self.guide_menu.addAction(entry)
 
         self.menu.addAction(self.action_pause_resume)
         self.menu.addAction(self.action_camera_toggle)
@@ -161,6 +238,7 @@ class HandControlTray(QSystemTrayIcon):
         self.menu.addMenu(self.guide_menu)
         self.menu.addAction(self.action_settings)
         self.menu.addAction(self.action_calibrate)
+        self.menu.addAction(self.action_tutorial)
         self.menu.addSeparator()
         self.menu.addAction(self.action_exit)
 
@@ -172,9 +250,15 @@ class HandControlTray(QSystemTrayIcon):
         self.action_settings.triggered.connect(self._bridge.request_settings)
         self.action_calibrate.triggered.connect(self._bridge.request_calibration)
         self.action_exit.triggered.connect(self._bridge.request_exit)
+        self.action_tutorial.triggered.connect(self._on_tutorial)
 
         self._bridge.state_changed.connect(self.apply_state)
         self.apply_state(self._bridge.state)
+
+    @Slot()
+    def _on_tutorial(self) -> None:
+        self.tutorial_requested.emit()
+        self._bridge.request_tutorial()
 
     def _make_mode_trigger(self, mode: Mode):
         def _on_triggered() -> None:

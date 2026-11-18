@@ -7,6 +7,7 @@ from handcontrol.contracts import Action, ActionKind
 from handcontrol.ui.tray import HandControlTray
 from handcontrol.ui.viewmodel import (
     ACTION_KIND_LABELS_TR,
+    COMMANDS_GUIDE_TR,
     GESTURE_GUIDE_TR,
     UiBridge,
     format_action_tr,
@@ -47,6 +48,8 @@ def test_tray_gesture_guide_submenu_is_read_only() -> None:
     tray = HandControlTray(UiBridge())
     assert tray.guide_menu.title() == "Hareket Rehberi"
     assert tray.guide_menu.menuAction() in tray.menu.actions()
-    entries = tray.guide_menu.actions()
-    assert [a.text() for a in entries] == [f"{g} → {r}" for g, r in GESTURE_GUIDE_TR]
+    entries = [a for a in tray.guide_menu.actions() if not a.isSeparator()]
+    expected = [f"{g} → {r}" for g, r in (*GESTURE_GUIDE_TR, *COMMANDS_GUIDE_TR)]
+    assert [a.text() for a in entries] == expected
     assert not any(a.isEnabled() for a in entries)
+    assert tray.guide_commands_section.text() == "Komutlar modu"

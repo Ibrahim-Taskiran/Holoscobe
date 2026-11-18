@@ -8,15 +8,20 @@ Features:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Callable, Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Slot
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Slot
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from handcontrol.contracts import Mode
+from handcontrol.ui.dpi import physical_to_logical
 from handcontrol.ui.viewmodel import (
+    COMMAND_TOAST_MS,
+    CursorFeedbackState,
+    command_label_tr,
     IndicatorKind,
     IndicatorState,
     OverlayMenuItem,
@@ -633,6 +638,269 @@ class OverlayWindow(QWidget):
             painter.setPen(QPen(QColor(255, 198, 88), 2.8))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawArc(arc_box, 90 * 16, -int(max(0.0, min(1.0, cursor.hold_progress)) * 360 * 16))
+
+
+HOLD_KIND_COLORS: dict[str, QColor] = {
+    "right_click": QColor(255, 159, 67),
+    "grab": QColor(72, 172, 242),
+    "fist": QColor(236, 94, 104),
+    "dwell": QColor(88, 238, 168),
+    "window_drag": QColor(178, 132, 255),
+}
+_DEFAULT_HOLD_COLOR = QColor(255, 198, 88)
+
+RING_TICK_MS = 16            # ~60 Hz animation between 20 FPS snapshots
+RING_SMOOTH_TAU_MS = 45.0    # display progress follows target with this time constant
+RING_GRACE_MS = 140.0        # keep ring through brief progress dropouts (no flicker)
+RING_FADE_MS = 180.0         # fade-out after the hold ends
+TOAST_FADE_MS = 200.0
+
+
+class CursorFeedbackOverlay(QWidget):
+    """Click-through window that follows the cursor: hold progress ring + command toast.
+
+    Feed it via UiBridge (cursor_feedback_updated / command_triggered) or call
+    apply_feedback() / show_command() directly. `enabled_fn` (e.g. settings.cursor_feedback)
+    hides the ring only; command toasts stay. With follow_os_cursor=True the window tracks
+    QCursor.pos() every tick (smooth in live mode); otherwise it uses the snapshot pointer.
+    """
+
+    WIDTH = 280
+    HEIGHT = 150
+    ANCHOR = QPointF(140.0, 40.0)          # cursor hotspot inside the window
+    RING_OFFSET = QPointF(28.0, 26.0)       # ring center relative to the hotspot
+    RING_RADIUS = 13.0
+
+    def __init__(
+        self,
+        bridge: Optional[UiBridge] = None,
+        enabled_fn: Optional[Callable[[], bool]] = None,
+        follow_os_cursor: bool = True,
+        auto_show_window: bool = True,
+        toast_ms: int = COMMAND_TOAST_MS,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        super().__init__(parent, flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.resize(self.WIDTH, self.HEIGHT)
+
+        self._enabled_fn = enabled_fn
+        self._follow_os_cursor = bool(follow_os_cursor)
+        self._auto_show_window = bool(auto_show_window)
+        self._toast_ms = max(100, int(toast_ms))
+        self._clock = QElapsedTimer()
+        self._clock.start()
+
+        self._feedback = CursorFeedbackState()
+        self._kind = ""
+        self._target = 0.0
+        self._display = 0.0
+        self._last_active_ms = -1e9
+        self._fade_start_ms: Optional[float] = None
+        self._ring_opacity = 0.0
+        self._last_tick_ms = 0.0
+        self._toast_text = ""
+        self._toast_start_ms = -1e9
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(RING_TICK_MS)
+        self._timer.timeout.connect(self._tick)
+
+        if bridge is not None:
+            bridge.cursor_feedback_updated.connect(self.apply_feedback)
+            bridge.command_triggered.connect(self.show_command)
+
+    # ---------- state (read by tests and app) ----------
+
+    @property
+    def hold_kind(self) -> str:
+        return self._kind
+
+    @property
+    def target_progress(self) -> float:
+        return self._target
+
+    @property
+    def displayed_progress(self) -> float:
+        return self._display
+
+    @property
+    def ring_visible(self) -> bool:
+        return self._ring_opacity > 0.001 and self.is_enabled()
+
+    @property
+    def ring_color(self) -> QColor:
+        return QColor(HOLD_KIND_COLORS.get(self._kind, _DEFAULT_HOLD_COLOR))
+
+    @property
+    def toast_text(self) -> str:
+        return self._toast_text if self.toast_visible else ""
+
+    @property
+    def toast_visible(self) -> bool:
+        return bool(self._toast_text) and self._now() - self._toast_start_ms < self._toast_ms
+
+    @property
+    def is_animating(self) -> bool:
+        return self._timer.isActive()
+
+    def is_enabled(self) -> bool:
+        return True if self._enabled_fn is None else bool(self._enabled_fn())
+
+    def _now(self) -> float:
+        return float(self._clock.elapsed())
+
+    # ---------- inputs ----------
+
+    @Slot(object)
+    def apply_feedback(self, state: CursorFeedbackState) -> None:
+        """New hold state from the controller (about 20 per second)."""
+        self._feedback = state
+        now = self._now()
+        if state.progress > 0.0 and self.is_enabled():
+            if state.kind != self._kind:
+                self._kind = state.kind          # a different hold starts from empty
+                self._display = 0.0
+            elif state.progress < self._display - 0.25:
+                self._display = state.progress   # same kind restarted: no backwards sweep
+            self._target = state.progress
+            self._last_active_ms = now
+            self._fade_start_ms = None
+            self._ring_opacity = 1.0
+        else:
+            self._target = 0.0
+        self._place()
+        self._ensure_running()
+        self._tick()
+
+    @Slot(str)
+    def show_command(self, command: str) -> None:
+        """Show the Turkish command label (Sonraki, Görev görünümü, ...) for ~900 ms."""
+        text = command_label_tr(command)
+        if not text:
+            return
+        self._toast_text = text
+        self._toast_start_ms = self._now()
+        self._place()
+        self._ensure_running()
+        self._tick()
+
+    # ---------- animation ----------
+
+    def _ensure_running(self) -> None:
+        if not self._timer.isActive():
+            self._last_tick_ms = self._now()
+            self._timer.start()
+        if self._auto_show_window and not self.isVisible():
+            self.show()
+
+    def _place(self) -> None:
+        if self._follow_os_cursor:
+            pos = QCursor.pos()
+        elif self._feedback.x is not None and self._feedback.y is not None:
+            pos = physical_to_logical(self._feedback.x, self._feedback.y)
+        else:
+            return
+        self.move(round(pos.x() - self.ANCHOR.x()), round(pos.y() - self.ANCHOR.y()))
+
+    @Slot()
+    def _tick(self) -> None:
+        now = self._now()
+        dt = max(0.0, now - self._last_tick_ms)
+        self._last_tick_ms = now
+        if self._target > 0.0:
+            alpha = 1.0 - math.exp(-dt / RING_SMOOTH_TAU_MS) if dt > 0 else 0.0
+            self._display += (self._target - self._display) * alpha
+            if self._target >= 1.0 and self._display > 0.98:
+                self._display = 1.0
+        elif self._ring_opacity > 0.0:
+            if now - self._last_active_ms < RING_GRACE_MS:
+                pass                                      # brief dropout: hold the ring as is
+            else:
+                if self._fade_start_ms is None:
+                    self._fade_start_ms = now
+                    if self._display >= 0.9:
+                        self._display = 1.0               # completed hold: finish the circle
+                k = (now - self._fade_start_ms) / RING_FADE_MS
+                self._ring_opacity = max(0.0, 1.0 - k)
+                if self._ring_opacity <= 0.0:
+                    self._display = 0.0
+                    self._kind = ""
+                    self._fade_start_ms = None
+        if not self.is_enabled():
+            self._ring_opacity = 0.0
+        if self._follow_os_cursor and (self._ring_opacity > 0.0 or self.toast_visible):
+            self._place()
+        self.update()
+        if self._ring_opacity <= 0.0 and not self.toast_visible:
+            self._timer.stop()
+            if self._auto_show_window and self.isVisible():
+                self.hide()
+
+    # ---------- painting ----------
+
+    def render_to_image(self) -> QImage:
+        image = QImage(self.width(), self.height(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        self._paint(painter)
+        painter.end()
+        return image
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        self._paint(painter)
+        painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self.ring_visible and self._display > 0.0:
+            self._paint_ring(painter)
+        if self.toast_visible:
+            self._paint_toast(painter)
+
+    def _paint_ring(self, painter: QPainter) -> None:
+        c = self.ANCHOR + self.RING_OFFSET
+        r = self.RING_RADIUS
+        box = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+        painter.setOpacity(self._ring_opacity)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(0, 0, 0, 110), 6.0))       # contrast halo on light backgrounds
+        painter.drawEllipse(box)
+        painter.setPen(QPen(QColor(255, 255, 255, 70), 3.0))  # empty track
+        painter.drawEllipse(box)
+        pen = QPen(self.ring_color, 3.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(box, 90 * 16, -int(max(0.0, min(1.0, self._display)) * 360 * 16))
+        painter.setOpacity(1.0)
+
+    def _paint_toast(self, painter: QPainter) -> None:
+        left = self._toast_ms - (self._now() - self._toast_start_ms)
+        opacity = max(0.0, min(1.0, left / TOAST_FADE_MS))
+        font = QFont("Segoe UI", 11)
+        font.setBold(True)
+        painter.setFont(font)
+        text_w = painter.fontMetrics().horizontalAdvance(self._toast_text)
+        w = min(self.WIDTH - 8.0, text_w + 32.0)
+        box = QRectF(self.ANCHOR.x() - w / 2.0, self.ANCHOR.y() + 52.0, w, 34.0)
+        painter.setOpacity(opacity)
+        painter.setPen(QPen(QColor(86, 152, 224, 210), 1.6))
+        painter.setBrush(QColor(18, 24, 34, 230))
+        painter.drawRoundedRect(box, 17.0, 17.0)
+        painter.setPen(QColor(240, 245, 250))
+        painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), self._toast_text)
+        painter.setOpacity(1.0)
 
 
 # Alias for convenience

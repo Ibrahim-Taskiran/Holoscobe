@@ -263,6 +263,12 @@ def test_settings_dialog_dataclass_and_dict_roundtrip() -> None:
         "show_dry_run_panel": True,
         "monitor_mapping": "secondary",
         "start_with_windows": True,
+        "swipe_profile": "browser",
+        "auto_pause_s": 120,
+        "dwell_click": True,
+        "dwell_ms": 1500,
+        "click_sound": True,
+        "cursor_feedback": False,
     }
 
     dlg.set_values(custom_dict)
@@ -301,7 +307,7 @@ def test_overlay_window_flags_virtual_cursor_close_ring_and_timeout() -> None:
         cursor=VirtualCursorState(x=0.4, y=0.6, visible=True, pinching=True),
     )
     assert overlay.overlay_state.kind == OverlayMenuKind.MODE_MENU
-    assert len(overlay.overlay_state.items) == 5
+    assert len(overlay.overlay_state.items) == len(Mode)
     img_mode = overlay.render_to_image()
     assert not img_mode.isNull()
 

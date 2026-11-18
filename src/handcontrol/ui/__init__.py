@@ -14,7 +14,9 @@ from handcontrol.ui.feedback import (
     FeedbackOverlay,
     FeedbackToast,
 )
+from handcontrol.ui.onboarding import OnboardingDialog, OnboardingStep
 from handcontrol.ui.overlay import (
+    CursorFeedbackOverlay,
     OverlayWidget,
     OverlayWindow,
     StatusIndicator,
@@ -40,6 +42,9 @@ from handcontrol.ui.tray import (
 )
 from handcontrol.ui.viewmodel import (
     CAMERA_STATE_LABELS_TR,
+    COMMAND_LABELS,
+    COMMAND_LABELS_TR,
+    COMMANDS_GUIDE_TR,
     CONTROL_STATE_LABELS_TR,
     FINGER_NAME_LABELS_TR,
     FINGER_STATE_LABELS_TR,
@@ -47,8 +52,10 @@ from handcontrol.ui.viewmodel import (
     HANDEDNESS_LABELS_TR,
     MODE_LABELS_TR,
     QUALITY_LABELS_TR,
+    SWIPE_PROFILE_LABELS_TR,
     TRAY_ICON_STATE_LABELS_TR,
     WINDOW_ACTION_LABELS_TR,
+    CursorFeedbackState,
     FeedbackKind,
     FeedbackMessage,
     OverlayMenuItem,
@@ -67,6 +74,14 @@ from handcontrol.ui.viewmodel import (
 )
 
 __all__ = [
+    "COMMAND_LABELS",
+    "COMMAND_LABELS_TR",
+    "COMMANDS_GUIDE_TR",
+    "SWIPE_PROFILE_LABELS_TR",
+    "CursorFeedbackOverlay",
+    "CursorFeedbackState",
+    "OnboardingDialog",
+    "OnboardingStep",
     "CAMERA_STATE_LABELS_TR",
     "CONTROL_STATE_LABELS_TR",
     "FINGER_NAME_LABELS_TR",

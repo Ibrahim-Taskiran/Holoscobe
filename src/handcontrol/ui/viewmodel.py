@@ -71,7 +71,51 @@ MODE_LABELS_TR: dict[Mode, str] = {
     Mode.ZOOM: "Yakınlaştırma",
     Mode.VOLUME: "Ses",
     Mode.WINDOWS: "Pencere",
+    Mode.COMMANDS: "Komutlar",
 }
+
+# Short Turkish labels for contracts.KeyCommand values (keyed by value; ui never imports windows/).
+COMMAND_LABELS_TR: dict[str, str] = {
+    "next": "Sonraki",
+    "previous": "Önceki",
+    "browser_back": "Tarayıcı geri",
+    "browser_forward": "Tarayıcı ileri",
+    "task_view": "Görev görünümü",
+    "show_desktop": "Masaüstünü göster",
+    "desktop_left": "Sol masaüstü",
+    "desktop_right": "Sağ masaüstü",
+    "media_play_pause": "Oynat/Duraklat",
+    "media_next": "Sonraki parça",
+    "media_previous": "Önceki parça",
+    "volume_mute": "Sesi kapat/aç",
+}
+COMMAND_LABELS = COMMAND_LABELS_TR
+
+# Settings swipe_profile values (config.SWIPE_PROFILES) -> Turkish labels.
+SWIPE_PROFILE_LABELS_TR: dict[str, str] = {
+    "auto": "Otomatik",
+    "slides": "Sunum",
+    "browser": "Tarayıcı",
+    "media": "Medya",
+    "desktops": "Sanal masaüstleri",
+}
+
+# ControllerSnapshot.hold_kind values -> Turkish labels (cursor hold ring).
+HOLD_KIND_LABELS_TR: dict[str, str] = {
+    "right_click": "Sağ tık",
+    "grab": "Sürükle",
+    "fist": "Yumruk",
+    "dwell": "Bekleyerek tıkla",
+    "window_drag": "Pencere taşı",
+}
+
+COMMAND_TOAST_MS = 900
+
+
+def command_label_tr(command: Any) -> str:
+    """Turkish label for a KeyCommand (enum or value string); unknown values pass through."""
+    value = str(getattr(command, "value", command) or "")
+    return COMMAND_LABELS_TR.get(value, value)
 
 CONTROL_STATE_LABELS_TR: dict[ControlState, str] = {
     ControlState.PAUSED: "Duraklatıldı",
@@ -146,6 +190,7 @@ ACTION_KIND_LABELS_TR: dict[ActionKind, str] = {
     ActionKind.WINDOW_MOVE_TO_OTHER_MONITOR: "Pencereyi Diğer Ekrana Taşı",
     ActionKind.WINDOW_CLOSE: "Pencereyi Kapat",
     ActionKind.RELEASE_ALL: "Tüm Girdileri Bırak",
+    ActionKind.KEY_COMMAND: "Klavye Komutu",
 }
 
 
@@ -163,8 +208,19 @@ GESTURE_GUIDE_TR: tuple[tuple[str, str], ...] = (
     ("Sağ yumruk tut (önce el açık olmalı)", "Ön plandaki pencereyi küçült"),
     ("Sol yumruk tut (önce el açık olmalı)", "Son küçültülen pencereyi geri aç"),
     ("Baskın olmayan elin açık avucunu 600 ms sabit tut", "Mod menüsü"),
+    ("İmleci yerinde sabit tut (Bekleyerek tıkla açıksa)", "Sol tık; imlecin yanındaki halka dolunca tıklar"),
     ("Kalibrasyon dikdörtgeni", "Yalnız mutlak imleç türünde geçerli"),
 )
+
+# Komutlar mode section of the gesture guide (gesture, result).
+COMMANDS_GUIDE_TR: tuple[tuple[str, str], ...] = (
+    ("Sola kaydır", "Önceki · Tarayıcı geri · Önceki parça · Sol masaüstü (kaydırma profiline göre)"),
+    ("Sağa kaydır", "Sonraki · Tarayıcı ileri · Sonraki parça · Sağ masaüstü (kaydırma profiline göre)"),
+    ("Yukarı kaydır", "Görev görünümü"),
+    ("Aşağı kaydır", "Masaüstünü göster"),
+    ("Kısa pinch", "Oynat/Duraklat (Sunum profilinde Sonraki)"),
+)
+COMMANDS_GUIDE_TITLE_TR = "Komutlar modu"
 
 
 class IndicatorKind(Enum):
@@ -212,6 +268,11 @@ def format_gesture_guide_tr() -> str:
     return "\n".join(f"{gesture} → {result}" for gesture, result in GESTURE_GUIDE_TR)
 
 
+def format_commands_guide_tr() -> str:
+    """Return the Komutlar mode guide as plain Turkish text lines ("gesture → result")."""
+    return "\n".join(f"{gesture} → {result}" for gesture, result in COMMANDS_GUIDE_TR)
+
+
 def resolve_tray_icon_state(
     control_state: ControlState,
     camera_state: CameraState,
@@ -239,6 +300,9 @@ def format_action_tr(action: Action) -> str:
         parts.append(f"değer=%{pct}")
     if action.target is not None:
         parts.append(f"hedef=0x{action.target.hwnd:X}")
+    command = str(getattr(action, "command", "") or "")
+    if command:
+        parts.append(f"komut={command_label_tr(command)}")
     return f"Üretilecek komut: {' | '.join(parts)}"
 
 
@@ -285,6 +349,42 @@ class OverlayState:
     @property
     def is_expired(self) -> bool:
         return self.inactivity_ms >= self.timeout_ms or self.closing_progress >= 1.0
+
+
+@dataclass(frozen=True)
+class CursorFeedbackState:
+    """Hold ring next to the real cursor. x/y are physical virtual-desktop px (snapshot.pointer)."""
+
+    kind: str = ""                  # ControllerSnapshot.hold_kind, "" = no hold
+    progress: float = 0.0           # [0.0, 1.0]
+    x: Optional[int] = None
+    y: Optional[int] = None
+
+    @property
+    def active(self) -> bool:
+        return self.progress > 0.0
+
+
+def resolve_cursor_feedback(snapshot: Any) -> CursorFeedbackState:
+    """Read hold_kind / hold_progress / pointer from a snapshot (missing fields -> no ring)."""
+    try:
+        progress = float(getattr(snapshot, "hold_progress", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        progress = 0.0
+    if progress != progress:  # NaN
+        progress = 0.0
+    progress = max(0.0, min(1.0, progress))
+    kind = str(getattr(snapshot, "hold_kind", "") or "")
+    pointer = getattr(snapshot, "pointer", None)
+    x = y = None
+    if pointer is not None:
+        try:
+            x, y = int(pointer[0]), int(pointer[1])
+        except (TypeError, ValueError, IndexError):
+            x = y = None
+    if progress <= 0.0:
+        kind = ""
+    return CursorFeedbackState(kind=kind, progress=round(progress, 3), x=x, y=y)
 
 
 @dataclass(frozen=True)
@@ -364,7 +464,7 @@ def create_mode_menu_items(
     hovered_mode: Optional[Mode] = None,
     hold_progress: float = 0.0,
 ) -> tuple[OverlayMenuItem, ...]:
-    """Create the 5 standard mode menu items in Turkish."""
+    """Create one mode menu item per Mode (6 with Komutlar) in Turkish."""
     items: list[OverlayMenuItem] = []
     for mode in Mode:
         is_hovered = mode == hovered_mode
@@ -427,6 +527,8 @@ class UiBridge(QObject):
     feedback_triggered = Signal(object)         # FeedbackMessage
     dry_run_updated = Signal(str)               # str
     indicator_updated = Signal(object)          # IndicatorState
+    cursor_feedback_updated = Signal(object)    # CursorFeedbackState (only on change)
+    command_triggered = Signal(str)             # KeyCommand value, once per command_seq change
 
     # User request signals (controller / application coordinator subscribes to these)
     pause_resume_requested = Signal()
@@ -437,6 +539,7 @@ class UiBridge(QObject):
     camera_stop_requested = Signal()
     settings_requested = Signal()
     calibration_requested = Signal()
+    tutorial_requested = Signal()
     exit_requested = Signal()
     mode_selected = Signal(object)              # Mode
     window_action_selected = Signal(str)        # WindowActionKind.value
@@ -462,6 +565,8 @@ class UiBridge(QObject):
         self._state: UiState = initial_state or UiState()
         self._indicator: Optional[IndicatorState] = None
         self._last_cancel: str = ""
+        self._cursor_feedback: CursorFeedbackState = CursorFeedbackState()
+        self._command_seq: Optional[int] = None
 
         self._marshal_snapshot.connect(self._apply_snapshot_on_gui_thread)
         self._marshal_state.connect(self._apply_state_on_gui_thread)
@@ -602,6 +707,25 @@ class UiBridge(QObject):
                 self._apply_feedback_on_gui_thread(
                     FeedbackMessage(FeedbackKind.WARNING, cancel, duration_ms=CANCEL_TOAST_MS)
                 )
+        feedback = resolve_cursor_feedback(snapshot)
+        if feedback != self._cursor_feedback:
+            self._cursor_feedback = feedback
+            self.cursor_feedback_updated.emit(feedback)
+        try:
+            seq = int(getattr(snapshot, "command_seq", 0) or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        if self._command_seq is None:
+            self._command_seq = seq          # first snapshot: baseline, no stale toast
+        elif seq != self._command_seq:
+            self._command_seq = seq
+            command = str(getattr(snapshot, "last_command", "") or "")
+            if command:
+                self.command_triggered.emit(command)
+
+    @property
+    def cursor_feedback(self) -> CursorFeedbackState:
+        return self._cursor_feedback
 
     @Slot(object)
     def update_overlay(self, overlay: OverlayState) -> None:
@@ -719,6 +843,11 @@ class UiBridge(QObject):
     def request_calibration(self) -> None:
         """Emit calibration wizard request."""
         self.calibration_requested.emit()
+
+    @Slot()
+    def request_tutorial(self) -> None:
+        """Emit first-run tutorial (onboarding) request."""
+        self.tutorial_requested.emit()
 
     @Slot()
     def request_exit(self) -> None:
