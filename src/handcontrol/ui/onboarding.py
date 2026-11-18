@@ -668,6 +668,8 @@ class OnboardingDialog(QDialog):
     @Slot(str, int, int)
     def on_action(self, kind: str, x: int, y: int) -> None:
         """Controller action (ActionKind value) at physical virtual-desktop px."""
+        if self._finished:
+            return
         kind = str(getattr(kind, "value", kind))
         if kind == "key_command":
             return

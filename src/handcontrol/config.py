@@ -29,6 +29,23 @@ PINCH_ON_DEFAULT, PINCH_OFF_DEFAULT = 0.33, 0.48
 # (on, off) pairs that were written as defaults by schema 1 (settings defaults and the dialog defaults)
 _V1_DEFAULT_PINCH = ((0.30, 0.45), (0.28, 0.42))
 DEFAULT_HOTKEY = "Ctrl+Alt+Shift+F12"
+_HOTKEY_MODS = ("Ctrl", "Alt", "Shift", "Win")
+
+
+def normalize_hotkey(value) -> str:
+    """Canonical "Ctrl+Alt+Shift+Win+KEY" or DEFAULT_HOTKEY; needs Ctrl/Alt/Win and exactly one F1-F24/A-Z/0-9 key."""
+    if not isinstance(value, str) or not 0 < len(value.strip()) <= 64:
+        return DEFAULT_HOTKEY
+    tokens = [t.strip().upper() for t in value.split("+")]
+    key = tokens[-1]
+    mods = {t for t in tokens[:-1]}
+    names = {m.upper(): m for m in _HOTKEY_MODS}
+    if len(mods) != len(tokens) - 1 or not mods <= set(names) or not mods & {"CTRL", "ALT", "WIN"}:
+        return DEFAULT_HOTKEY
+    is_f = key.startswith("F") and key[1:].isdigit() and key[1:].isascii() and 1 <= int(key[1:]) <= 24 and key[1:] == str(int(key[1:]))
+    if not (is_f or (len(key) == 1 and key.isascii() and key.isalnum())):
+        return DEFAULT_HOTKEY
+    return "+".join([m for m in _HOTKEY_MODS if m.upper() in mods] + [key])
 
 
 @dataclass
@@ -139,8 +156,7 @@ def validate(data: Any) -> Settings:
     s.scroll_direction = _choice(d.get("scroll_direction"), DIRECTIONS, s.scroll_direction)
     s.zoom_direction = _choice(d.get("zoom_direction"), DIRECTIONS, s.zoom_direction)
     s.default_mode = _choice(d.get("default_mode"), MODES, s.default_mode)
-    hk = d.get("emergency_hotkey")
-    s.emergency_hotkey = hk.strip() if isinstance(hk, str) and 0 < len(hk.strip()) <= 64 else DEFAULT_HOTKEY
+    s.emergency_hotkey = normalize_hotkey(d.get("emergency_hotkey"))
     s.overlay_visible = _bool(d.get("overlay_visible"), s.overlay_visible)
     s.mascot_visible = _bool(d.get("mascot_visible"), s.mascot_visible)
     s.start_with_windows = _bool(d.get("start_with_windows"), False)

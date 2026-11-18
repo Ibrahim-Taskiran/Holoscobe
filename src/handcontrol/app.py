@@ -13,7 +13,7 @@ from dataclasses import asdict, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from PySide6.QtCore import QLockFile, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QToolBar
 
 from handcontrol.config import SettingsStore, CalibrationBounds, validate, migrate
@@ -40,7 +40,10 @@ def hotkey_binding(text: str) -> tuple[int, int]:
     parts = text.upper().split('+')
     modifiers = 0
     for part in parts[:-1]:
-        modifiers |= {'CTRL': 2, 'ALT': 1, 'SHIFT': 4, 'WIN': 8}[part]
+        flag = {'CTRL': 2, 'ALT': 1, 'SHIFT': 4, 'WIN': 8}.get(part.strip())
+        if flag is None:
+            raise ValueError('Geçersiz acil durdurma kısayolu')
+        modifiers |= flag
     key = parts[-1]
     if key.startswith('F') and key[1:].isdigit() and 1 <= int(key[1:]) <= 24:
         return modifiers, 0x70 + int(key[1:]) - 1
@@ -202,10 +205,41 @@ def acquire_single_instance(lock_dir: Path | None = None):
     if lock_dir is None:
         base = os.environ.get('LOCALAPPDATA') or str(Path.home() / 'AppData' / 'Local')
         lock_dir = Path(base) / 'Holoscobe'
-    Path(lock_dir).mkdir(parents=True, exist_ok=True)
-    lock = QLockFile(str(Path(lock_dir) / 'holoscobe.lock'))
+    try:
+        Path(lock_dir).mkdir(parents=True, exist_ok=True)
+        lock = QLockFile(str(Path(lock_dir) / 'holoscobe.lock'))
+    except OSError as exc:
+        print(f'Tek örnek kilidi oluşturulamadı, kilitsiz devam ediliyor: {exc}', file=sys.stderr)
+        return _NO_LOCK
     lock.setStaleLockTime(0)  # a lock whose process is gone is stale at once
     return lock if lock.tryLock(0) else None
+
+
+class _NoLock:
+    """Stand-in when the lock file cannot be created: the app runs without single-instance protection."""
+    def unlock(self) -> None:
+        pass
+
+
+_NO_LOCK = _NoLock()
+
+
+class ErrorNotifier(QObject):
+    """Thread-safe error toast: notify() may be called from any thread; show_fn runs on this object's (GUI) thread."""
+    error = Signal(str)
+
+    def __init__(self, show_fn=None, parent=None):
+        super().__init__(parent)
+        self.show_fn = show_fn
+        self.error.connect(self._show)
+
+    def notify(self, text: str) -> None:
+        self.error.emit(text)
+
+    @Slot(str)
+    def _show(self, text: str) -> None:
+        if self.show_fn is not None:
+            self.show_fn(text)
 
 
 ALREADY_RUNNING_TR = 'Holoscobe zaten çalışıyor'
@@ -540,6 +574,27 @@ def show_or_reuse_dialog(ref: list, factory):
     return dlg
 
 
+def build_onboarding_dialog(dialog_cls, runtime, parent, ref: list, live: bool):
+    """Create the tutorial; it deletes itself on close and drops its listener and `ref` entry when destroyed."""
+    dlg = dialog_cls(parent, hotkey=runtime.settings.emergency_hotkey,
+        dominant_hand=runtime.settings.dominant_hand, live=live)
+    for name in ('completed', 'skipped'):
+        getattr(dlg, name).connect(runtime.mark_onboarding_done)
+    listener = getattr(dlg, 'on_action', None)
+    if listener is not None:
+        runtime.add_action_listener(listener)
+    dlg.setModal(False)
+    dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+    def cleanup(*_):
+        if listener is not None:
+            runtime.remove_action_listener(listener)
+        if ref and ref[0] is dlg:
+            ref.clear()
+    dlg.destroyed.connect(cleanup)
+    return dlg
+
+
 def main(argv=None) -> int:
     if not enable_per_monitor_v2():
         print('Başlatılamadı: per-monitor DPI awareness v2 ayarlanamadı.', file=sys.stderr)
@@ -550,20 +605,10 @@ def main(argv=None) -> int:
     parser.add_argument('--telemetry', action='store_true', help='Oturum telemetrisini yerel CSV dosyasına kaydet (görüntü yok)')
     args = parser.parse_args(argv)
     from handcontrol import logsetup
-    tray_ref: list = []
-
-    def notify_error(text):
-        if tray_ref:
-            tray_ref[0].showMessage('Holoscobe', text)
-    try:
-        logsetup.setup_logging(level=args.log_level, notify=notify_error)
-    except OSError as exc:
-        print(f'Günlük dosyası açılamadı: {exc}', file=sys.stderr)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     instance_lock = acquire_single_instance()
     if instance_lock is None:
-        logging.getLogger(__name__).info(ALREADY_RUNNING_TR)
         print(ALREADY_RUNNING_TR, file=sys.stderr)
         try:
             from PySide6.QtWidgets import QMessageBox
@@ -571,6 +616,12 @@ def main(argv=None) -> int:
         except Exception:
             pass
         return 0
+    tray_ref: list = []
+    error_notifier = ErrorNotifier(lambda text: tray_ref and tray_ref[0].showMessage('Holoscobe', text))
+    try:
+        logsetup.setup_logging(level=args.log_level, notify=error_notifier.notify)
+    except OSError as exc:
+        print(f'Günlük dosyası açılamadı: {exc}', file=sys.stderr)
     bridge = UiBridge()
     try:
         telemetry = SessionRecorder() if args.telemetry else None
@@ -629,17 +680,7 @@ def main(argv=None) -> int:
         except ImportError:
             return
 
-        def build():
-            dlg = OnboardingDialog(window, hotkey=runtime.settings.emergency_hotkey,
-                dominant_hand=runtime.settings.dominant_hand, live=args.live)
-            for name in ('completed', 'skipped'):
-                getattr(dlg, name).connect(runtime.mark_onboarding_done)
-            if hasattr(dlg, 'on_action'):
-                runtime.add_action_listener(dlg.on_action)
-                dlg.destroyed.connect(lambda *_: runtime.remove_action_listener(dlg.on_action))
-            dlg.setModal(False)
-            return dlg
-        show_or_reuse_dialog(onboarding_ref, build)
+        show_or_reuse_dialog(onboarding_ref, lambda: build_onboarding_dialog(OnboardingDialog, runtime, window, onboarding_ref, args.live))
     def export_settings(path):
         runtime.export_settings(path)
     def import_settings(path):

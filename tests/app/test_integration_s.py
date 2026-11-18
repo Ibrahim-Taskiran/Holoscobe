@@ -268,3 +268,54 @@ def test_show_or_reuse_dialog_opens_only_one(qt) -> None:
     c = show_or_reuse_dialog(ref, build)
     assert c is not a and len(made) == 2
     c.close()
+
+
+# ---- review fixes
+
+def test_error_notifier_delivers_on_gui_thread_from_worker(qt) -> None:
+    import threading
+    from handcontrol.app import ErrorNotifier
+    got: list = []
+    n = ErrorNotifier(lambda text: got.append((text, threading.current_thread())))
+    t = threading.Thread(target=n.notify, args=("boom",))
+    t.start()
+    t.join()
+    assert got == []                       # queued, not run on the worker thread
+    qt.processEvents()
+    assert got == [("boom", threading.main_thread())]
+
+
+def test_onboarding_reopen_does_not_leak_action_listeners(qt) -> None:
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from handcontrol.app import build_onboarding_dialog, show_or_reuse_dialog
+    from handcontrol.ui.onboarding import OnboardingDialog
+    from tests.app.test_app import runtime as make_rt  # reuse helper
+    r = make_rt(qt)
+    try:
+        baseline = len(r.action_listeners)
+        ref: list = []
+        for _ in range(2):
+            dlg = show_or_reuse_dialog(ref, lambda: build_onboarding_dialog(OnboardingDialog, r, None, ref, False))
+            assert len(r.action_listeners) == baseline + 1
+            dlg.skip()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            qt.processEvents()
+            assert len(r.action_listeners) == baseline and ref == []
+    finally:
+        r.close()
+
+
+def test_single_instance_mkdir_failure_continues_without_lock(tmp_path, capsys) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    lock = acquire_single_instance(blocker / "sub")      # parent is a file -> mkdir OSError
+    assert lock is not None
+    lock.unlock()
+    assert "kilit" in capsys.readouterr().err
+
+
+def test_hotkey_binding_rejects_unknown_modifier() -> None:
+    from handcontrol.app import hotkey_binding
+    with pytest.raises(ValueError):
+        hotkey_binding("Foo+F12")
+    assert hotkey_binding("Ctrl+Alt+Shift+F12") == (7, 0x7B)

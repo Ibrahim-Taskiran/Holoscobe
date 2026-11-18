@@ -779,9 +779,14 @@ class CursorFeedbackOverlay(QWidget):
             self._ring_opacity = 1.0
         else:
             self._target = 0.0
+        if not (self._timer.isActive() or self._needs_running(state)):
+            return                                        # idle pointer move: stay hidden, no timer
         self._place()
         self._ensure_running()
         self._tick()
+
+    def _needs_running(self, state: CursorFeedbackState) -> bool:
+        return (state.progress > 0.0 and self.is_enabled()) or self._ring_opacity > 0.0 or self.toast_visible
 
     @Slot(str)
     def show_command(self, command: str) -> None:

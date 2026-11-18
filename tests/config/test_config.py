@@ -35,12 +35,11 @@ def test_round_trip_unicode_path(settings_path):
     s.monitor_mapping.mode = "monitor"
     s.monitor_mapping.monitor_index = 1
     s.calibration.left = 0.2
-    s.emergency_hotkey = "Ctrl+Alt+Ş"
+    s.emergency_hotkey = "Ctrl+Alt+Shift+F11"
     s.start_with_windows = True
     st.save(s)
     assert settings_path.exists()
     assert st.load() == s
-    assert "Ş" in settings_path.read_text(encoding="utf-8")   # ensure_ascii off
 
 
 def test_clamping_and_bad_types():
@@ -204,3 +203,26 @@ def test_schema2_file_migrates_with_onboarding_done(tmp_path):
     s = SettingsStore(p).load()
     assert s.onboarding_done is True and s.pointer_speed == 1.5 and s.schema_version == SCHEMA_VERSION == 3
     assert SettingsStore(tmp_path / "new.json").load().onboarding_done is False
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("ctrl+alt+shift+f12", "Ctrl+Alt+Shift+F12"),
+    ("shift+alt+ctrl+a", "Ctrl+Alt+Shift+A"),
+    (" Win+5 ", "Win+5"),
+    ("Ctrl+F24", "Ctrl+F24"),
+    ("A", C.DEFAULT_HOTKEY),
+    ("Shift+A", C.DEFAULT_HOTKEY),
+    ("F12", C.DEFAULT_HOTKEY),
+    ("Foo+F12", C.DEFAULT_HOTKEY),
+    ("Ctrl+F25", C.DEFAULT_HOTKEY),
+    ("Ctrl+F0", C.DEFAULT_HOTKEY),
+    ("Ctrl+Ctrl+A", C.DEFAULT_HOTKEY),
+    ("Ctrl+A+B", C.DEFAULT_HOTKEY),
+    ("Ctrl+", C.DEFAULT_HOTKEY),
+    ("Ctrl+Space", C.DEFAULT_HOTKEY),
+    ("", C.DEFAULT_HOTKEY),
+    (None, C.DEFAULT_HOTKEY),
+    (5, C.DEFAULT_HOTKEY),
+])
+def test_emergency_hotkey_validation(raw, expected):
+    assert validate({"emergency_hotkey": raw}).emergency_hotkey == expected

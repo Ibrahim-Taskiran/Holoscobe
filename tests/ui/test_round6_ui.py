@@ -351,3 +351,13 @@ def test_onboarding_skip_signal() -> None:
     assert events == ["skip"]
     dlg.reject()                                      # no second emission
     assert events == ["skip"]
+
+
+def test_ring_idle_pointer_moves_never_show_window(qt_app=None) -> None:
+    bridge = UiBridge()
+    ring = CursorFeedbackOverlay(bridge, enabled_fn=lambda: True, follow_os_cursor=False, auto_show_window=True)
+    shows: list = []
+    ring.show = lambda: shows.append(1)
+    for i in range(20):
+        ring.apply_feedback(CursorFeedbackState(kind="", progress=0.0, x=100 + i, y=50))
+    assert shows == [] and not ring.isVisible() and not ring.is_animating
