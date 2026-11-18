@@ -2,7 +2,7 @@
 
 Özet: Yazılım tamam ve otomatik testlerden geçti. **Gerçek kamera ve gerçek ellerle donanım kabulü bekliyor.** Bu belgedeki hiçbir "geçti" donanım kanıtı değildir.
 
-Otomatik test: **1416 geçti, 3 manuel seçilmedi, 0 başarısız** (`QT_QPA_PLATFORM=offscreen`, sahte donanım).
+Otomatik test: **1455 geçti, 3 manuel seçilmedi, 0 başarısız** (`QT_QPA_PLATFORM=offscreen`, sahte donanım).
 Komut: `$env:QT_QPA_PLATFORM="offscreen"; .venv\Scripts\python.exe -m pytest tests -q`.
 
 Varsayılan dry-run. Gerçek komutlar yalnız `--live` ve başarılı acil durdurma kısayolu kaydından sonra çalışır. Kamera hatası Paused'a döner; kurtarma kendiliğinden etkinleştirmez.

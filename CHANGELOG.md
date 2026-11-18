@@ -22,7 +22,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Hazır paket: PyInstaller onedir derleme (`scripts\build.ps1`), kendini sınama (`--self-test`), `scripts\release.ps1` (zip + `.sha256`), yönetici gerektirmeyen `scripts\install.ps1` ve `scripts\uninstall.ps1`.
 - CI ve sürüm iş akışları: `.github/workflows/ci.yml`, `.github/workflows/release.yml`.
 - El modeli SHA-256 yeniden doğrulaması kaydedildi; sürümde paketlemeye izin verildi.
-- Otomatik test takımı 1416 teste çıktı (3 manuel test seçilmez).
+- Otomatik test takımı 1455 teste çıktı (3 manuel test seçilmez).
 
 ### Changed
 - Komut rehberi artık `swipe.py` profil tablolarından üretilir; belge ile kod ayrışmaz.
