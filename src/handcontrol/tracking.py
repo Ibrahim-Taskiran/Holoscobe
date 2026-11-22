@@ -295,6 +295,9 @@ class TrackingLoop:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.last_error: Optional[str] = None
+        # Optional image tap (frame_bgr, capture_ms), called after `callback` on the tracking thread.
+        # The Enstrüman window sets it to show the camera image; it must be cheap and must not keep a lock.
+        self.on_image: Optional[Callable[[Any, float], None]] = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -354,5 +357,11 @@ class TrackingLoop:
                     self._callback(sample)
                 except Exception:
                     pass
+                tap = self.on_image
+                if tap is not None:
+                    try:
+                        tap(frame, capture_ms)
+                    except Exception:
+                        pass
         finally:
             self._tracker.close()
