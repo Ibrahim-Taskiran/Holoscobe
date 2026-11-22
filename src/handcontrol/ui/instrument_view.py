@@ -19,12 +19,16 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from handcontrol.contracts import FrameFeatures
 from handcontrol.instrument.events import HitView, InstrumentView, StringView
+from handcontrol.instrument.geometry import Rect, normalize_fixed_rect
 from handcontrol.ui.preview import CameraPreviewWidget
 from handcontrol.ui.viewmodel import UiBridge
 
 INSTRUMENT_WINDOW_TITLE_TR = "Holoscobe — Enstrüman"
-LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor"}
+LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "Sabit teller"}
 WAITING_STATUS_TR = "Enstrüman modunu seçin ve iki elinizi gösterin"
+FIXED_HINT_TR = "Fareyle sürükle / köşeden boyutlandır · ya da iki elle çimdikle, tut, gerdir"
+HANDLE_PX = 14.0                  # grab distance of a corner handle (widget px)
+AREA_COLOR = QColor(150, 200, 255)
 
 FRAME_INTERVAL_MS = 33            # ~30 fps repaint while visible
 MAX_WAVE_PX = 14.0                # peak string displacement at amplitude 1
@@ -158,7 +162,12 @@ def _string_color(s: StringView) -> QColor:
 
 
 class InstrumentCanvas(CameraPreviewWidget):
-    """Camera preview (image + skeleton) with strings, sparks and HUD painted on top."""
+    """Camera preview (image + skeleton) with strings, sparks and HUD painted on top.
+
+    "Sabit teller" layout: the string area can be moved (drag inside) and resized (drag a corner) with the
+    mouse; `fixed_rect_edited` carries the new normalized rect (unmirrored frame) on release."""
+
+    fixed_rect_edited = Signal(object)
 
     def __init__(self, sparks: SparkSystem, clock: Callable[[], float],
                  bridge: Optional[UiBridge] = None, parent: Optional[QWidget] = None) -> None:
@@ -173,6 +182,8 @@ class InstrumentCanvas(CameraPreviewWidget):
         self._label_font = QFont("Segoe UI", 8)
         self._label_font.setBold(True)
         self.setMinimumSize(480, 360)
+        self._drag: Optional[tuple[str, tuple[float, float], Rect]] = None   # (kind, anchor/start, rect0)
+        self._draft: Optional[Rect] = None
 
     @property
     def view(self) -> Optional[InstrumentView]:
@@ -200,6 +211,79 @@ class InstrumentCanvas(CameraPreviewWidget):
         h = float(view.height) if view is not None and view.height > 0 else 1.0
         return self.map_normalized_point(x / w, y / h, canvas)
 
+    def to_normalized(self, pt: QPointF, canvas: QRectF) -> tuple[float, float]:
+        """Widget point -> normalized unmirrored frame coordinates (inverse of map_normalized_point)."""
+        nx = (pt.x() - canvas.left()) / max(1.0, canvas.width())
+        ny = (pt.y() - canvas.top()) / max(1.0, canvas.height())
+        if self.mirrored:
+            nx = 1.0 - nx
+        return (min(1.0, max(0.0, nx)), min(1.0, max(0.0, ny)))
+
+    def fixed_rect(self) -> Optional[Rect]:
+        """Area shown now: the draft while dragging, else the engine's."""
+        if self._draft is not None:
+            return self._draft
+        view = self._view
+        return view.fixed_rect if view is not None and view.layout == "fixed" else None
+
+    def area_widget_rect(self, rect: Rect, canvas: QRectF) -> QRectF:
+        a = self.map_normalized_point(rect[0], rect[1], canvas)
+        b = self.map_normalized_point(rect[2], rect[3], canvas)
+        return QRectF(a, b).normalized()
+
+    def _canvas(self) -> QRectF:
+        return self.canvas_rect_for(QRectF(self.rect()))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        rect = self.fixed_rect()
+        if rect is None or event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        canvas = self._canvas()
+        pos = event.position()
+        x0, y0, x1, y1 = rect
+        for cx, cy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+            p = self.map_normalized_point(cx, cy, canvas)
+            if math.hypot(p.x() - pos.x(), p.y() - pos.y()) <= HANDLE_PX:
+                self._drag = ("corner", (x0 + x1 - cx, y0 + y1 - cy), rect)
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+                event.accept()
+                return
+        if self.area_widget_rect(rect, canvas).adjusted(-HANDLE_PX, -HANDLE_PX, HANDLE_PX, HANDLE_PX).contains(pos):
+            self._drag = ("move", self.to_normalized(pos, canvas), rect)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._drag is None:
+            super().mouseMoveEvent(event)
+            return
+        kind, ref, r0 = self._drag
+        nx, ny = self.to_normalized(event.position(), self._canvas())
+        if kind == "corner":
+            self._draft = normalize_fixed_rect((ref[0], ref[1], nx, ny), r0)
+        else:
+            w, h = r0[2] - r0[0], r0[3] - r0[1]
+            x0 = min(1.0 - w, max(0.0, r0[0] + nx - ref[0]))
+            y0 = min(1.0 - h, max(0.0, r0[1] + ny - ref[1]))
+            self._draft = normalize_fixed_rect((x0, y0, x0 + w, y0 + h), r0)
+        self.update()
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._drag is None:
+            super().mouseReleaseEvent(event)
+            return
+        r0 = self._drag[2]
+        draft, self._draft, self._drag = self._draft, None, None
+        self.unsetCursor()
+        if draft is not None and draft != r0:
+            self.fixed_rect_edited.emit(draft)
+        self.update()
+        event.accept()
+
     def string_points(self, s: StringView, canvas: QRectF) -> tuple[QPointF, QPointF]:
         return self.map_camera_point(*s.p0, canvas), self.map_camera_point(*s.p1, canvas)
 
@@ -217,7 +301,10 @@ class InstrumentCanvas(CameraPreviewWidget):
         painter.setClipRect(canvas)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         view = self._view
-        if view is not None:
+        area = self.fixed_rect()
+        if area is not None:
+            self._draw_area(painter, canvas, area, view)
+        if view is not None and self._draft is None:
             for s in view.strings:
                 self._draw_string(painter, canvas, s, now)
             if view.pick_tip is not None:
@@ -282,6 +369,29 @@ class InstrumentCanvas(CameraPreviewWidget):
                 box = QRectF(b.x() - 68.0, b.y() - 10.0, 60.0, 20.0)
                 painter.drawText(box, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), s.label)
 
+    def _draw_area(self, painter: QPainter, canvas: QRectF, area: Rect, view: Optional[InstrumentView]) -> None:
+        """Dashed frame and corner handles of the "Sabit teller" area; preview lines while dragging."""
+        box = self.area_widget_rect(area, canvas)
+        active = self._draft is not None or (view is not None and view.adjusting)
+        c = QColor(AREA_COLOR)
+        c.setAlphaF(0.85 if active else 0.35)
+        pen = QPen(c, 1.5 if active else 1.0, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        fill = QColor(AREA_COLOR)
+        fill.setAlphaF(0.10 if active else 0.04)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(box, 6.0, 6.0)
+        if self._draft is not None and view is not None and view.strings:
+            n = len(view.strings)
+            painter.setPen(QPen(c, 2.0))
+            for k in range(n):
+                y = box.top() + box.height() * (k / (n - 1) if n > 1 else 0.5)
+                painter.drawLine(QPointF(box.left(), y), QPointF(box.right(), y))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(c)
+        for p in (box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()):
+            painter.drawEllipse(p, 5.0, 5.0)
+
     def _draw_pick(self, painter: QPainter, pt: QPointF, playing: bool) -> None:
         c = QColor(255, 255, 255) if playing else QColor(160, 166, 176)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -319,12 +429,15 @@ class InstrumentCanvas(CameraPreviewWidget):
         else:
             main = view.note_label or "—"
         layout = LAYOUT_LABELS_TR.get(view.layout, view.layout)
-        return (main, f"Düzen: {layout}", view.status)
+        status = view.status
+        if view.layout == "fixed" and not view.adjusting and status == "Hazır":
+            status = f"{status} · {FIXED_HINT_TR}"
+        return (main, f"Düzen: {layout}", status)
 
     def _draw_hud(self, painter: QPainter, canvas: QRectF) -> None:
         main, layout_line, status = self.hud_lines()
         playing = self._view.playing if self._view is not None else False
-        box = QRectF(canvas.left() + 12.0, canvas.top() + 12.0, 280.0, 92.0)
+        box = QRectF(canvas.left() + 12.0, canvas.top() + 12.0, 280.0 if len(status) < 40 else 560.0, 92.0)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(14, 18, 26, 200))
         painter.drawRoundedRect(box, 10.0, 10.0)
@@ -348,6 +461,7 @@ class InstrumentWindow(QWidget):
     """Top-level "Holoscobe — Enstrüman" window. Closing it hides it; the app keeps running."""
 
     closed = Signal()
+    fixed_rect_changed = Signal(object)     # new "Sabit teller" area from a mouse drag
 
     def __init__(
         self,
@@ -366,6 +480,7 @@ class InstrumentWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.canvas)
+        self.canvas.fixed_rect_edited.connect(self.fixed_rect_changed)
 
         self._timer = QTimer(self)
         self._timer.setInterval(FRAME_INTERVAL_MS)

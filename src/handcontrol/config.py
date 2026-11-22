@@ -14,7 +14,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from handcontrol.instrument.events import CHORD_NAMES, DEFAULT_CHORDS, LATENCIES, LAYOUTS, SCALE_NAMES, TONES
+from handcontrol.instrument.events import (
+    CHORD_NAMES, DEFAULT_CHORDS, DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS, FIXED_STRINGS_RANGE, LATENCIES, LAYOUTS,
+    SCALE_NAMES, TONES,
+)
+from handcontrol.instrument.geometry import normalize_fixed_rect
 
 SCHEMA_VERSION = 4
 APP_DIR_NAME = "Holoscobe"
@@ -112,6 +116,9 @@ class Settings:
     audio_device: str = ""                # output device name; "" = system default
     audio_latency: str = "low"            # "low" | "normal"
     instrument_particles: bool = True     # spark particles in the Enstrüman window
+    # "fixed" layout: string area (normalized x0, y0, x1, y1 on the unmirrored frame) and string count
+    instrument_fixed_rect: list[float] = field(default_factory=lambda: list(DEFAULT_FIXED_RECT))
+    instrument_fixed_strings: int = DEFAULT_FIXED_STRINGS
 
 
 # ---------- validation helpers ----------
@@ -202,6 +209,9 @@ def validate(data: Any) -> Settings:
     s.audio_device = dev.strip()[:200] if isinstance(dev, str) else ""
     s.audio_latency = _choice(d.get("audio_latency"), LATENCIES, s.audio_latency)
     s.instrument_particles = _bool(d.get("instrument_particles"), s.instrument_particles)
+    s.instrument_fixed_rect = list(normalize_fixed_rect(d.get("instrument_fixed_rect"), DEFAULT_FIXED_RECT))
+    s.instrument_fixed_strings = _int(d.get("instrument_fixed_strings"), s.instrument_fixed_strings,
+                                      *FIXED_STRINGS_RANGE)
 
     m, md = s.monitor_mapping, _dict(d.get("monitor_mapping"))
     m.mode = _choice(md.get("mode"), MONITOR_MODES, m.mode)

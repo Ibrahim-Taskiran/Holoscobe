@@ -21,6 +21,8 @@ from PySide6.QtGui import QImage
 
 from handcontrol.contracts import Handedness, Mode
 from handcontrol.instrument.engine import InstrumentConfig, InstrumentEngine
+from handcontrol.instrument.events import DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS
+from handcontrol.instrument.geometry import normalize_fixed_rect
 from handcontrol.instrument.session import InstrumentSession
 
 log = logging.getLogger(__name__)
@@ -38,6 +40,8 @@ def instrument_config(settings: Any) -> InstrumentConfig:
         quantize=bool(settings.instrument_quantize),
         chords=tuple(settings.instrument_chords),
         dominant=dominant,
+        fixed_rect=tuple(getattr(settings, "instrument_fixed_rect", DEFAULT_FIXED_RECT)),  # type: ignore[arg-type]
+        fixed_strings=int(getattr(settings, "instrument_fixed_strings", DEFAULT_FIXED_STRINGS)),
     )
 
 
@@ -76,6 +80,7 @@ class InstrumentRuntime(QObject):
 
     def __init__(self, pipeline: Any, settings: Any, *, bridge: Any = None,
                  notify: Optional[Callable[[str], None]] = None,
+                 persist: Optional[Callable[[Any], None]] = None,
                  synth_factory: Callable[[Any], Any] = _default_synth_factory,
                  audio_factory: Callable[[Any, Any, Callable[[str], None]], Any] = _default_audio_factory,
                  window_factory: Callable[[Any], Any] = _default_window_factory,
@@ -85,6 +90,8 @@ class InstrumentRuntime(QObject):
         self.settings = settings
         self.bridge = bridge
         self._notify = notify or (lambda text: None)
+        self._persist = persist or (lambda settings: None)
+        self._was_adjusting = False
         self._synth_factory = synth_factory
         self._audio_factory = audio_factory
         self._window_factory = window_factory
@@ -100,6 +107,7 @@ class InstrumentRuntime(QObject):
         self.engine = InstrumentEngine(instrument_config(settings))
         self.session = InstrumentSession(self.engine, self._emit_audio, self.view_ready.emit)
         self._mode_seen.connect(self._on_mode)
+        self.view_ready.connect(self._on_view)
         self._audio_failed.connect(self._on_audio_failed)
         self._timer = QTimer(self)
         self._timer.setInterval(max(10, int(repaint_ms)))
@@ -196,6 +204,9 @@ class InstrumentRuntime(QObject):
             closed = getattr(self.window, "closed", None)
             if closed is not None:
                 closed.connect(self._timer.stop)
+            edited = getattr(self.window, "fixed_rect_changed", None)
+            if edited is not None:
+                edited.connect(self.set_fixed_rect)
             self._apply_window_settings()
         self.window.show()
         for name in ("raise_", "activateWindow"):
@@ -214,6 +225,31 @@ class InstrumentRuntime(QObject):
             fn = getattr(w, name, None)
             if fn is not None:
                 fn(value)
+
+    @Slot(object)
+    def _on_view(self, view: Any) -> None:
+        """Two-hand placement finished in the engine: keep the new string area in the settings."""
+        adjusting = bool(getattr(view, "adjusting", False))
+        if self._was_adjusting and not adjusting and getattr(view, "fixed_rect", None) is not None:
+            self.set_fixed_rect(view.fixed_rect, reconfigure=False)
+        self._was_adjusting = adjusting
+
+    @Slot(object)
+    def set_fixed_rect(self, rect: Any, reconfigure: bool = True) -> None:
+        """New "Sabit teller" area (window drag or two-hand pinch): apply and save it."""
+        if self._closed:
+            return
+        new = list(normalize_fixed_rect(rect, tuple(self.settings.instrument_fixed_rect)))
+        if new == [float(v) for v in self.settings.instrument_fixed_rect]:
+            return
+        from dataclasses import replace
+        self.settings = replace(self.settings, instrument_fixed_rect=new)
+        if reconfigure:            # the engine already holds a rect it placed itself
+            self.session.configure(instrument_config(self.settings))
+        try:
+            self._persist(self.settings)
+        except Exception:
+            log.warning("could not save the string area", exc_info=True)
 
     @Slot()
     def _push_image(self) -> None:

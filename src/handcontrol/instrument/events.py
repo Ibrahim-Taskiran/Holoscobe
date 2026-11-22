@@ -33,10 +33,14 @@ CHORD_NAMES: tuple[str, ...] = (
     "Cmaj7", "Fmaj7", "Am7", "Em7", "Dm7",
 )
 DEFAULT_CHORDS: tuple[str, str, str, str] = ("Em", "C", "G", "D")
-LAYOUTS: tuple[str, ...] = ("solo", "chord")
+LAYOUTS: tuple[str, ...] = ("solo", "chord", "fixed")
 TONES: tuple[str, ...] = ("clean", "electric")
 LATENCIES: tuple[str, ...] = ("low", "normal")
 DEFAULT_FADE_MS = 20.0
+# "fixed" layout: strings fixed on the screen; normalized (x0, y0, x1, y1) on the UNMIRRORED frame.
+DEFAULT_FIXED_RECT: tuple[float, float, float, float] = (0.25, 0.35, 0.75, 0.65)
+DEFAULT_FIXED_STRINGS = 6
+FIXED_STRINGS_RANGE: tuple[int, int] = (3, 8)
 
 
 # ---------- audio events (engine -> audio queue -> synth) ----------
@@ -94,7 +98,7 @@ class InstrumentView:
     t_ms: float
     width: int                    # camera frame size the positions refer to
     height: int
-    layout: str                   # "solo" | "chord"
+    layout: str                   # "solo" | "chord" | "fixed"
     strings: tuple[StringView, ...]
     hits: tuple[HitView, ...]     # new strikes in this frame only
     note_label: str               # last played note ("A3", "A3 +0.7"), "" if none
@@ -104,9 +108,12 @@ class InstrumentView:
     pick_tip: Optional[tuple[float, float]] = None   # playing index fingertip (camera px)
     string_hand_id: Optional[int] = None
     pick_hand_id: Optional[int] = None
+    fixed_rect: Optional[tuple[float, float, float, float]] = None   # "fixed": current string area
+    adjusting: bool = False       # "fixed": both hands are pinching and moving the string area
 
 
 __all__ = [
-    "AllOff", "Bend", "CHORD_NAMES", "DEFAULT_CHORDS", "DEFAULT_FADE_MS", "HitView", "InstrumentEvent",
+    "AllOff", "Bend", "CHORD_NAMES", "DEFAULT_CHORDS", "DEFAULT_FADE_MS", "DEFAULT_FIXED_RECT",
+    "DEFAULT_FIXED_STRINGS", "FIXED_STRINGS_RANGE", "HitView", "InstrumentEvent",
     "InstrumentView", "LATENCIES", "LAYOUTS", "NoteOn", "SCALE_NAMES", "StringView", "TONES",
 ]

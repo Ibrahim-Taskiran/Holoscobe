@@ -79,7 +79,8 @@ STARTUP_FAILED_TR = 'Windows ile başlatma ayarı değiştirilemedi'
 SETTINGS_V3_KEYS = ('swipe_profile', 'auto_pause_s', 'dwell_click', 'dwell_ms', 'click_sound', 'cursor_feedback')
 # schema 4 (Enstrüman mode); SettingsData uses the same field names
 SETTINGS_V4_KEYS = ('instrument_layout', 'instrument_scale', 'instrument_quantize', 'instrument_chords',
-    'instrument_volume', 'instrument_tone', 'audio_device', 'audio_latency', 'instrument_particles')
+    'instrument_volume', 'instrument_tone', 'audio_device', 'audio_latency', 'instrument_particles',
+    'instrument_fixed_strings')
 
 
 def _dialog_keys(data) -> tuple[str, ...]:
@@ -512,6 +513,18 @@ class Runtime(QObject):
         except Exception:
             logging.getLogger(__name__).warning('could not save onboarding flag', exc_info=True)
 
+    def save_instrument_area(self, instrument_settings) -> None:
+        """Keep the "Sabit teller" area the user placed (window drag or two-hand pinch)."""
+        rect = list(instrument_settings.instrument_fixed_rect)
+        if list(self.settings.instrument_fixed_rect) == rect:
+            return
+        settings = replace(self.settings, instrument_fixed_rect=rect)
+        try:
+            self.store.save(settings)
+        except Exception:
+            logging.getLogger(__name__).warning('could not save the string area', exc_info=True)
+        self.settings = self.pipeline.settings = settings
+
     def build_diagnostics(self, dest_dir: Path | None = None) -> Path | None:
         from handcontrol import diagnostics, logsetup, telemetry as telemetry_module
         try:
@@ -612,7 +625,8 @@ class Runtime(QObject):
 def _make_instrument(runtime: 'Runtime'):
     from handcontrol.instrument_runtime import InstrumentRuntime
     return InstrumentRuntime(runtime.pipeline, runtime.settings, bridge=runtime.bridge,
-        notify=lambda text: runtime.bridge.show_feedback(message=text), parent=runtime)
+        notify=lambda text: runtime.bridge.show_feedback(message=text),
+        persist=runtime.save_instrument_area, parent=runtime)
 
 
 def show_or_reuse_dialog(ref: list, factory):

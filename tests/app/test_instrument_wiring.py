@@ -108,6 +108,7 @@ def make_runtime(qt, *, audio_ok=True, settings=None, notes=None):
 
     def factory(rt):
         return InstrumentRuntime(rt.pipeline, rt.settings, bridge=rt.bridge, notify=notes.append,
+                                 persist=rt.save_instrument_area,
                                  synth_factory=lambda s: SimpleNamespace(settings=s),
                                  audio_factory=lambda synth, s, err: FakeAudio(synth, s, err, ok=audio_ok),
                                  window_factory=FakeWindow, parent=rt)
@@ -344,3 +345,31 @@ def test_instrument_config_from_settings_and_dialog_round_trip():
     for key in ("instrument_layout", "instrument_scale", "instrument_quantize", "instrument_chords",
                 "instrument_volume", "instrument_tone", "audio_device", "audio_latency", "instrument_particles"):
         assert getattr(back, key) == getattr(s, key), key
+
+
+def test_fixed_area_from_window_or_pinch_is_applied_and_saved(qt):
+    rt, _ = make_runtime(qt, settings=Settings(instrument_layout="fixed"))
+    try:
+        ins = rt.instrument
+        assert ins.engine.config.layout == "fixed"
+        rt.store.save.reset_mock()
+        ins.set_fixed_rect((0.1, 0.2, 0.5, 0.6))                     # mouse drag in the window
+        assert ins.engine.config.fixed_rect == (0.1, 0.2, 0.5, 0.6)
+        assert rt.settings.instrument_fixed_rect == [0.1, 0.2, 0.5, 0.6]
+        assert rt.store.save.call_count == 1
+        ins.set_fixed_rect((0.1, 0.2, 0.5, 0.6))                     # unchanged: nothing saved
+        assert rt.store.save.call_count == 1
+        # two-hand pinch: saved when the engine reports the end of the adjustment, engine not reset
+        done = SimpleNamespace(adjusting=False, fixed_rect=(0.3, 0.3, 0.9, 0.8))
+        ins._on_view(SimpleNamespace(adjusting=True, fixed_rect=(0.3, 0.3, 0.9, 0.7)))
+        assert rt.store.save.call_count == 1
+        ins._on_view(done)
+        assert rt.settings.instrument_fixed_rect == [0.3, 0.3, 0.9, 0.8] and rt.store.save.call_count == 2
+        assert ins.engine.config.fixed_rect == (0.1, 0.2, 0.5, 0.6)    # engine keeps the rect it placed
+        ins._on_view(done)
+        assert rt.store.save.call_count == 2
+        # dialog save keeps the area and passes the string count
+        rt.apply_settings(replace(rt.settings, instrument_fixed_strings=4))
+        assert ins.engine.config.fixed_strings == 4 and ins.engine.config.fixed_rect == (0.3, 0.3, 0.9, 0.8)
+    finally:
+        rt.close()

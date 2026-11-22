@@ -23,13 +23,16 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSlider,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from handcontrol.contracts import Handedness, Mode
-from handcontrol.instrument.events import CHORD_NAMES, DEFAULT_CHORDS, LATENCIES, LAYOUTS, SCALE_NAMES, TONES
+from handcontrol.instrument.events import (
+    CHORD_NAMES, DEFAULT_CHORDS, DEFAULT_FIXED_STRINGS, FIXED_STRINGS_RANGE, LATENCIES, LAYOUTS, SCALE_NAMES, TONES,
+)
 from handcontrol.ui.tray import create_mode_icon
 from handcontrol.ui.viewmodel import MODE_LABELS_TR, SWIPE_PROFILE_LABELS_TR, UiBridge
 
@@ -70,7 +73,7 @@ SENSITIVITY_PRESET_LABELS_TR: dict[str, str] = {
 }
 
 
-INSTRUMENT_LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor"}
+INSTRUMENT_LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "Sabit teller"}
 INSTRUMENT_SCALE_LABELS_TR: dict[str, str] = {
     "e_minor_pentatonic": "Mi minör pentatonik",
     "a_minor_pentatonic": "La minör pentatonik",
@@ -153,6 +156,7 @@ class SettingsData:
     audio_device: str = ""                      # "" = system default
     audio_latency: str = "low"                  # LATENCIES
     instrument_particles: bool = True
+    instrument_fixed_strings: int = DEFAULT_FIXED_STRINGS   # FIXED_STRINGS_RANGE
     # Display only: output device names offered in the Ses cihazı list (not persisted).
     audio_device_choices: tuple[str, ...] = ()
 
@@ -261,6 +265,9 @@ class SettingsData:
             volume = defaults.instrument_volume
         raw_dev = data.get("audio_device", defaults.audio_device)
         device = raw_dev.strip()[:200] if isinstance(raw_dev, str) else ""
+        lo, hi = FIXED_STRINGS_RANGE
+        fixed_strings = max(lo, min(hi, _int_or(data.get("instrument_fixed_strings"),
+                                                defaults.instrument_fixed_strings)))
         raw_choices = data.get("audio_device_choices", ())
         choices = tuple(str(c) for c in raw_choices) if isinstance(raw_choices, (list, tuple)) else ()
 
@@ -314,6 +321,7 @@ class SettingsData:
             audio_device=device,
             audio_latency=latency,
             instrument_particles=bool(data.get("instrument_particles", defaults.instrument_particles)),
+            instrument_fixed_strings=fixed_strings,
             audio_device_choices=choices,
         )
 
@@ -588,7 +596,14 @@ class SettingsDialog(QDialog):
             self.combo_instrument_layout.addItem(INSTRUMENT_LAYOUT_LABELS_TR.get(key, key), key)
         play_form.addRow("Düzen:", self.combo_instrument_layout)
         play_form.addRow("", self._hint(
-            "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, tel eli yüksekliği akoru seçer."))
+            "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, tel eli yüksekliği akoru seçer. "
+            "Sabit teller: teller ekranda durur, iki elle de çalınır."))
+        self.spin_instrument_fixed_strings = QSpinBox()
+        self.spin_instrument_fixed_strings.setRange(*FIXED_STRINGS_RANGE)
+        play_form.addRow("Tel sayısı (sabit):", self.spin_instrument_fixed_strings)
+        play_form.addRow("", self._hint(
+            "Telleri taşımak ya da boyutlandırmak için: Enstrüman penceresinde fareyle sürükle (köşeden "
+            "boyutlandır) ya da iki elinle çimdikle, yarım saniye tut, gerdir ve bırak."))
 
         self.combo_instrument_scale = QComboBox()
         for key in SCALE_NAMES:
@@ -908,6 +923,7 @@ class SettingsDialog(QDialog):
         self._set_audio_devices(choices, cfg.audio_device)
         self._set_combo_by_data(self.combo_audio_latency, cfg.audio_latency)
         self.chk_instrument_particles.setChecked(cfg.instrument_particles)
+        self.spin_instrument_fixed_strings.setValue(int(cfg.instrument_fixed_strings))
 
     def get_settings(self) -> SettingsData:
         """Read current UI control values as a validated SettingsData instance."""
@@ -950,6 +966,7 @@ class SettingsDialog(QDialog):
             audio_device=self.selected_audio_device(),
             audio_latency=str(self.combo_audio_latency.currentData() or "low"),
             instrument_particles=bool(self.chk_instrument_particles.isChecked()),
+            instrument_fixed_strings=int(self.spin_instrument_fixed_strings.value()),
             audio_device_choices=tuple(getattr(self, "_audio_device_choices", ())),
         )
 

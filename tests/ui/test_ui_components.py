@@ -279,6 +279,7 @@ def test_settings_dialog_dataclass_and_dict_roundtrip() -> None:
         "audio_device": "",
         "audio_latency": "normal",
         "instrument_particles": False,
+        "instrument_fixed_strings": 5,
         "audio_device_choices": (),
     }
 

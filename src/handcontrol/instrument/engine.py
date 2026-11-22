@@ -16,6 +16,11 @@ Design constants (InstrumentConfig defaults, documented here):
   identity_ambiguous, missing/duplicate roles, hand id change or a frame gap > 150 ms.
 - Solo bend: One Euro smoothed continuous pitch minus its value at the strike, clamped +-2 st,
   sent when it changed by > 0.02 st, for 2.5 s after the strike (or until the next strike).
+- Fixed layout: 3..8 horizontal strings fixed on the screen inside a normalized rectangle (top string =
+  lowest note, then consecutive scale degrees upward from E3). The index fingertip of EVERY usable hand
+  plays (per-hand detectors, band/speed in that hand's palm units). Moving/resizing: pinch with both
+  hands (pinch < 0.35 pu, released above 0.55 pu) and hold 400 ms; the area then follows the two pinch
+  points as opposite corners until a pinch is released. No strikes while adjusting.
 """
 from __future__ import annotations
 
@@ -27,10 +32,10 @@ from handcontrol.contracts import FrameFeatures, HandFeatures, Handedness, Quali
 from handcontrol.filters import OneEuroFilter
 from handcontrol.instrument import music
 from handcontrol.instrument.events import (
-    CHORD_NAMES, DEFAULT_CHORDS, DEFAULT_FADE_MS, LAYOUTS, SCALE_NAMES, AllOff, Bend, HitView,
-    InstrumentEvent, InstrumentView, NoteOn, StringView,
+    CHORD_NAMES, DEFAULT_CHORDS, DEFAULT_FADE_MS, DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS, FIXED_STRINGS_RANGE,
+    LAYOUTS, SCALE_NAMES, AllOff, Bend, HitView, InstrumentEvent, InstrumentView, NoteOn, StringView,
 )
-from handcontrol.instrument.geometry import Vec, dist, is_finite
+from handcontrol.instrument.geometry import Rect, Vec, dist, is_finite, lerp, normalize_fixed_rect
 from handcontrol.instrument.strings import CrossingDetector, Layout, Strike, StringLayout
 
 THUMB_TIP = 4
@@ -42,11 +47,13 @@ STATUS_NEED_STRING = "Tel elini gösterin"
 STATUS_NEED_PICK = "Çalan eli gösterin"
 STATUS_TOO_CLOSE = "Eller çok yakın"
 STATUS_UNCERTAIN = "Takip belirsiz"
+STATUS_NEED_HAND = "Elinizi gösterin"
+STATUS_ADJUSTING = "Teller taşınıyor"
 
 
 @dataclass(frozen=True)
 class InstrumentConfig:
-    layout: str = "solo"                    # "solo" | "chord"
+    layout: str = "solo"                    # "solo" | "chord" | "fixed"
     scale: str = "e_minor_pentatonic"       # one of events.SCALE_NAMES
     quantize: bool = True
     chords: tuple[str, str, str, str] = DEFAULT_CHORDS   # each one of events.CHORD_NAMES
@@ -82,6 +89,13 @@ class InstrumentConfig:
     bend_min_cutoff: float = 4.0            # Hz: tremor (8-12 Hz) is damped, not removed -> vibrato
     bend_beta: float = 0.05
     amp_tau_ms: float = 600.0
+    # --- fixed layout ---
+    fixed_rect: Rect = DEFAULT_FIXED_RECT
+    fixed_strings: int = DEFAULT_FIXED_STRINGS
+    fixed_low_midi: float = 52.0            # top string; the others climb the scale
+    adjust_pinch_on_pu: float = 0.35
+    adjust_pinch_off_pu: float = 0.55
+    adjust_hold_ms: float = 400.0
 
 
 def normalize_config(cfg: InstrumentConfig) -> InstrumentConfig:
@@ -91,9 +105,33 @@ def normalize_config(cfg: InstrumentConfig) -> InstrumentConfig:
     chords = tuple(cfg.chords) if len(tuple(cfg.chords)) == 4 else DEFAULT_CHORDS
     chords = tuple(c if c in CHORD_NAMES else DEFAULT_CHORDS[i] for i, c in enumerate(chords))
     dominant = cfg.dominant if cfg.dominant in (Handedness.LEFT, Handedness.RIGHT) else Handedness.RIGHT
-    if (layout, scale, chords, dominant) == (cfg.layout, cfg.scale, tuple(cfg.chords), cfg.dominant):
+    rect = normalize_fixed_rect(cfg.fixed_rect, DEFAULT_FIXED_RECT)
+    lo, hi = FIXED_STRINGS_RANGE
+    try:
+        count = int(min(hi, max(lo, int(cfg.fixed_strings))))
+    except (TypeError, ValueError):
+        count = DEFAULT_FIXED_STRINGS
+    if (layout, scale, chords, dominant, rect, count) == (cfg.layout, cfg.scale, tuple(cfg.chords), cfg.dominant,
+                                                          tuple(cfg.fixed_rect), cfg.fixed_strings):
         return cfg
-    return replace(cfg, layout=layout, scale=scale, chords=chords, dominant=dominant)  # type: ignore[arg-type]
+    return replace(cfg, layout=layout, scale=scale, chords=chords, dominant=dominant,  # type: ignore[arg-type]
+                   fixed_rect=rect, fixed_strings=count)
+
+
+def fixed_pitches(scale: str, low: float, count: int) -> tuple[float, ...]:
+    """`count` consecutive degrees of `scale` from `low` upward (top string first)."""
+    notes = music.scale_pitches(scale, low, low + 60.0)
+    return tuple(float(n) for n in notes[:count])
+
+
+def fixed_lines(rect: Rect, count: int, w: int, h: int) -> tuple[tuple[Vec, Vec], ...]:
+    """Horizontal string lines (camera px), top first, evenly spread over the rectangle height."""
+    x0, y0, x1, y1 = rect
+    out = []
+    for k in range(count):
+        y = y0 + (y1 - y0) * (k / (count - 1) if count > 1 else 0.5)
+        out.append(((x0 * w, y * h), (x1 * w, y * h)))
+    return tuple(out)
 
 
 @dataclass
@@ -102,6 +140,19 @@ class _Voice:
     base: float          # smoothed continuous pitch at the strike
     t_ms: float
     last_sent: float = 0.0
+
+
+@dataclass
+class _Pick:
+    detectors: list[CrossingDetector]
+    tip: Vec
+    t_ms: float
+
+
+@dataclass
+class _Adjust:
+    since: float
+    engaged: bool = False
 
 
 @dataclass
@@ -137,6 +188,7 @@ class InstrumentEngine:
         self._cfg = normalize_config(config)
         count = 4 if self._cfg.layout == "chord" else 1
         self._detectors = [CrossingDetector(k) for k in range(count)]
+        self._fixed_pitches = fixed_pitches(self._cfg.scale, self._cfg.fixed_low_midi, self._cfg.fixed_strings)
         self._pitches = music.scale_pitches(self._cfg.scale, self._cfg.low_midi, self._cfg.high_midi)
         self._voicings = tuple(music.chord_voicing(c) for c in self._cfg.chords)
         self._filter = OneEuroFilter(self._cfg.bend_min_cutoff, self._cfg.bend_beta, 1.0,
@@ -157,6 +209,13 @@ class InstrumentEngine:
         self._amps: dict[int, tuple[float, float]] = {}
         self._note_name = ""
         self._note_bend = 0.0
+        self._rect: Rect = self._cfg.fixed_rect
+        self._picks: dict[int, _Pick] = {}
+        self._adjust: Optional[_Adjust] = None
+
+    @property
+    def fixed_rect(self) -> Rect:
+        return self._rect
 
     def all_off(self, t_ms: float, fade_ms: float = DEFAULT_FADE_MS) -> AllOff:
         self.reset()
@@ -165,6 +224,8 @@ class InstrumentEngine:
     # ------------------------------------------------------------------ main step
 
     def update(self, frame: FrameFeatures, active: bool) -> tuple[list[InstrumentEvent], InstrumentView]:
+        if self._cfg.layout == "fixed":
+            return self._update_fixed(frame, active)
         cfg = self._cfg
         t = frame.capture_ms
         w, h = frame.width, frame.height
@@ -307,6 +368,125 @@ class InstrumentEngine:
         )
         return events, view
 
+    # ------------------------------------------------------------------ fixed layout
+
+    def _update_fixed(self, frame: FrameFeatures, active: bool) -> tuple[list[InstrumentEvent], InstrumentView]:
+        cfg = self._cfg
+        t = frame.capture_ms
+        w, h = frame.width, frame.height
+        events: list[InstrumentEvent] = []
+        hits: list[HitView] = []
+        gap = self._last_t is not None and t - self._last_t > cfg.max_gap_ms
+        duplicate = self._last_t is not None and t <= self._last_t
+        if not duplicate:
+            self._last_t = t
+        usable = [x for x in frame.hands
+                  if x.quality is Quality.USABLE and _scale_ok(x) and _px(x, INDEX_TIP, w, h) is not None]
+        ambiguous = frame.identity_ambiguous or len({x.hand_id for x in usable}) != len(usable)
+
+        if not duplicate:
+            self._step_adjust(usable, t, w, h, active and not ambiguous and not gap)
+        adjusting = self._adjust is not None and self._adjust.engaged
+        lines = fixed_lines(self._rect, cfg.fixed_strings, w, h)
+        safe = not ambiguous and not gap and not adjusting
+        playing = bool(active and safe and usable)
+
+        if active and safe and not duplicate:
+            strikes: list[Strike] = []
+            seen = set()
+            for hand in usable:
+                tip = _px(hand, INDEX_TIP, w, h)
+                assert tip is not None
+                seen.add(hand.hand_id)
+                pick = self._picks.get(hand.hand_id)
+                if pick is None:
+                    pick = _Pick([CrossingDetector(k) for k in range(len(lines))], tip, t)
+                    self._picks[hand.hand_id] = pick
+                p_scale = float(hand.palm_scale_px)
+                for det in pick.detectors:
+                    line = lines[det.slot]
+                    st = det.update(line, line, pick.tip, tip, pick.t_ms, t, band_px=cfg.band_pu * p_scale,
+                                    end_margin=cfg.end_margin, pick_scale_px=p_scale,
+                                    min_speed_pu_s=cfg.min_speed_pu_s, cooldown_ms=cfg.cooldown_ms)
+                    if st is not None:
+                        strikes.append(st)
+                pick.tip, pick.t_ms = tip, t
+            for hid in [k for k in self._picks if k not in seen]:
+                del self._picks[hid]
+            if strikes:
+                self._emit_fixed(strikes, t, events, hits)
+        elif not duplicate:
+            self._picks.clear()
+
+        if adjusting:
+            status = STATUS_ADJUSTING
+        elif not active:
+            status = STATUS_PAUSED
+        elif ambiguous or gap:
+            status = STATUS_UNCERTAIN
+        elif not usable:
+            status = STATUS_NEED_HAND
+        else:
+            status = STATUS_READY
+        names = [music.midi_to_name(m) for m in self._fixed_pitches]
+        strings = tuple(
+            StringView(k, a, b, self._amplitude(k, t), names[k] if k < len(names) else "", playing)
+            for k, (a, b) in enumerate(lines))
+        tips = [x for x in usable if x.handedness is cfg.dominant] or usable
+        tip = _px(tips[0], INDEX_TIP, w, h) if tips else None
+        view = InstrumentView(
+            t_ms=t, width=w, height=h, layout="fixed", strings=strings, hits=tuple(hits),
+            note_label=self._note_name, chord_label="", playing=playing, status=status, pick_tip=tip,
+            pick_hand_id=tips[0].hand_id if tips else None, fixed_rect=self._rect, adjusting=adjusting,
+        )
+        return events, view
+
+    def _step_adjust(self, usable: list[HandFeatures], t: float, w: int, h: int, allowed: bool) -> None:
+        """Two-hand pinch: hold to grab the string area, move both hands to place/resize it, release."""
+        cfg = self._cfg
+        adj = self._adjust
+        limit = cfg.adjust_pinch_off_pu if adj is not None and adj.engaged else cfg.adjust_pinch_on_pu
+        pinched = [x for x in usable if math.isfinite(x.pinch_distance) and x.pinch_distance < limit]
+        if not allowed or len(usable) != 2 or len(pinched) != 2 or w <= 0 or h <= 0:
+            self._adjust = None
+            return
+        if adj is None:
+            self._adjust = adj = _Adjust(t)
+        if not adj.engaged and t - adj.since >= cfg.adjust_hold_ms:
+            adj.engaged = True
+            self._picks.clear()
+        if not adj.engaged:
+            return
+        pts = []
+        for x in pinched:
+            a, b = _px(x, THUMB_TIP, w, h), _px(x, INDEX_TIP, w, h)
+            if a is None or b is None:
+                return
+            pts.append(lerp(a, b, 0.5))
+        (ax, ay), (bx, by) = pts
+        self._rect = normalize_fixed_rect((ax / w, ay / h, bx / w, by / h), self._rect)
+
+    def _emit_fixed(self, strikes: list[Strike], t: float, events: list[InstrumentEvent],
+                    hits: list[HitView]) -> None:
+        cfg = self._cfg
+        strikes.sort(key=lambda s: (s.t_ms, s.slot))
+        delay = 0.0
+        prev_t: Optional[float] = None
+        for st in strikes:
+            if st.slot >= len(self._fixed_pitches):
+                continue
+            if prev_t is not None:
+                delay += min(cfg.strum_max_ms, max(cfg.strum_min_ms, st.t_ms - prev_t))
+            prev_t = st.t_ms
+            vel = self._velocity(st.speed_pu_s, st.direction)
+            midi = self._fixed_pitches[st.slot]
+            nid = self._next_id
+            self._next_id += 1
+            events.append(NoteOn(string=st.slot, midi=midi, velocity=vel, note_id=nid, t_ms=t, delay_ms=delay))
+            hits.append(HitView(st.slot, st.point[0], st.point[1], vel, st.direction, t))
+            self._amps[st.slot] = (vel, t + delay)
+            self._note_name = music.midi_to_name(midi)
+
     # ------------------------------------------------------------------ helpers
 
     def _velocity(self, speed: float, direction: int) -> float:
@@ -375,6 +555,6 @@ class InstrumentEngine:
 
 
 __all__ = [
-    "InstrumentConfig", "InstrumentEngine", "STATUS_NEED_PICK", "STATUS_NEED_STRING", "STATUS_PAUSED",
-    "STATUS_READY", "STATUS_TOO_CLOSE", "STATUS_UNCERTAIN", "normalize_config",
+    "InstrumentConfig", "InstrumentEngine", "STATUS_ADJUSTING", "STATUS_NEED_HAND", "STATUS_NEED_PICK", "STATUS_NEED_STRING", "STATUS_PAUSED",
+    "STATUS_READY", "STATUS_TOO_CLOSE", "STATUS_UNCERTAIN", "fixed_lines", "fixed_pitches", "normalize_config",
 ]

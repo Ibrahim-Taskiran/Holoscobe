@@ -104,7 +104,35 @@ def segment_intersection(p0: Vec, p1: Vec, q0: Vec, q1: Vec) -> Optional[tuple[f
     return None
 
 
+Rect = tuple[float, float, float, float]
+FIXED_MIN_W = 0.10      # smallest string area, fraction of the frame width
+FIXED_MIN_H = 0.08      # ... and of the frame height
+
+
+def normalize_fixed_rect(r: object, default: Rect = (0.25, 0.35, 0.75, 0.65)) -> Rect:
+    """Normalized (x0, y0, x1, y1): sorted, inside [0, 1], at least FIXED_MIN_W x FIXED_MIN_H.
+    Anything that is not 4 finite numbers gives `default`. A too small area grows around its centre."""
+    try:
+        vals = [float(v) for v in r]  # type: ignore[union-attr]
+    except (TypeError, ValueError):
+        return default
+    if len(vals) != 4 or not all(math.isfinite(v) for v in vals):
+        return default
+    x0, x1 = sorted((min(1.0, max(0.0, vals[0])), min(1.0, max(0.0, vals[2]))))
+    y0, y1 = sorted((min(1.0, max(0.0, vals[1])), min(1.0, max(0.0, vals[3]))))
+
+    def grow(lo: float, hi: float, size: float) -> tuple[float, float]:
+        if hi - lo >= size:
+            return lo, hi
+        c = min(1.0 - size / 2.0, max(size / 2.0, (lo + hi) / 2.0))
+        return c - size / 2.0, c + size / 2.0
+
+    x0, x1 = grow(x0, x1, FIXED_MIN_W)
+    y0, y1 = grow(y0, y1, FIXED_MIN_H)
+    return (round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4))
+
+
 __all__ = [
-    "EPS", "Vec", "add", "cross", "dist", "dot", "is_finite", "length", "lerp", "normal", "normalize",
+    "EPS", "FIXED_MIN_H", "FIXED_MIN_W", "Rect", "normalize_fixed_rect", "Vec", "add", "cross", "dist", "dot", "is_finite", "length", "lerp", "normal", "normalize",
     "point_segment_distance", "project_param", "scale", "segment_intersection", "signed_distance", "sub",
 ]

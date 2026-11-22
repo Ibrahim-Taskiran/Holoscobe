@@ -14,9 +14,13 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Ses çıkışı (`instrument/audio.py`): sounddevice, WASAPI öncelikli (DirectSound, MME yedek), 48 kHz, 128/256 örnek blok, kilitsiz kuyruk; cihaz hatasında Türkçe bildirim ve güvenli mod kapatma.
 - Enstrüman penceresi (`ui/instrument_view.py`): kamera görüntüsü, el iskeleti, parlayan ve titreşen teller, sınırlı kıvılcım parçacıkları, nota/akor göstergesi. Tepside "Enstrüman" modu ve "Enstrüman penceresi".
 - Ayarlar "Enstrüman" sekmesi (ses cihazı listesi, Test sesi çal). Ayar şeması 4 (eski dosyalar kayıpsız taşınır).
+- Sabit teller düzeni: 3-8 yatay tel ekranda sabit durur, iki elin işaret parmağı da çalar. Tel alanı Enstrüman penceresinde fareyle taşınır/köşeden boyutlandırılır ya da iki elle çimdikleyip 400 ms tutarak gerdirilir; yeni alan kaydedilir.
 - Enstrüman modunda daha sıkı jestler: el çırpma iki elde 4 parmak açıkken, mod menüsü 5 parmak açık ve el sabitken.
 - `--self-test` ve paketleme denetimi ses kütüphanesini (PortAudio) doğrular; pakete yalnız `libportaudio64bit.dll` girer.
-- Otomatik test takımı 1750 teste çıktı (7 manuel test seçilmez).
+- Otomatik test takımı 1769 teste çıktı (7 manuel test seçilmez).
+
+### Fixed
+- Enstrüman modundayken ayarları kaydetmek kamerayı durduruyor ve modu varsayılana döndürüyordu (Elektro tını seçimi çökme gibi görünüyordu). Kamera artık yeniden başlar, Enstrüman modunda kalınır.
 
 ### Changed
 - Mod menüsü 7 satır oldu; satır konumu sabitleyen 2 test bu yüzden güncellendi.

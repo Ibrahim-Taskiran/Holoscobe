@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1750 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1769 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -93,6 +93,9 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 | Akor: sağ elle 4 telin üstünden süpür | Strum: teller kesişme sırasıyla birkaç ms arayla çalar; aşağı ve yukarı ayrılır |
 | İki elle çırp (iki elde de 4 parmak açık) | Kontrolü duraklatır / açar. Çalma pozu çırpma sayılmaz |
 | Sol eli 5 parmak açık, sabit tut (600 ms) | Mod menüsü. Tel tutma pozu menü açmaz |
+| Sabit teller: herhangi bir elin işaret parmağıyla tellerin üstünden geç | Teller ekranda durur (3-8 tel, üstteki en kalın). İki el de çalar |
+| Sabit teller: iki elle çimdikle, 0,4 sn tut, ellerini aç/kapat, bırak | Tel alanı iki çimdik noktası arasına taşınır ve boyutlanır; kaydedilir |
+| Sabit teller: pencerede fareyle sürükle (köşeden boyutlandır) | Aynı ayar fareyle |
 
 İpuçları:
 - Teli göğüs hizasında, kameraya yan değil düz tut. İki elin de tam görünmesi gerekir.
@@ -100,7 +103,7 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 - Duraklatma, acil durdurma (`Ctrl+Alt+Shift+F12`), mod değişimi, kamera hatası ve oturum kilidinde tüm ses ~20 ms içinde kesilir.
 - Ses cihazı hatasında Türkçe bildirim çıkar, kontrol duraklar ve mod İşaretçi'ye döner.
 
-Ayarlar → **Enstrüman** sekmesi: düzen (Solo/Akor), dizi, diziye kilitle (kapalıysa kesintisiz perde),
+Ayarlar → **Enstrüman** sekmesi: düzen (Solo/Akor/Sabit teller), sabit tel sayısı, dizi, diziye kilitle (kapalıysa kesintisiz perde),
 4 akor, ses düzeyi (varsayılan %50), tını (Temiz/Elektro), ses cihazı, gecikme (Düşük/Normal),
 kıvılcım efektleri ve **Test sesi çal** düğmesi.
 
