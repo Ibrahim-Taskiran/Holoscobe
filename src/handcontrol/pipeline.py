@@ -21,6 +21,10 @@ Gesture reset protocol (the two state machines must agree on which hands are pin
 - Not on soft resets (clap candidate start, hand loss, watchdog): the recognizer already ends
   pinches itself there and a reset would kill the running clap candidate.
 
+Gesture profile: every process() call sets GestureRecognizer.set_instrument_profile(mode is
+INSTRUMENT) from the last seen controller mode, after the pending reset and before the update,
+so it also applies to a recognizer the app swapped in (pipeline.gestures replaced).
+
 Settings mapping notes:
 - config.CalibrationBounds is in the UNMIRRORED camera frame; mapping.CalibrationRect is in the
   mirrored view when mirror is on. Pipeline converts (left/right swapped and flipped).
@@ -184,6 +188,7 @@ class Pipeline:
     def process(self, sample: FrameSample) -> FrameFeatures:
         with self._lock:
             pre = self._take_pending_reset()
+            self._apply_gesture_profile()
             ff = self.features.update(sample)
             events = pre + self.gestures.update(ff)
             self.last_features = ff
@@ -262,6 +267,15 @@ class Pipeline:
             if key != self._seen:
                 self._seen = key
                 self._reset_pending = True
+
+    def _apply_gesture_profile(self) -> None:
+        """Mode-dependent recognizer profile, set every frame: survives a replaced pipeline.gestures and
+        mode changes made from any thread (the listener keeps _seen current)."""
+        with self._flag_lock:
+            mode = self._seen[1]
+        setter = getattr(self.gestures, "set_instrument_profile", None)
+        if setter is not None:
+            setter(mode is Mode.INSTRUMENT)
 
     def _take_pending_reset(self) -> list[GestureEvent]:
         with self._flag_lock:

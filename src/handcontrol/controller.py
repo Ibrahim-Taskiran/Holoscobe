@@ -383,6 +383,7 @@ _MODE_LABELS = {
     Mode.VOLUME: "Ses",
     Mode.WINDOWS: "Pencereler",
     Mode.COMMANDS: "Komutlar",
+    Mode.INSTRUMENT: "Enstrüman",
 }
 _WINDOW_ACTIONS = {
     "minimize": ActionKind.WINDOW_MINIMIZE,
@@ -871,6 +872,12 @@ class Controller:
         self._dwell.cancel()
         if mode is Mode.COMMANDS:
             self._profile_active = self._command_profile()
+        if mode is Mode.INSTRUMENT:
+            # audio-only mode: free every app-owned input on entry, held or not
+            self._index_tap.reset()
+            self._reset_mouse_memory()
+            self._reset_fists()
+            self._release()
         self._reason = f"Kip: {_MODE_LABELS[mode]}"
 
     def _note_cancel(self, e: Optional[_Eng], why: str) -> None:
@@ -1117,6 +1124,8 @@ class Controller:
     def _dispatch(self, kind: ActionKind, capture_ms: float, *, x: Optional[int] = None, y: Optional[int] = None,
                   steps: int = 0, value: float = 0.0, target: Optional[WindowTarget] = None,
                   command: str = "") -> bool:
+        if self._mode is Mode.INSTRUMENT:
+            return False   # defence in depth: INSTRUMENT never sends OS input (RELEASE_ALL uses _release)
         ok = self._guard.dispatch(Action(kind, self._epoch, capture_ms, x=x, y=y, steps=steps, value=value,
                                          target=target, command=command))
         if ok:
@@ -1204,6 +1213,10 @@ class Controller:
         elif self._auto_pause_check(now):
             return
         self._expire_menu(now)
+
+        if self._mode is Mode.INSTRUMENT:   # explicit early branch: no other mode's code runs here
+            self._instrument_frame(frame, events, kinds, stale, now)
+            return
 
         certain = not stale and not frame.identity_ambiguous
         if certain and self._pointer_geometry_frame(frame, events, now):
@@ -1370,6 +1383,47 @@ class Controller:
                 self._open_ptr["index"] = (frame.capture_ms, self._pointer)
             if not self._middle.pinched and self._middle.distance >= open_pu:
                 self._open_ptr["middle"] = (frame.capture_ms, self._pointer)
+
+    def _instrument_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], kinds: set[GestureKind],
+                          stale: bool, now: float) -> None:
+        """INSTRUMENT mode (ACTIVE): a separate engine turns the frames into sound. The controller only
+        keeps loss / neutral bookkeeping and the mode menu, so the user can leave the mode. Nothing
+        here dispatches OS input; only resets (RELEASE_ALL) reach the sink."""
+        self._index_tap.reset()
+        self._middle.reset()
+        self._reset_fists()
+        self._reset_mouse_memory()
+        if self._eng is not None:            # cannot normally exist: _set_mode cancels engagements
+            self._cancel_engagement(release=True, why="enstrüman kipi")
+            self._release()
+        if self._menu is not None and self._menu.kind is not MenuKind.MODE:
+            self._close_menu()
+        hands = [h for h in frame.hands if h.quality is Quality.USABLE and h.palm_scale_px > 0]
+        if stale or frame.identity_ambiguous or not hands:
+            self._tracking_lost()
+            return
+        self.watchdog.feed(frame.capture_ms)
+        self._tracking_ok = True
+        present = {h.hand_id for h in hands}
+        for hid in [h for h in self._pinched if h not in present]:
+            del self._pinched[hid]
+        if not self._pinched:
+            self._zoom_needs_release = False
+        if self._pinched or self._clap_pending:
+            self._neutral_since = None
+        else:
+            if self._neutral_since is None:
+                self._neutral_since = frame.capture_ms
+            if frame.capture_ms - self._neutral_since >= self._cfg.neutral_ms or GestureKind.NEUTRAL in kinds:
+                self._need_neutral = False
+        if self._clap_pending:
+            return
+        dom = self._dominant(hands)
+        palm_uv = self._palm_uv(dom, frame) if dom is not None else None
+        if self._menu is not None:
+            self._menu_frame(frame, events, dom, palm_uv, now)
+        elif GestureKind.MENU_DWELL_COMPLETE in kinds and not self._need_neutral:
+            self._open_mode_menu(dom, palm_uv, now)
 
     def _pointer_geometry_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], now: float) -> bool:
         """Keep an already engaged pointer moving through a brief finger-only geometry failure.

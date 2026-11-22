@@ -69,6 +69,13 @@ class GestureConfig:
     menu_min_extended_non_thumb: int = 3
     menu_approach_cancel_speed_pu_s: float = 1.0
 
+    # instrument profile (GestureRecognizer.set_instrument_profile(True), Mode.INSTRUMENT). The playing
+    # pose (pick hand: index only; string hand: thumb+index spread) must never clap or open the menu.
+    instrument_clap_min_extended_non_thumb: int = 4   # both hands, checked when arming and at candidate entry
+    instrument_menu_min_extended: int = 5             # all five fingers open
+    instrument_menu_min_extended_non_thumb: int = 4
+    instrument_menu_max_displacement_pu: float = 0.12  # stricter stillness for the dwell
+
     # timing robustness
     max_frame_gap_ms: float = 200.0              # longer stall = tracking loss: end everything
     timestamp_rewind_reset_ms: float = 1000.0    # backwards jump larger than this = clock reset
@@ -157,6 +164,7 @@ class GestureRecognizer:
         self._non_dominant = _OTHER_HAND.get(dominant)  # None (menu disabled) if dominant is UNKNOWN
         self._last_t: Optional[float] = None
         self._last_clap_ms: Optional[float] = None       # survives reset(): cooldown is never skipped
+        self._instrument = False                         # survives reset(): set per frame by the pipeline
         self._clear(menu_latch=False)
 
     # ------------------------------------------------------------------ public API
@@ -164,6 +172,22 @@ class GestureRecognizer:
     def reset(self) -> None:
         """Clear all baselines silently. Hands must show release / neutral again before acting."""
         self._clear(menu_latch=True)
+
+    def set_instrument_profile(self, enabled: bool) -> None:
+        """Mode-dependent thresholds: True = INSTRUMENT (stricter clap and menu poses). Cheap; safe to
+        call every frame. A change drops a running menu dwell and a clap arm that is not a candidate."""
+        enabled = bool(enabled)
+        if enabled is self._instrument:
+            return
+        self._instrument = enabled
+        self._cancel_dwell()
+        if not self._candidate:
+            self._phase = _ClapPhase.IDLE
+            self._sep_since = None
+
+    @property
+    def instrument_profile(self) -> bool:
+        return self._instrument
 
     def is_pinched(self, hand_id: int) -> bool:
         st = self._hands.get(hand_id)
@@ -376,13 +400,23 @@ class GestureRecognizer:
         self._missing_since = None
         self._min_d = math.inf
 
+    def _clap_min_non_thumb(self) -> int:
+        cfg = self._cfg
+        return cfg.instrument_clap_min_extended_non_thumb if self._instrument else cfg.clap_min_extended_non_thumb
+
+    def _clap_open(self, usable: list[HandFeatures]) -> bool:
+        """Instrument profile arming check: both hands show an open palm."""
+        need = self._clap_min_non_thumb()
+        return len(usable) == 2 and all(_extended(h)[0] >= need for h in usable)
+
     def _clap_entry_ok(self, usable: list[HandFeatures]) -> bool:
         cfg = self._cfg
+        need = self._clap_min_non_thumb()
         for h in usable:
             st = self._hands.get(h.hand_id)
             if st is None or st.pinched or h.pinch_distance <= cfg.pinch_on_pu:
                 return False
-            if _extended(h)[0] < cfg.clap_min_extended_non_thumb:
+            if _extended(h)[0] < need:
                 return False
         return True
 
@@ -402,7 +436,8 @@ class GestureRecognizer:
 
         if self._phase is _ClapPhase.IDLE:
             cooled = self._last_clap_ms is None or t - self._last_clap_ms >= cfg.clap_cooldown_ms
-            if d is not None and d > cfg.clap_arm_distance_pu and cooled:
+            posed = not self._instrument or self._clap_open(usable)
+            if d is not None and d > cfg.clap_arm_distance_pu and cooled and posed:
                 if self._sep_since is None:
                     self._sep_since = t
                 if t - self._sep_since >= cfg.clap_arm_hold_ms:
@@ -414,7 +449,7 @@ class GestureRecognizer:
             return ev
 
         if self._phase is _ClapPhase.ARMED:
-            if d is None:
+            if d is None or (self._instrument and not self._clap_open(usable)):
                 self._phase = _ClapPhase.IDLE
                 self._sep_since = None
                 return ev
@@ -557,9 +592,15 @@ class GestureRecognizer:
 
     def _is_open(self, h: HandFeatures) -> bool:
         non_thumb, thumb = _extended(h)
+        cfg = self._cfg
+        if self._instrument:
+            return (
+                non_thumb >= cfg.instrument_menu_min_extended_non_thumb
+                and non_thumb + thumb >= cfg.instrument_menu_min_extended
+            )
         return (
-            non_thumb >= self._cfg.menu_min_extended_non_thumb
-            and non_thumb + thumb >= self._cfg.menu_min_extended
+            non_thumb >= cfg.menu_min_extended_non_thumb
+            and non_thumb + thumb >= cfg.menu_min_extended
         )
 
     def _update_menu(
@@ -589,7 +630,7 @@ class GestureRecognizer:
             self._dwell_anchor = hand.palm_center_px
         elif (
             math.dist(hand.palm_center_px, self._dwell_anchor) / hand.palm_scale_px
-            >= cfg.menu_max_displacement_pu
+            >= (cfg.instrument_menu_max_displacement_pu if self._instrument else cfg.menu_max_displacement_pu)
         ):
             self._dwell_start = t                      # moved: restart the dwell here
             self._dwell_anchor = hand.palm_center_px
