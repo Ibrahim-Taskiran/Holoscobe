@@ -9,13 +9,24 @@ import traceback
 from pathlib import Path
 
 
+def audio_check() -> dict[str, object]:
+    """Load PortAudio and list host APIs/devices. Never opens a stream; 0 outputs is fine (CI has no audio)."""
+    import sounddevice as sd
+
+    version = sd.get_portaudio_version()  # raises OSError if the DLL is missing or cannot load
+    hostapis = [str(api["name"]) for api in sd.query_hostapis()]
+    outputs = sum(1 for dev in sd.query_devices() if dev["max_output_channels"] > 0)
+    return {"portaudio": version[1], "hostapis": hostapis, "output_devices": outputs}
+
+
 def packaging_check(output: Path) -> int:
     """Load dependencies and verify bundled assets without opening devices or UI."""
     result: dict[str, object] = {"ok": False}
     try:
         for name in ("handcontrol.app", "handcontrol.windows.startup", "cv2",
-                     "PySide6.QtWidgets", "pycaw.pycaw"):
+                     "PySide6.QtWidgets", "pycaw.pycaw", "sounddevice"):
             importlib.import_module(name)
+        result.update(audio_check())
         from handcontrol.tracking import default_model_path, project_root
         from mediapipe.tasks.python.core import mediapipe_c_bindings
 
@@ -29,7 +40,7 @@ def packaging_check(output: Path) -> int:
         for plugin in ("qwindows.dll", "qoffscreen.dll"):
             if not (root / "PySide6" / "plugins" / "platforms" / plugin).is_file():
                 raise FileNotFoundError(f"Missing Qt platform plugin: {plugin}")
-        result.update(ok=True, model_path=str(default_model_path()), frozen=bool(getattr(sys, "frozen", False)))
+        result.update(ok=True, audio="ok", model_path=str(default_model_path()), frozen=bool(getattr(sys, "frozen", False)))
     except Exception:
         result["error"] = traceback.format_exc()
     output.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -69,7 +80,8 @@ def self_test(report: Path) -> int:
         hands = len(result.hand_landmarks)
     except Exception:
         return finish("SELF-TEST FAILED: " + traceback.format_exc(), 1)
-    return finish(f"OK self-test hands={hands} frozen={bool(getattr(sys, 'frozen', False))}", 0)
+    outputs = json.loads(check.read_text(encoding="utf-8")).get("output_devices", 0)
+    return finish(f"OK self-test hands={hands} frozen={bool(getattr(sys, 'frozen', False))} audio=ok outputs={outputs}", 0)
 
 
 def main() -> int:

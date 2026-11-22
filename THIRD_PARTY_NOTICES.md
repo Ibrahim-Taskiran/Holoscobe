@@ -17,7 +17,7 @@ The project's own source license is NOT chosen yet (spec §3: confirm before pub
 |---|---|---|---|---|
 | hand_landmarker.task (HandLandmarker full, float16) | float16/1, GCS generation 1682480004222387 | Apache-2.0 | Official model card "MediaPipe Hands (Lite/Full)" p.2 "LICENSED UNDER Apache License, Version 2.0", linked from the official Hand Landmarker docs "Models" table. Details: `assets/model_manifest.json` | License permits redistribution. Release bundling HELD until the SHA-256 is independently reviewed; setup downloads it meanwhile. |
 
-## Python packages (35, incl. transitive)
+## Python packages (35, incl. transitive; updated 2026-11-22 for Enstrüman mode)
 
 Legend for "Ship": **runtime** = goes into the one-folder build; **exclude** = pulled in transitively but not imported by the
 app, exclude it in the PyInstaller spec; **dev** = development/build only, never shipped.
@@ -27,7 +27,7 @@ app, exclude it in the PyInstaller spec; **dev** = development/build only, never
 | absl-py | 2.5.1 | Apache-2.0 | mediapipe | runtime |
 | altgraph | 0.17.5 | MIT | pyinstaller | dev |
 | certifi | 2026.10.23 | MPL-2.0 | mediapipe | exclude (no network at runtime); if shipped: unmodified + MPL notice |
-| cffi | 2.1.1 | MIT-0 | sounddevice | exclude |
+| cffi | 2.1.1 | MIT-0 | sounddevice | runtime (`_cffi_backend` extension only; sounddevice's prebuilt `_sounddevice.py` needs no `pycparser` at runtime) |
 | colorama | 0.4.6 | BSD-3-Clause | pytest | dev |
 | comtypes | 1.5.0 | MIT | direct | runtime |
 | contourpy | 1.3.3 | BSD-3-Clause | matplotlib | exclude |
@@ -57,7 +57,7 @@ app, exclude it in the PyInstaller spec; **dev** = development/build only, never
 | pywin32-ctypes | 0.2.3 | BSD-3-Clause | pyinstaller | dev |
 | setuptools | 84.2.1 | MIT | pyinstaller | dev |
 | shiboken6 | 6.12.0 | **LGPL-3.0-only** OR GPL-2.0-only OR GPL-3.0-only | PySide6 | runtime |
-| sounddevice | 0.5.6 | MIT (bundles PortAudio MIT; `*-asio.dll` variants also involve the Steinberg ASIO SDK) | mediapipe | exclude (never imported; do NOT ship `_sounddevice_data`) |
+| sounddevice | 0.5.6 | MIT (Copyright (c) 2015-2025 Matthias Geier) | direct (also mediapipe) | runtime (imported by Enstrüman mode); ship ONLY `_sounddevice_data/portaudio-binaries/libportaudio64bit.dll`, see PortAudio below |
 | tzdata | 2026.6 | Apache-2.0 | python-dateutil | exclude |
 
 Plus the CPython 3.11 runtime embedded by PyInstaller: PSF License 2.0 (ship its LICENSE text).
@@ -82,6 +82,49 @@ What the one-folder distribution must ship for LGPL components:
   PySide6/shiboken6: code.qt.io pyside-setup tag v6.12.0; FFmpeg: the source offer documented by opencv-python for 5.0.0.93),
   or ship the source archives. State that users may replace the Qt/PySide6 DLLs with their own builds.
 - No license key, DRM, or anti-reverse-engineering terms that would block relinking/replacement.
+
+## PortAudio (bundled inside sounddevice's `_sounddevice_data`)
+
+- Shipped: PortAudio V19.7 as `_sounddevice_data/portaudio-binaries/libportaudio64bit.dll` (non-ASIO build: MME, DirectSound,
+  WDM/KS, WASAPI), loaded by sounddevice for Enstrüman mode audio output.
+- NOT shipped: the `*-asio.dll` variants (they also involve the Steinberg ASIO SDK license), the 32-bit and arm64 DLLs,
+  `libportaudio.dylib` and the binaries `README.md`. The spec filters them out of the build.
+- License: MIT-style PortAudio license, reproduced here and in the shipped `THIRD_PARTY_NOTICES.md`:
+
+```
+PortAudio Portable Real-Time Audio Library
+Copyright (c) 1999-2011 Ross Bencina and Phil Burk
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The text above constitutes the entire PortAudio license; however,
+the PortAudio community also makes the following non-binding requests:
+
+Any person wishing to distribute modifications to the Software is
+requested to send the modifications to the original developer so that
+they can be incorporated into the canonical version. It is also
+requested that these non-binding requests be included along with the
+license above.
+```
+
+- sounddevice license (MIT, Copyright (c) 2015-2025 Matthias Geier): ship the dist-info `LICENSE` text with the other MIT texts.
 
 ## Pending
 

@@ -1,5 +1,5 @@
 # Full lock: exact versions incl. transitive, SHA-256 hashes from PyPI.
-# Generated 2026-11-12: uv pip compile requirements.txt -c <uv pip freeze of tested .venv> --generate-hashes --python-version 3.11 --python-platform x86_64-pc-windows-msvc
+# Generated 2026-11-22: uv pip compile requirements.txt -c <uv pip freeze of tested .venv> --generate-hashes --python-version 3.11 --python-platform x86_64-pc-windows-msvc
 # Install: uv pip install --python .venv/Scripts/python.exe --require-hashes -r requirements.lock  (scripts/setup.ps1 does this)
 absl-py==2.5.1 \
     --hash=sha256:286e71c82c1a38e75bbcf185f9b37d0305ad7786535107cb49bf4df9ff2e1f95 \
@@ -832,6 +832,7 @@ sounddevice==0.5.6 \
     --hash=sha256:e3aef00ad8b1d1740eb66d9a7671eab88a4d2b8fa4ab33498d742e63b65c309c
     # via
     #   -c tested-venv-freeze
+    #   -r requirements.txt
     #   mediapipe
 tzdata==2026.6 \
     --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec \
