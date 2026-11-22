@@ -550,6 +550,8 @@ class Runtime(QObject):
     def _replace_pipeline(self, settings):
         from handcontrol.pipeline import controller_config, gesture_config, dominant_of, calibration_rect
         # Keep controller epoch monotonic; configuration changes happen while paused.
+        camera_was_running = self.camera is not None
+        previous_mode = self.pipeline.controller.snapshot().mode
         self.stop_camera()
         with self.pipeline._lock, self.pipeline.controller._lock:
             self.settings = self.pipeline.settings = settings
@@ -561,9 +563,13 @@ class Runtime(QObject):
             from handcontrol.gestures import GestureRecognizer
             self.pipeline.gestures = GestureRecognizer(gesture_config(settings), dominant_of(settings))
             self.pipeline.request_gesture_reset(full=True)
-            self.pipeline.set_mode(Mode(settings.default_mode))
+            # Saving from the Enstrüman tab must not throw the user out of the instrument.
+            keep = previous_mode is Mode.INSTRUMENT
+            self.pipeline.set_mode(Mode.INSTRUMENT if keep else Mode(settings.default_mode))
         if self.instrument is not None:
             self.instrument.apply_settings(settings)
+        if camera_was_running:
+            self.start_camera()
 
     def calibrated(self, result):
         b = result.bounds

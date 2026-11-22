@@ -289,6 +289,36 @@ def test_camera_loop_gets_the_image_tap(qt):
         rt.close()
 
 
+def test_saving_settings_keeps_instrument_mode_and_restarts_camera(qt):
+    """Regression: saving the Enstrüman tab (e.g. tone -> Elektro) stopped the camera and left the mode."""
+    cams = []
+
+    def camera_factory(pipeline, start=False):
+        cam = SimpleNamespace(loop=SimpleNamespace(on_image=None, stop=Mock()), camera=Mock(), start=Mock())
+        cams.append(cam)
+        return cam
+
+    rt, _ = make_runtime(qt)
+    try:
+        rt.camera_factory = camera_factory
+        rt.start_camera()
+        activate_instrument(rt)
+        window = rt.instrument.window
+        rt.apply_settings(replace(rt.settings, instrument_tone="electric"))
+        QApplication.processEvents()
+        assert rt.pipeline.controller.snapshot().mode is Mode.INSTRUMENT
+        assert len(cams) == 2 and rt.camera is cams[1] and cams[1].start.called
+        assert cams[0].loop.stop.called and cams[1].loop.on_image == rt.instrument.tap_image
+        assert rt.instrument.audio is not None and rt.instrument.audio.tone == "electric"
+        assert window.visible
+        rt.apply_settings(replace(rt.settings, default_mode="scroll"))   # other modes: old behaviour
+        rt.pipeline.set_mode(Mode.POINTER)
+        rt.apply_settings(rt.settings)
+        assert rt.pipeline.controller.snapshot().mode is Mode.SCROLL
+    finally:
+        rt.close()
+
+
 def test_close_stops_audio_and_window(qt):
     rt, _ = make_runtime(qt)
     activate_instrument(rt)
