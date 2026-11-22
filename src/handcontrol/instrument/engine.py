@@ -21,6 +21,9 @@ Design constants (InstrumentConfig defaults, documented here):
   plays (per-hand detectors, band/speed in that hand's palm units). Moving/resizing: pinch with both
   hands (pinch < 0.35 pu, released above 0.55 pu) and hold 400 ms; the area then follows the two pinch
   points as opposite corners until a pinch is released. No strikes while adjusting.
+- Free layout ("Serbest teller"): up to 10 strings the user draws, moves and resizes with pinch gestures
+  (see instrument/freeform.py); playing works like the fixed layout, top string = lowest note. A pinching
+  hand never strikes; nothing strikes while a string is being edited.
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ from handcontrol.instrument.events import (
     LAYOUTS, SCALE_NAMES, AllOff, Bend, HitView, InstrumentEvent, InstrumentView, NoteOn, StringView,
 )
 from handcontrol.instrument.geometry import Rect, Vec, dist, is_finite, lerp, normalize_fixed_rect
+from handcontrol.instrument.freeform import FreeEditor, HandPinch, Seg, normalize_free_strings, pitch_order
 from handcontrol.instrument.strings import CrossingDetector, Layout, Strike, StringLayout
 
 THUMB_TIP = 4
@@ -49,11 +53,14 @@ STATUS_TOO_CLOSE = "Eller çok yakın"
 STATUS_UNCERTAIN = "Takip belirsiz"
 STATUS_NEED_HAND = "Elinizi gösterin"
 STATUS_ADJUSTING = "Teller taşınıyor"
+STATUS_EDITING = "Tel düzenleniyor"
+STATUS_NO_STRINGS = "Tel çizmek için çimdikle, tut ve çek"
+STATUS_FULL = "En fazla 10 tel"
 
 
 @dataclass(frozen=True)
 class InstrumentConfig:
-    layout: str = "solo"                    # "solo" | "chord" | "fixed"
+    layout: str = "solo"                    # "solo" | "chord" | "fixed" | "free"
     scale: str = "e_minor_pentatonic"       # one of events.SCALE_NAMES
     quantize: bool = True
     chords: tuple[str, str, str, str] = DEFAULT_CHORDS   # each one of events.CHORD_NAMES
@@ -96,6 +103,9 @@ class InstrumentConfig:
     adjust_pinch_on_pu: float = 0.35
     adjust_pinch_off_pu: float = 0.55
     adjust_hold_ms: float = 400.0
+    # --- free layout ---
+    free_strings: tuple[Seg, ...] = ()
+    free_snap: bool = True
 
 
 def normalize_config(cfg: InstrumentConfig) -> InstrumentConfig:
@@ -111,11 +121,13 @@ def normalize_config(cfg: InstrumentConfig) -> InstrumentConfig:
         count = int(min(hi, max(lo, int(cfg.fixed_strings))))
     except (TypeError, ValueError):
         count = DEFAULT_FIXED_STRINGS
-    if (layout, scale, chords, dominant, rect, count) == (cfg.layout, cfg.scale, tuple(cfg.chords), cfg.dominant,
-                                                          tuple(cfg.fixed_rect), cfg.fixed_strings):
+    free = normalize_free_strings(cfg.free_strings)
+    if (layout, scale, chords, dominant, rect, count, free) == (cfg.layout, cfg.scale, tuple(cfg.chords), cfg.dominant,
+                                                                tuple(cfg.fixed_rect), cfg.fixed_strings,
+                                                                tuple(tuple(x) for x in cfg.free_strings)):
         return cfg
     return replace(cfg, layout=layout, scale=scale, chords=chords, dominant=dominant,  # type: ignore[arg-type]
-                   fixed_rect=rect, fixed_strings=count)
+                   fixed_rect=rect, fixed_strings=count, free_strings=free)
 
 
 def fixed_pitches(scale: str, low: float, count: int) -> tuple[float, ...]:
@@ -212,10 +224,18 @@ class InstrumentEngine:
         self._rect: Rect = self._cfg.fixed_rect
         self._picks: dict[int, _Pick] = {}
         self._adjust: Optional[_Adjust] = None
+        self._free: tuple[Seg, ...] = self._cfg.free_strings
+        self._editor = FreeEditor(on_pu=self._cfg.adjust_pinch_on_pu, off_pu=self._cfg.adjust_pinch_off_pu,
+                                  hold_ms=self._cfg.adjust_hold_ms)
+        self._edit = None
 
     @property
     def fixed_rect(self) -> Rect:
         return self._rect
+
+    @property
+    def free_strings(self) -> tuple[Seg, ...]:
+        return self._free
 
     def all_off(self, t_ms: float, fade_ms: float = DEFAULT_FADE_MS) -> AllOff:
         self.reset()
@@ -226,6 +246,8 @@ class InstrumentEngine:
     def update(self, frame: FrameFeatures, active: bool) -> tuple[list[InstrumentEvent], InstrumentView]:
         if self._cfg.layout == "fixed":
             return self._update_fixed(frame, active)
+        if self._cfg.layout == "free":
+            return self._update_free(frame, active)
         cfg = self._cfg
         t = frame.capture_ms
         w, h = frame.width, frame.height
@@ -387,6 +409,8 @@ class InstrumentEngine:
         if not duplicate:
             self._step_adjust(usable, t, w, h, active and not ambiguous and not gap)
         adjusting = self._adjust is not None and self._adjust.engaged
+        if not adjusting and self._rect != cfg.fixed_rect:
+            self._cfg = cfg = replace(cfg, fixed_rect=self._rect)          # survives reset()/all_off()
         lines = fixed_lines(self._rect, cfg.fixed_strings, w, h)
         safe = not ambiguous and not gap and not adjusting
         playing = bool(active and safe and usable)
@@ -440,6 +464,128 @@ class InstrumentEngine:
             pick_hand_id=tips[0].hand_id if tips else None, fixed_rect=self._rect, adjusting=adjusting,
         )
         return events, view
+
+    def _update_free(self, frame: FrameFeatures, active: bool) -> tuple[list[InstrumentEvent], InstrumentView]:
+        cfg = self._cfg
+        t = frame.capture_ms
+        w, h = frame.width, frame.height
+        events: list[InstrumentEvent] = []
+        hits: list[HitView] = []
+        gap = self._last_t is not None and t - self._last_t > cfg.max_gap_ms
+        duplicate = self._last_t is not None and t <= self._last_t
+        if not duplicate:
+            self._last_t = t
+        usable = [x for x in frame.hands
+                  if x.quality is Quality.USABLE and _scale_ok(x) and _px(x, INDEX_TIP, w, h) is not None]
+        ambiguous = frame.identity_ambiguous or len({x.hand_id for x in usable}) != len(usable)
+        aspect = w / h if w > 0 and h > 0 else 4.0 / 3.0
+
+        if not duplicate:
+            pinches = []
+            for x in usable:
+                a, b = _px(x, THUMB_TIP, w, h), _px(x, INDEX_TIP, w, h)
+                if a is not None and b is not None and w > 0 and h > 0:
+                    m = lerp(a, b, 0.5)
+                    pinches.append(HandPinch(x.hand_id, (m[0] / w, m[1] / h), float(x.pinch_distance)))
+            self._edit = self._editor.step(self._free, pinches, t, aspect, cfg.free_snap,
+                                           allowed=active and not ambiguous and not gap)
+            if self._edit.committed:
+                self._free = self._edit.strings
+                self._cfg = replace(self._cfg, free_strings=self._free)   # survives reset()/all_off()
+                self._picks.clear()
+                self._amps.clear()
+        edit = self._edit
+        shown = edit.strings if edit is not None else self._free
+        editing = edit is not None and edit.editing
+        order = pitch_order(shown)
+        pitches = fixed_pitches(cfg.scale, cfg.fixed_low_midi, len(shown))
+        pitch_of = {i: pitches[rank] for rank, i in enumerate(order) if rank < len(pitches)}
+        lines = tuple(((s[0] * w, s[1] * h), (s[2] * w, s[3] * h)) for s in shown)
+        safe = not ambiguous and not gap and not editing
+        playing = bool(active and safe and usable and lines)
+        pinched = self._editor.pinched_ids()
+
+        if active and safe and not duplicate:
+            strikes: list[Strike] = []
+            seen = set()
+            for hand in usable:
+                tip = _px(hand, INDEX_TIP, w, h)
+                assert tip is not None
+                if hand.hand_id in pinched:      # a pinching hand is grabbing, not playing
+                    continue
+                seen.add(hand.hand_id)
+                pick = self._picks.get(hand.hand_id)
+                if pick is None or len(pick.detectors) != len(lines):
+                    pick = _Pick([CrossingDetector(k) for k in range(len(lines))], tip, t)
+                    self._picks[hand.hand_id] = pick
+                p_scale = float(hand.palm_scale_px)
+                for det in pick.detectors:
+                    line = lines[det.slot]
+                    st = det.update(line, line, pick.tip, tip, pick.t_ms, t, band_px=cfg.band_pu * p_scale,
+                                    end_margin=cfg.end_margin, pick_scale_px=p_scale,
+                                    min_speed_pu_s=cfg.min_speed_pu_s, cooldown_ms=cfg.cooldown_ms)
+                    if st is not None:
+                        strikes.append(st)
+                pick.tip, pick.t_ms = tip, t
+            for hid in [k for k in self._picks if k not in seen]:
+                del self._picks[hid]
+            if strikes:
+                self._emit_by_pitch(strikes, pitch_of, t, events, hits)
+        elif not duplicate:
+            self._picks.clear()
+
+        if editing:
+            status = STATUS_EDITING
+        elif not active:
+            status = STATUS_PAUSED
+        elif ambiguous or gap:
+            status = STATUS_UNCERTAIN
+        elif edit is not None and edit.full:
+            status = STATUS_FULL
+        elif not lines:
+            status = STATUS_NO_STRINGS
+        elif not usable:
+            status = STATUS_NEED_HAND
+        else:
+            status = STATUS_READY
+        active_idx = edit.active if edit is not None else None
+        strings = tuple(
+            StringView(k, a, b, self._amplitude(k, t), music.midi_to_name(pitch_of[k]) if k in pitch_of else "",
+                       playing or k == active_idx)
+            for k, (a, b) in enumerate(lines))
+        free_hands = [x for x in usable if x.hand_id not in pinched]
+        tips = [x for x in free_hands if x.handedness is cfg.dominant] or free_hands
+        tip = _px(tips[0], INDEX_TIP, w, h) if tips else None
+        view = InstrumentView(
+            t_ms=t, width=w, height=h, layout="free", strings=strings, hits=tuple(hits),
+            note_label=self._note_name, chord_label="", playing=playing, status=status, pick_tip=tip,
+            pick_hand_id=tips[0].hand_id if tips else None, adjusting=editing, free_strings=shown,
+            free_active=active_idx, free_snapped=bool(edit is not None and edit.snapped),
+            free_pending=edit.pending if edit is not None else (),
+            free_full=bool(edit is not None and edit.full),
+        )
+        return events, view
+
+    def _emit_by_pitch(self, strikes: list[Strike], pitch_of: dict[int, float], t: float,
+                       events: list[InstrumentEvent], hits: list[HitView]) -> None:
+        cfg = self._cfg
+        strikes.sort(key=lambda s: (s.t_ms, s.slot))
+        delay = 0.0
+        prev_t: Optional[float] = None
+        for st in strikes:
+            midi = pitch_of.get(st.slot)
+            if midi is None:
+                continue
+            if prev_t is not None:
+                delay += min(cfg.strum_max_ms, max(cfg.strum_min_ms, st.t_ms - prev_t))
+            prev_t = st.t_ms
+            vel = self._velocity(st.speed_pu_s, st.direction)
+            nid = self._next_id
+            self._next_id += 1
+            events.append(NoteOn(string=st.slot, midi=midi, velocity=vel, note_id=nid, t_ms=t, delay_ms=delay))
+            hits.append(HitView(st.slot, st.point[0], st.point[1], vel, st.direction, t))
+            self._amps[st.slot] = (vel, t + delay)
+            self._note_name = music.midi_to_name(midi)
 
     def _step_adjust(self, usable: list[HandFeatures], t: float, w: int, h: int, allowed: bool) -> None:
         """Two-hand pinch: hold to grab the string area, move both hands to place/resize it, release."""
@@ -555,6 +701,6 @@ class InstrumentEngine:
 
 
 __all__ = [
-    "InstrumentConfig", "InstrumentEngine", "STATUS_ADJUSTING", "STATUS_NEED_HAND", "STATUS_NEED_PICK", "STATUS_NEED_STRING", "STATUS_PAUSED",
+    "InstrumentConfig", "InstrumentEngine", "STATUS_ADJUSTING", "STATUS_EDITING", "STATUS_FULL", "STATUS_NO_STRINGS", "STATUS_NEED_HAND", "STATUS_NEED_PICK", "STATUS_NEED_STRING", "STATUS_PAUSED",
     "STATUS_READY", "STATUS_TOO_CLOSE", "STATUS_UNCERTAIN", "fixed_lines", "fixed_pitches", "normalize_config",
 ]

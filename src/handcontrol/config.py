@@ -18,6 +18,7 @@ from handcontrol.instrument.events import (
     CHORD_NAMES, DEFAULT_CHORDS, DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS, FIXED_STRINGS_RANGE, LATENCIES, LAYOUTS,
     SCALE_NAMES, TONES,
 )
+from handcontrol.instrument.freeform import normalize_free_strings
 from handcontrol.instrument.geometry import normalize_fixed_rect
 
 SCHEMA_VERSION = 4
@@ -119,6 +120,9 @@ class Settings:
     # "fixed" layout: string area (normalized x0, y0, x1, y1 on the unmirrored frame) and string count
     instrument_fixed_rect: list[float] = field(default_factory=lambda: list(DEFAULT_FIXED_RECT))
     instrument_fixed_strings: int = DEFAULT_FIXED_STRINGS
+    # "free" layout: the user's own strings (normalized x0, y0, x1, y1 each) and optional snapping
+    instrument_free_strings: list[list[float]] = field(default_factory=list)
+    instrument_free_snap: bool = True
 
 
 # ---------- validation helpers ----------
@@ -210,6 +214,8 @@ def validate(data: Any) -> Settings:
     s.audio_latency = _choice(d.get("audio_latency"), LATENCIES, s.audio_latency)
     s.instrument_particles = _bool(d.get("instrument_particles"), s.instrument_particles)
     s.instrument_fixed_rect = list(normalize_fixed_rect(d.get("instrument_fixed_rect"), DEFAULT_FIXED_RECT))
+    s.instrument_free_strings = [list(x) for x in normalize_free_strings(d.get("instrument_free_strings") or ())]
+    s.instrument_free_snap = _bool(d.get("instrument_free_snap"), s.instrument_free_snap)
     s.instrument_fixed_strings = _int(d.get("instrument_fixed_strings"), s.instrument_fixed_strings,
                                       *FIXED_STRINGS_RANGE)
 

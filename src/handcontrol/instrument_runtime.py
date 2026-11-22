@@ -42,6 +42,8 @@ def instrument_config(settings: Any) -> InstrumentConfig:
         dominant=dominant,
         fixed_rect=tuple(getattr(settings, "instrument_fixed_rect", DEFAULT_FIXED_RECT)),  # type: ignore[arg-type]
         fixed_strings=int(getattr(settings, "instrument_fixed_strings", DEFAULT_FIXED_STRINGS)),
+        free_strings=tuple(tuple(s) for s in getattr(settings, "instrument_free_strings", ())),
+        free_snap=bool(getattr(settings, "instrument_free_snap", True)),
     )
 
 
@@ -207,6 +209,9 @@ class InstrumentRuntime(QObject):
             edited = getattr(self.window, "fixed_rect_changed", None)
             if edited is not None:
                 edited.connect(self.set_fixed_rect)
+            drawn = getattr(self.window, "free_strings_changed", None)
+            if drawn is not None:
+                drawn.connect(self.set_free_strings)
             self._apply_window_settings()
         self.window.show()
         for name in ("raise_", "activateWindow"):
@@ -221,7 +226,8 @@ class InstrumentRuntime(QObject):
         if w is None:
             return
         for name, value in (("set_mirrored", bool(self.settings.mirror_preview)),
-                            ("set_particles_enabled", bool(self.settings.instrument_particles))):
+                            ("set_particles_enabled", bool(self.settings.instrument_particles)),
+                            ("set_free_snap", bool(getattr(self.settings, "instrument_free_snap", True)))):
             fn = getattr(w, name, None)
             if fn is not None:
                 fn(value)
@@ -232,6 +238,9 @@ class InstrumentRuntime(QObject):
         adjusting = bool(getattr(view, "adjusting", False))
         if self._was_adjusting and not adjusting and getattr(view, "fixed_rect", None) is not None:
             self.set_fixed_rect(view.fixed_rect, reconfigure=False)
+        if getattr(view, "layout", None) == "free" and getattr(view, "free_strings", None) is not None \
+                and not adjusting and self._was_adjusting:
+            self.set_free_strings(view.free_strings, reconfigure=False)
         self._was_adjusting = adjusting
 
     @Slot(object)
@@ -250,6 +259,24 @@ class InstrumentRuntime(QObject):
             self._persist(self.settings)
         except Exception:
             log.warning("could not save the string area", exc_info=True)
+
+    @Slot(object)
+    def set_free_strings(self, strings: Any, reconfigure: bool = True) -> None:
+        """New "Serbest teller" strings (window mouse edit or hand gesture): apply and save them."""
+        if self._closed:
+            return
+        from handcontrol.instrument.freeform import normalize_free_strings
+        new = [list(s) for s in normalize_free_strings(strings)]
+        if new == [[float(v) for v in s] for s in getattr(self.settings, "instrument_free_strings", [])]:
+            return
+        from dataclasses import replace
+        self.settings = replace(self.settings, instrument_free_strings=new)
+        if reconfigure:
+            self.session.configure(instrument_config(self.settings))
+        try:
+            self._persist(self.settings)
+        except Exception:
+            log.warning("could not save the strings", exc_info=True)
 
     @Slot()
     def _push_image(self) -> None:

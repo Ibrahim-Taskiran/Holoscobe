@@ -373,3 +373,24 @@ def test_fixed_area_from_window_or_pinch_is_applied_and_saved(qt):
         assert ins.engine.config.fixed_strings == 4 and ins.engine.config.fixed_rect == (0.3, 0.3, 0.9, 0.8)
     finally:
         rt.close()
+
+
+def test_free_strings_from_window_or_gesture_are_applied_and_saved(qt):
+    rt, _ = make_runtime(qt, settings=Settings(instrument_layout="free"))
+    try:
+        ins = rt.instrument
+        assert ins.engine.config.layout == "free" and ins.engine.config.free_strings == ()
+        rt.store.save.reset_mock()
+        ins.set_free_strings(((0.1, 0.2, 0.5, 0.2),))                 # mouse edit in the window
+        assert ins.engine.config.free_strings == ((0.1, 0.2, 0.5, 0.2),)
+        assert rt.settings.instrument_free_strings == [[0.1, 0.2, 0.5, 0.2]] and rt.store.save.call_count == 1
+        # hand gesture: saved when the engine reports the end of the edit
+        two = ((0.1, 0.2, 0.5, 0.2), (0.1, 0.3, 0.5, 0.3))
+        ins._on_view(SimpleNamespace(layout="free", adjusting=True, fixed_rect=None, free_strings=two))
+        ins._on_view(SimpleNamespace(layout="free", adjusting=False, fixed_rect=None, free_strings=two))
+        assert len(rt.settings.instrument_free_strings) == 2 and rt.store.save.call_count == 2
+        # dialog save keeps the strings and passes the snap switch
+        rt.apply_settings(replace(rt.settings, instrument_free_snap=False))
+        assert ins.engine.config.free_snap is False and len(ins.engine.config.free_strings) == 2
+    finally:
+        rt.close()

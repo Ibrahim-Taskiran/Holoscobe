@@ -96,6 +96,10 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 | Sabit teller: herhangi bir elin işaret parmağıyla tellerin üstünden geç | Teller ekranda durur (3-8 tel, üstteki en kalın). İki el de çalar |
 | Sabit teller: iki elle çimdikle, 0,4 sn tut, ellerini aç/kapat, bırak | Tel alanı iki çimdik noktası arasına taşınır ve boyutlanır; kaydedilir |
 | Sabit teller: pencerede fareyle sürükle (köşeden boyutlandır) | Aynı ayar fareyle |
+| Serbest teller: boş yerde çimdikle, 0,4 sn tut, çekerek bırak | Yeni tel çizilir (en çok 10). Üstteki tel en kalın sesi çalar |
+| Serbest teller: telin ucunu / ortasını çimdikle, tut, sürükle | Uç: boyutlandır ve döndür. Orta: taşı. Çok kısaltıp bırakınca silinir |
+| Serbest teller: iki elle bir telin iki ucunu tut (ya da boş yerde iki elle gerdir) | Tel iki çimdik arasında yeniden kurulur |
+| Serbest teller: pencerede fareyle çiz / uçtan ya da ortadan sürükle, sağ tık sil, Delete hepsini sil | Aynı düzenleme fareyle |
 
 İpuçları:
 - Teli göğüs hizasında, kameraya yan değil düz tut. İki elin de tam görünmesi gerekir.
@@ -103,7 +107,7 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 - Duraklatma, acil durdurma (`Ctrl+Alt+Shift+F12`), mod değişimi, kamera hatası ve oturum kilidinde tüm ses ~20 ms içinde kesilir.
 - Ses cihazı hatasında Türkçe bildirim çıkar, kontrol duraklar ve mod İşaretçi'ye döner.
 
-Ayarlar → **Enstrüman** sekmesi: düzen (Solo/Akor/Sabit teller), sabit tel sayısı, dizi, diziye kilitle (kapalıysa kesintisiz perde),
+Ayarlar → **Enstrüman** sekmesi: düzen (Solo/Akor/Sabit teller/Serbest teller), sabit tel sayısı, serbest tel hizalama yardımı (yakın getirilen tel düzleşir, öbür telin üstüne aynı uçlarla ve aynı aralıkla oturur; kapalıysa tel bırakıldığı yerde kalır), dizi, diziye kilitle (kapalıysa kesintisiz perde),
 4 akor, ses düzeyi (varsayılan %50), tını (Temiz/Elektro), ses cihazı, gecikme (Düşük/Normal),
 kıvılcım efektleri ve **Test sesi çal** düğmesi.
 

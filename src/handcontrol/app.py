@@ -80,7 +80,7 @@ SETTINGS_V3_KEYS = ('swipe_profile', 'auto_pause_s', 'dwell_click', 'dwell_ms', 
 # schema 4 (Enstrüman mode); SettingsData uses the same field names
 SETTINGS_V4_KEYS = ('instrument_layout', 'instrument_scale', 'instrument_quantize', 'instrument_chords',
     'instrument_volume', 'instrument_tone', 'audio_device', 'audio_latency', 'instrument_particles',
-    'instrument_fixed_strings')
+    'instrument_fixed_strings', 'instrument_free_snap')
 
 
 def _dialog_keys(data) -> tuple[str, ...]:
@@ -516,9 +516,10 @@ class Runtime(QObject):
     def save_instrument_area(self, instrument_settings) -> None:
         """Keep the "Sabit teller" area the user placed (window drag or two-hand pinch)."""
         rect = list(instrument_settings.instrument_fixed_rect)
-        if list(self.settings.instrument_fixed_rect) == rect:
+        free = [list(s) for s in getattr(instrument_settings, 'instrument_free_strings', [])]
+        if list(self.settings.instrument_fixed_rect) == rect and self.settings.instrument_free_strings == free:
             return
-        settings = replace(self.settings, instrument_fixed_rect=rect)
+        settings = replace(self.settings, instrument_fixed_rect=rect, instrument_free_strings=free)
         try:
             self.store.save(settings)
         except Exception:

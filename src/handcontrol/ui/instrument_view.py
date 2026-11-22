@@ -19,14 +19,20 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from handcontrol.contracts import FrameFeatures
 from handcontrol.instrument.events import HitView, InstrumentView, StringView
+from handcontrol.instrument.freeform import (
+    MAX_STRINGS, MIN_LENGTH, Seg, clamp_seg, ends, hit_test, seg_length, snap_segment,
+)
 from handcontrol.instrument.geometry import Rect, normalize_fixed_rect
 from handcontrol.ui.preview import CameraPreviewWidget
 from handcontrol.ui.viewmodel import UiBridge
 
 INSTRUMENT_WINDOW_TITLE_TR = "Holoscobe — Enstrüman"
-LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "Sabit teller"}
+LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "Sabit teller",
+                                    "free": "Serbest teller"}
 WAITING_STATUS_TR = "Enstrüman modunu seçin ve iki elinizi gösterin"
 FIXED_HINT_TR = "Fareyle sürükle / köşeden boyutlandır · ya da iki elle çimdikle, tut, gerdir"
+FREE_HINT_TR = "Çimdikle, tut, çek: tel çiz · uçtan tut: boyutlandır · ortadan: taşı · sağ tık: sil"
+SNAPPED_TR = "hizalandı"
 HANDLE_PX = 14.0                  # grab distance of a corner handle (widget px)
 AREA_COLOR = QColor(150, 200, 255)
 
@@ -168,6 +174,7 @@ class InstrumentCanvas(CameraPreviewWidget):
     mouse; `fixed_rect_edited` carries the new normalized rect (unmirrored frame) on release."""
 
     fixed_rect_edited = Signal(object)
+    free_strings_edited = Signal(object)    # "Serbest teller": the whole new string list (normalized)
 
     def __init__(self, sparks: SparkSystem, clock: Callable[[], float],
                  bridge: Optional[UiBridge] = None, parent: Optional[QWidget] = None) -> None:
@@ -184,6 +191,13 @@ class InstrumentCanvas(CameraPreviewWidget):
         self.setMinimumSize(480, 360)
         self._drag: Optional[tuple[str, tuple[float, float], Rect]] = None   # (kind, anchor/start, rect0)
         self._draft: Optional[Rect] = None
+        # "Serbest teller" mouse edit: (kind, index, press point, strings at press)
+        self._fdrag: Optional[tuple[str, Optional[int], tuple[float, float], tuple[Seg, ...]]] = None
+        self._fdraft: Optional[tuple[Seg, ...]] = None
+        self._fdraft_index: Optional[int] = None
+        self._fdraft_snapped = False
+        self._free_snap = True
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     @property
     def view(self) -> Optional[InstrumentView]:
@@ -194,6 +208,9 @@ class InstrumentCanvas(CameraPreviewWidget):
 
     def set_particles_enabled(self, enabled: bool) -> None:
         self._particles_enabled = bool(enabled)
+
+    def set_free_snap(self, enabled: bool) -> None:
+        self._free_snap = bool(enabled)
 
     # ---------- geometry ----------
 
@@ -234,7 +251,109 @@ class InstrumentCanvas(CameraPreviewWidget):
     def _canvas(self) -> QRectF:
         return self.canvas_rect_for(QRectF(self.rect()))
 
+    # ---------- "Serbest teller" mouse editing ----------
+
+    def free_strings(self) -> Optional[tuple[Seg, ...]]:
+        """Strings shown now: the mouse draft while dragging, else the engine's (None: other layout)."""
+        if self._fdraft is not None:
+            return self._fdraft
+        view = self._view
+        if view is None or view.layout != "free":
+            return None
+        return tuple(view.free_strings or ())
+
+    def _aspect(self) -> float:
+        view = self._view
+        return view.width / view.height if view is not None and view.width > 0 and view.height > 0 else 4.0 / 3.0
+
+    def _free_hit(self, pos: QPointF, strings: tuple[Seg, ...], canvas: QRectF):
+        r = HANDLE_PX / max(1.0, canvas.height())
+        return hit_test(strings, self.to_normalized(pos, canvas), self._aspect(), end_radius=r * 1.2,
+                        grab_radius=r)
+
+    def _free_press(self, event) -> bool:
+        strings = self.free_strings()
+        if strings is None or self._fdrag is not None:
+            return False
+        canvas = self._canvas()
+        pos = event.position()
+        if not canvas.contains(pos):
+            return False
+        hit = self._free_hit(pos, strings, canvas)
+        if event.button() == Qt.MouseButton.RightButton:
+            if hit is not None:
+                self.free_strings_edited.emit(strings[:hit[0]] + strings[hit[0] + 1:])
+            return True
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        start = self.to_normalized(pos, canvas)
+        if hit is None:
+            if len(strings) >= MAX_STRINGS:
+                return True
+            self._fdrag = ("draw", None, start, strings)
+        else:
+            self._fdrag = (hit[1], hit[0], start, strings)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor if hit is not None and hit[1] == "body"
+                       else Qt.CursorShape.CrossCursor)
+        return True
+
+    def _free_move(self, event) -> None:
+        assert self._fdrag is not None
+        kind, idx, start, base = self._fdrag
+        p = self.to_normalized(event.position(), self._canvas())
+        if kind == "draw":
+            seg: Seg = (*start, *p)  # type: ignore[assignment]
+        else:
+            assert idx is not None
+            a, b = ends(base[idx])
+            dx, dy = p[0] - start[0], p[1] - start[1]
+            if kind == "body":
+                dx = min(1.0 - max(a[0], b[0]), max(-min(a[0], b[0]), dx))
+                dy = min(1.0 - max(a[1], b[1]), max(-min(a[1], b[1]), dy))
+                a, b = (a[0] + dx, a[1] + dy), (b[0] + dx, b[1] + dy)
+            elif kind == "p0":
+                a = (a[0] + dx, a[1] + dy)
+            else:
+                b = (b[0] + dx, b[1] + dy)
+            seg = (*a, *b)  # type: ignore[assignment]
+        seg = clamp_seg(seg)
+        snapped = False
+        aspect = self._aspect()
+        if self._free_snap and seg_length(seg, aspect) >= MIN_LENGTH:
+            seg, snapped = snap_segment(seg, [s for i, s in enumerate(base) if i != idx], aspect)
+        if idx is None:
+            self._fdraft, self._fdraft_index = base + (seg,), len(base)
+        else:
+            self._fdraft, self._fdraft_index = base[:idx] + (seg,) + base[idx + 1:], idx
+        self._fdraft_snapped = snapped
+        self.update()
+
+    def _free_release(self) -> None:
+        assert self._fdrag is not None
+        base = self._fdrag[3]
+        draft, idx = self._fdraft, self._fdraft_index
+        self._fdrag = self._fdraft = self._fdraft_index = None
+        self._fdraft_snapped = False
+        self.unsetCursor()
+        if draft is not None and idx is not None:
+            if seg_length(draft[idx], self._aspect()) < MIN_LENGTH:      # squeezed: remove
+                draft = draft[:idx] + draft[idx + 1:]
+            if draft != base:
+                self.free_strings_edited.emit(draft)
+        self.update()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        strings = self.free_strings()
+        if strings and self._fdrag is None and event.key() == Qt.Key.Key_Delete:
+            self.free_strings_edited.emit(())                  # Delete: remove every string
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        if self._free_press(event):
+            event.accept()
+            return
         rect = self.fixed_rect()
         if rect is None or event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
@@ -257,6 +376,10 @@ class InstrumentCanvas(CameraPreviewWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._fdrag is not None:
+            self._free_move(event)
+            event.accept()
+            return
         if self._drag is None:
             super().mouseMoveEvent(event)
             return
@@ -273,6 +396,10 @@ class InstrumentCanvas(CameraPreviewWidget):
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._fdrag is not None:
+            self._free_release()
+            event.accept()
+            return
         if self._drag is None:
             super().mouseReleaseEvent(event)
             return
@@ -304,7 +431,11 @@ class InstrumentCanvas(CameraPreviewWidget):
         area = self.fixed_rect()
         if area is not None:
             self._draw_area(painter, canvas, area, view)
-        if view is not None and self._draft is None:
+        if self._fdraft is not None:
+            self._draw_free_draft(painter, canvas)
+        elif view is not None and self._draft is None:
+            if view.layout == "free":
+                self._draw_free_marks(painter, canvas, view)
             for s in view.strings:
                 self._draw_string(painter, canvas, s, now)
             if view.pick_tip is not None:
@@ -392,6 +523,59 @@ class InstrumentCanvas(CameraPreviewWidget):
         for p in (box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()):
             painter.drawEllipse(p, 5.0, 5.0)
 
+    def _draw_free_draft(self, painter: QPainter, canvas: QRectF) -> None:
+        """Mouse edit preview: every string as a plain line, the edited one bright."""
+        assert self._fdraft is not None
+        for i, s in enumerate(self._fdraft):
+            a = self.map_normalized_point(s[0], s[1], canvas)
+            b = self.map_normalized_point(s[2], s[3], canvas)
+            edited = i == self._fdraft_index
+            c = QColor(AREA_COLOR if edited else DISABLED_STRING_COLOR)
+            c.setAlphaF(0.95 if edited else 0.6)
+            painter.setPen(QPen(c, 3.0 if edited else 2.0))
+            painter.drawLine(a, b)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(c)
+            painter.drawEllipse(a, 5.0, 5.0)
+            painter.drawEllipse(b, 5.0, 5.0)
+            if edited and self._fdraft_snapped:
+                self._draw_snap_label(painter, a, b)
+
+    def _draw_snap_label(self, painter: QPainter, a: QPointF, b: QPointF) -> None:
+        painter.setFont(self._label_font)
+        painter.setPen(AREA_COLOR)
+        painter.drawText(QPointF((a.x() + b.x()) / 2.0 - 24.0, (a.y() + b.y()) / 2.0 - 12.0), SNAPPED_TR)
+
+    def _draw_free_marks(self, painter: QPainter, canvas: QRectF, view: InstrumentView) -> None:
+        """Hand editing: halo on the grabbed string, end handles, and a ring filling up while a pinch is held."""
+        strings = view.free_strings or ()
+        c = QColor(AREA_COLOR)
+        if view.free_active is not None and view.free_active < len(strings):
+            s = strings[view.free_active]
+            a = self.map_normalized_point(s[0], s[1], canvas)
+            b = self.map_normalized_point(s[2], s[3], canvas)
+            c.setAlphaF(0.30)
+            pen = QPen(c, 16.0)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(a, b)
+            if view.free_snapped:
+                self._draw_snap_label(painter, a, b)
+        c.setAlphaF(0.55)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(c)
+        for s in strings:
+            for x, y in ((s[0], s[1]), (s[2], s[3])):
+                painter.drawEllipse(self.map_normalized_point(x, y, canvas), 5.0, 5.0)
+        for (x, y), progress in view.free_pending:
+            pt = self.map_normalized_point(x, y, canvas)
+            ring = QColor(AREA_COLOR)
+            ring.setAlphaF(0.9)
+            painter.setPen(QPen(ring, 3.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawArc(QRectF(pt.x() - 14.0, pt.y() - 14.0, 28.0, 28.0), 90 * 16,
+                            -int(360 * 16 * max(0.0, min(1.0, progress))))
+
     def _draw_pick(self, painter: QPainter, pt: QPointF, playing: bool) -> None:
         c = QColor(255, 255, 255) if playing else QColor(160, 166, 176)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -432,6 +616,8 @@ class InstrumentCanvas(CameraPreviewWidget):
         status = view.status
         if view.layout == "fixed" and not view.adjusting and status == "Hazır":
             status = f"{status} · {FIXED_HINT_TR}"
+        elif view.layout == "free" and not view.adjusting and status == "Hazır":
+            status = f"{status} · {FREE_HINT_TR}"
         return (main, f"Düzen: {layout}", status)
 
     def _draw_hud(self, painter: QPainter, canvas: QRectF) -> None:
@@ -462,6 +648,7 @@ class InstrumentWindow(QWidget):
 
     closed = Signal()
     fixed_rect_changed = Signal(object)     # new "Sabit teller" area from a mouse drag
+    free_strings_changed = Signal(object)   # new "Serbest teller" string list from a mouse edit
 
     def __init__(
         self,
@@ -481,6 +668,7 @@ class InstrumentWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.canvas)
         self.canvas.fixed_rect_edited.connect(self.fixed_rect_changed)
+        self.canvas.free_strings_edited.connect(self.free_strings_changed)
 
         self._timer = QTimer(self)
         self._timer.setInterval(FRAME_INTERVAL_MS)
@@ -532,6 +720,10 @@ class InstrumentWindow(QWidget):
     @Slot(bool)
     def set_mirrored(self, mirrored: bool) -> None:
         self.canvas.set_mirrored(mirrored)
+
+    @Slot(bool)
+    def set_free_snap(self, enabled: bool) -> None:
+        self.canvas.set_free_snap(enabled)
 
     @Slot(bool)
     def set_particles_enabled(self, enabled: bool) -> None:

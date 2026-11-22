@@ -33,7 +33,7 @@ CHORD_NAMES: tuple[str, ...] = (
     "Cmaj7", "Fmaj7", "Am7", "Em7", "Dm7",
 )
 DEFAULT_CHORDS: tuple[str, str, str, str] = ("Em", "C", "G", "D")
-LAYOUTS: tuple[str, ...] = ("solo", "chord", "fixed")
+LAYOUTS: tuple[str, ...] = ("solo", "chord", "fixed", "free")
 TONES: tuple[str, ...] = ("clean", "electric")
 LATENCIES: tuple[str, ...] = ("low", "normal")
 DEFAULT_FADE_MS = 20.0
@@ -98,7 +98,7 @@ class InstrumentView:
     t_ms: float
     width: int                    # camera frame size the positions refer to
     height: int
-    layout: str                   # "solo" | "chord" | "fixed"
+    layout: str                   # "solo" | "chord" | "fixed" | "free"
     strings: tuple[StringView, ...]
     hits: tuple[HitView, ...]     # new strikes in this frame only
     note_label: str               # last played note ("A3", "A3 +0.7"), "" if none
@@ -109,7 +109,13 @@ class InstrumentView:
     string_hand_id: Optional[int] = None
     pick_hand_id: Optional[int] = None
     fixed_rect: Optional[tuple[float, float, float, float]] = None   # "fixed": current string area
-    adjusting: bool = False       # "fixed": both hands are pinching and moving the string area
+    adjusting: bool = False       # "fixed"/"free": a pinch gesture is moving strings (no strikes)
+    # "free" layout: the user's own strings, normalized (x0, y0, x1, y1) on the unmirrored frame
+    free_strings: Optional[tuple[tuple[float, float, float, float], ...]] = None
+    free_active: Optional[int] = None     # index in free_strings of the string being edited
+    free_snapped: bool = False            # the edited string is snapped (straightened / stacked)
+    free_pending: tuple[tuple[tuple[float, float], float], ...] = ()   # pinches waiting: (normalized point, 0..1)
+    free_full: bool = False               # a new string was refused (limit reached)
 
 
 __all__ = [

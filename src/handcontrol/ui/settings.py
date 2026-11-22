@@ -73,7 +73,8 @@ SENSITIVITY_PRESET_LABELS_TR: dict[str, str] = {
 }
 
 
-INSTRUMENT_LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "Sabit teller"}
+INSTRUMENT_LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "Sabit teller",
+                                               "free": "Serbest teller"}
 INSTRUMENT_SCALE_LABELS_TR: dict[str, str] = {
     "e_minor_pentatonic": "Mi minör pentatonik",
     "a_minor_pentatonic": "La minör pentatonik",
@@ -157,6 +158,7 @@ class SettingsData:
     audio_latency: str = "low"                  # LATENCIES
     instrument_particles: bool = True
     instrument_fixed_strings: int = DEFAULT_FIXED_STRINGS   # FIXED_STRINGS_RANGE
+    instrument_free_snap: bool = True                       # "Serbest teller": snap near-aligned strings
     # Display only: output device names offered in the Ses cihazı list (not persisted).
     audio_device_choices: tuple[str, ...] = ()
 
@@ -322,6 +324,7 @@ class SettingsData:
             audio_latency=latency,
             instrument_particles=bool(data.get("instrument_particles", defaults.instrument_particles)),
             instrument_fixed_strings=fixed_strings,
+            instrument_free_snap=bool(data.get("instrument_free_snap", defaults.instrument_free_snap)),
             audio_device_choices=choices,
         )
 
@@ -597,13 +600,18 @@ class SettingsDialog(QDialog):
         play_form.addRow("Düzen:", self.combo_instrument_layout)
         play_form.addRow("", self._hint(
             "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, tel eli yüksekliği akoru seçer. "
-            "Sabit teller: teller ekranda durur, iki elle de çalınır."))
+            "Sabit teller: teller ekranda durur, iki elle de çalınır. "
+            "Serbest teller: telleri kendin çizersin, istediğin yere ve boyda."))
         self.spin_instrument_fixed_strings = QSpinBox()
         self.spin_instrument_fixed_strings.setRange(*FIXED_STRINGS_RANGE)
         play_form.addRow("Tel sayısı (sabit):", self.spin_instrument_fixed_strings)
         play_form.addRow("", self._hint(
             "Telleri taşımak ya da boyutlandırmak için: Enstrüman penceresinde fareyle sürükle (köşeden "
             "boyutlandır) ya da iki elinle çimdikle, yarım saniye tut, gerdir ve bırak."))
+        self.chk_instrument_free_snap = QCheckBox("Serbest tellerde hizalama yardımı")
+        play_form.addRow("", self.chk_instrument_free_snap)
+        play_form.addRow("", self._hint(
+            "Serbest teller: boş yerde çimdikle, yarım saniye tut, çekerek tel çiz. Telin ucunu tutup boyutlandır, ortasından tutup taşı. İki elle bir telin iki ucunu tutabilirsin. Teli çok kısaltıp bırakırsan silinir. Hizalama açıksa yakın getirdiğin tel düzleşir ve diğer telin üstüne hizalanır; kapalıysa tel tam bıraktığın yerde kalır."))
 
         self.combo_instrument_scale = QComboBox()
         for key in SCALE_NAMES:
@@ -924,6 +932,7 @@ class SettingsDialog(QDialog):
         self._set_combo_by_data(self.combo_audio_latency, cfg.audio_latency)
         self.chk_instrument_particles.setChecked(cfg.instrument_particles)
         self.spin_instrument_fixed_strings.setValue(int(cfg.instrument_fixed_strings))
+        self.chk_instrument_free_snap.setChecked(bool(cfg.instrument_free_snap))
 
     def get_settings(self) -> SettingsData:
         """Read current UI control values as a validated SettingsData instance."""
@@ -967,6 +976,7 @@ class SettingsDialog(QDialog):
             audio_latency=str(self.combo_audio_latency.currentData() or "low"),
             instrument_particles=bool(self.chk_instrument_particles.isChecked()),
             instrument_fixed_strings=int(self.spin_instrument_fixed_strings.value()),
+            instrument_free_snap=bool(self.chk_instrument_free_snap.isChecked()),
             audio_device_choices=tuple(getattr(self, "_audio_device_choices", ())),
         )
 
