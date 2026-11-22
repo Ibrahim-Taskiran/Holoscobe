@@ -2,17 +2,17 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.0.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1455 geçti, 3 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1750 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
-Altı mod vardır: İşaretçi, Kaydırma, Yakınlaştırma, Ses, Pencereler, Komutlar.
+Yedi mod vardır: İşaretçi, Kaydırma, Yakınlaştırma, Ses, Pencereler, Komutlar, Enstrüman.
 
 | Mod | Hareket | Sonuç |
 |---|---|---|
 | Hepsi | İki elle bir kez el çırpma | Kontrolü açar ya da duraklatır |
-| Hepsi (etkin) | Sağ yumruk tut (önce el açık olmalı) | Ön plandaki uygulama penceresini küçültür |
-| Hepsi (etkin) | Sol yumruk tut (önce el açık olmalı) | Bu oturumda son küçültülen pencereyi geri açar |
+| Hepsi (etkin, Enstrüman hariç) | Sağ yumruk tut (önce el açık olmalı) | Ön plandaki uygulama penceresini küçültür |
+| Hepsi (etkin, Enstrüman hariç) | Sol yumruk tut (önce el açık olmalı) | Bu oturumda son küçültülen pencereyi geri açar |
 | Hepsi | Otomatik duraklatma (Ayarlar'dan açılır) | Ayarlanan süre kullanılabilir el görünmezse kontrol duraklar |
 | İşaretçi | İşaret açık, diğer parmaklar kapalı | İmleç hareket eder. Hızlı hareket uzağa, yavaş hareket hassas gider |
 | İşaretçi | Eli aç (ya da kadrajdan çıkar) | İmleç hemen durur; el 200 ms açık kalırsa bırakılır. Eli geri getir, yeniden işaret et: kaldığı yerden devam eder |
@@ -33,6 +33,7 @@ Altı mod vardır: İşaretçi, Kaydırma, Yakınlaştırma, Ses, Pencereler, Ko
 | Komutlar | Açık avuçla yukarı kaydır | Görev görünümü (tüm profillerde) |
 | Komutlar | Açık avuçla aşağı kaydır | Masaüstünü göster (tüm profillerde) |
 | Komutlar | Kısa pinch | Oynat / duraklat (Sunum profilinde Sonraki) |
+| Enstrüman | Sağ işaret parmağıyla tele vur | Gitar sesi; Windows'a hiçbir komut gitmez (aşağıya bakın) |
 
 Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut.
 
@@ -70,6 +71,43 @@ Beş parmağın da bükülmüş algılanması gerekir. İki yumruk aynı anda ko
 tutulurken ön plandaki pencere değişirse işlem iptal edilir. Bu özellik tarayıcı içindeki
 tek sekmeyi değil, uygulama penceresini küçültür/geri açar. Dry-run yalnız komut metnini
 gösterir. Önizleme üstündeki **Sürdür / Duraklat** düğmesinden kontrolü etkinleştirebilirsin.
+
+## Enstrüman modu
+
+Kamera önünde sanal gitar çalarsın. Sol elin başparmak ucu ile işaret ucu arasına bir tel çizilir,
+sağ işaret parmağı tele vurunca gerçek zamanlı gitar sesi çıkar. Bu modda Windows'a **hiçbir**
+giriş komutu gitmez (imleç, tık, tuş, ses seviyesi, pencere yok); yalnız ses ve görüntü üretilir.
+Bu yüzden komutsuz denemede (dry-run) de tam çalışır.
+
+Açmak için mod menüsünden ya da tepsiden **Enstrüman**'ı seç. Mod seçilince **Enstrüman penceresi**
+açılır (tepsiden de açılır): kamera görüntüsü, el iskeleti, parlayan teller, vuruşta kıvılcımlar,
+köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise roller yer değiştirir.
+
+| Hareket | Sonuç |
+|---|---|
+| Sol el: başparmak ile işaret parmağını aç (tel) | Tel çizilir. Uzunluk avuç birimiyle ölçülür; kameraya uzaklık etkilemez |
+| Sağ işaret parmağıyla teli geç | Nota çalar. Hızlı vuruş daha yüksek ve parlak ses verir; çok yavaş geçiş sayılmaz |
+| Solo: teli uzat / kısalt | Perde değişir (uzun tel = kalın ses). Varsayılan dizi Mi minör pentatonik, 2 oktav |
+| Solo: nota çalarken teli uzat / kısalt | ±2 yarım tona kadar perde bükme; elin titremesi doğal vibrato verir |
+| Akor: sol eli yukarı/aşağı taşı | 4 bölgeden akor seçilir (varsayılan Em, C, G, D) |
+| Akor: sağ elle 4 telin üstünden süpür | Strum: teller kesişme sırasıyla birkaç ms arayla çalar; aşağı ve yukarı ayrılır |
+| İki elle çırp (iki elde de 4 parmak açık) | Kontrolü duraklatır / açar. Çalma pozu çırpma sayılmaz |
+| Sol eli 5 parmak açık, sabit tut (600 ms) | Mod menüsü. Tel tutma pozu menü açmaz |
+
+İpuçları:
+- Teli göğüs hizasında, kameraya yan değil düz tut. İki elin de tam görünmesi gerekir.
+- Takip belirsizleşince (eller üst üste, kimlik karışması, kalite düşüşü) yeni nota çıkmaz; çalan notalar doğal söner.
+- Duraklatma, acil durdurma (`Ctrl+Alt+Shift+F12`), mod değişimi, kamera hatası ve oturum kilidinde tüm ses ~20 ms içinde kesilir.
+- Ses cihazı hatasında Türkçe bildirim çıkar, kontrol duraklar ve mod İşaretçi'ye döner.
+
+Ayarlar → **Enstrüman** sekmesi: düzen (Solo/Akor), dizi, diziye kilitle (kapalıysa kesintisiz perde),
+4 akor, ses düzeyi (varsayılan %50), tını (Temiz/Elektro), ses cihazı, gecikme (Düşük/Normal),
+kıvılcım efektleri ve **Test sesi çal** düğmesi.
+
+**Gecikme notu:** Ses WASAPI paylaşımlı modda 48 kHz, 128 (Düşük) ya da 256 (Normal) örneklik blokla
+çalınır; açılamazsa DirectSound, sonra MME denenir. Toplam gecikme kamera (~33 ms kare) + izleme +
+ses çıkışı (bu makinede WASAPI ~22 ms) toplamıdır. Bluetooth kulaklık 100 ms'den fazla ekleyebilir;
+kablolu kulaklık ya da hoparlör önerilir. Tasarım ve ölçümler: [instrument.md](Docs/reports/instrument.md).
 
 ## İlk açılış eğitimi
 
@@ -285,6 +323,7 @@ Camera Mouse, eViacam, Project Gameface ve Ultraleap TouchFree incelendi. Bu inc
 - [Doküman incelemesi ve kararlar](Docs/DOKUMAN_INCELEME_TR.md)
 - [Aşama 0 raporu](Docs/reports/phase0_report.md)
 - [Üçüncü taraf lisans bildirimleri](THIRD_PARTY_NOTICES.md)
+- [Enstrüman modu: tasarım, ölçümler, elle test listesi](Docs/reports/instrument.md)
 
 ## Bilinen sınırlar
 
@@ -292,6 +331,7 @@ Camera Mouse, eViacam, Project Gameface ve Ultraleap TouchFree incelendi. Bu inc
 - Yönetici yetkisiyle çalışan uygulamalar ve korumalı Windows ekranları kapsam dışıdır.
 - Yakınlaştırma, hedef uygulamanın Ctrl + tekerlek desteğine bağlıdır.
 - Komutlar modundaki kısayollar (masaüstü değiştirme, medya tuşları) hedef uygulamanın ve Windows'un o kısayolu desteklemesine bağlıdır.
+- Enstrüman modunun eşikleri (vuruş hızı, histerezis bandı, el yakınlığı, menü sabitliği) yalnız sentetik verilerle ayarlandı; gerçek kamerada ayar bekliyor.
 - Gerçek kamera ve ellerle kabul testi bekliyor.
 
 ## Lisans

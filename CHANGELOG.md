@@ -4,6 +4,24 @@ Biçim: [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/). Sürümleme: [
 
 Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan tarafından henüz yapılmadı.
 
+## [1.1.0] - 2026-11-22
+
+### Added
+- Enstrüman modu (yedinci mod, `Mode.INSTRUMENT`): sol elin başparmak ve işaret ucu arasına sanal gitar teli; sağ işaret parmağıyla vurunca gerçek zamanlı gitar sesi. Windows'a hiçbir giriş komutu gitmez; dry-run'da da çalışır.
+- Solo düzen (1 tel, uzunluk = perde, Mi minör pentatonik 2 oktav, diziye kilitli ya da kesintisiz, ±2 yarım ton perde bükme) ve Akor düzeni (4 paralel tel, 4 dikey bölgeden akor, aşağı/yukarı strum, teller arasında ms aralık).
+- Saf, deterministik motor (`instrument/geometry.py`, `strings.py`, `music.py`, `engine.py`, `session.py`): iki kare arası süpürülen parça ile tel kesişimi, tel başına 60 ms bekleme ve histerezis bandı, hız → şiddet, kalite/kimlik/takip kaybında yeni nota yok.
+- Ses motoru (`instrument/synth.py`): numpy ile vektörize genişletilmiş Karplus-Strong (Jaffe-Smith), 8 ses polifoni, ses çalma, Temiz/Elektro tını, −3 dBFS limiter.
+- Ses çıkışı (`instrument/audio.py`): sounddevice, WASAPI öncelikli (DirectSound, MME yedek), 48 kHz, 128/256 örnek blok, kilitsiz kuyruk; cihaz hatasında Türkçe bildirim ve güvenli mod kapatma.
+- Enstrüman penceresi (`ui/instrument_view.py`): kamera görüntüsü, el iskeleti, parlayan ve titreşen teller, sınırlı kıvılcım parçacıkları, nota/akor göstergesi. Tepside "Enstrüman" modu ve "Enstrüman penceresi".
+- Ayarlar "Enstrüman" sekmesi (ses cihazı listesi, Test sesi çal). Ayar şeması 4 (eski dosyalar kayıpsız taşınır).
+- Enstrüman modunda daha sıkı jestler: el çırpma iki elde 4 parmak açıkken, mod menüsü 5 parmak açık ve el sabitken.
+- `--self-test` ve paketleme denetimi ses kütüphanesini (PortAudio) doğrular; pakete yalnız `libportaudio64bit.dll` girer.
+- Otomatik test takımı 1750 teste çıktı (7 manuel test seçilmez).
+
+### Changed
+- Mod menüsü 7 satır oldu; satır konumu sabitleyen 2 test bu yüzden güncellendi.
+- `sounddevice` doğrudan bağımlılık oldu (sürüm ve hash'ler değişmedi).
+
 ## [1.0.0] - 2026-11-18
 
 ### Added
