@@ -77,6 +77,31 @@ STARTUP_FAILED_TR = 'Windows ile başlatma ayarı değiştirilemedi'
 
 
 SETTINGS_V3_KEYS = ('swipe_profile', 'auto_pause_s', 'dwell_click', 'dwell_ms', 'click_sound', 'cursor_feedback')
+# schema 4 (Enstrüman mode); SettingsData uses the same field names
+SETTINGS_V4_KEYS = ('instrument_layout', 'instrument_scale', 'instrument_quantize', 'instrument_chords',
+    'instrument_volume', 'instrument_tone', 'audio_device', 'audio_latency', 'instrument_particles')
+
+
+def _dialog_keys(data) -> tuple[str, ...]:
+    """Schema 3 keys always (as before); schema 4 keys only when the dialog data has them."""
+    try:
+        known = {f.name for f in fields(data)}
+    except TypeError:          # plain objects (older callers): look the attributes up
+        known = {k for k in SETTINGS_V4_KEYS if hasattr(data, k)} | set(SETTINGS_V3_KEYS)
+    return SETTINGS_V3_KEYS + tuple(k for k in SETTINGS_V4_KEYS if k in known)
+
+
+def audio_device_names() -> tuple[str, ...]:
+    """Output device names for the settings dialog; () when the audio backend is unavailable."""
+    try:
+        from handcontrol.instrument.audio import list_output_devices
+        names: list[str] = []
+        for dev in list_output_devices():
+            if dev.name not in names:
+                names.append(dev.name)
+        return tuple(names)
+    except Exception:
+        return ()
 
 
 def settings_to_dialog_data(s, *, startup_enabled: bool | None = None) -> SettingsData:
@@ -95,13 +120,18 @@ def settings_to_dialog_data(s, *, startup_enabled: bool | None = None) -> Settin
         pointer_mode=s.pointer_mode, pointer_speed=s.pointer_speed,
         show_overlay=s.overlay_visible, show_mascot=s.mascot_visible, monitor_mapping=monitor,
         start_with_windows=s.start_with_windows if startup_enabled is None else startup_enabled)
-    return replace(data, **{k: getattr(s, k) for k in SETTINGS_V3_KEYS})
+    values = {k: getattr(s, k) for k in _dialog_keys(data)}
+    if 'instrument_chords' in values:
+        values['instrument_chords'] = tuple(values['instrument_chords'])
+    return replace(data, **values)
 
 
 def dialog_data_to_values(values: dict, data) -> dict:
-    """Copy schema 3 dialog fields into a settings dict (only those the dialog provides)."""
-    for key in SETTINGS_V3_KEYS:
+    """Copy schema 3/4 dialog fields into a settings dict (only those the dialog provides)."""
+    for key in _dialog_keys(data):
         values[key] = getattr(data, key)
+    if 'instrument_chords' in values:
+        values['instrument_chords'] = list(values['instrument_chords'])
     return values
 
 
@@ -257,7 +287,8 @@ class Runtime(QObject):
                  sink_factory=WindowsActionSink, camera_factory=run_camera_pipeline,
                  startup=windows_startup, packaged: bool | None = None,
                  cursor_source: CursorSource | None = None, telemetry: SessionRecorder | None = None,
-                 process_names=None, sound_player=None, logs_dir: Path | None = None):
+                 process_names=None, sound_player=None, logs_dir: Path | None = None,
+                 instrument_factory: Callable[['Runtime'], Any] | None = None):
         super().__init__()
         self.telemetry = telemetry
         self.process_names = process_names if process_names is not None else make_process_names()
@@ -277,6 +308,7 @@ class Runtime(QObject):
         self.camera_factory = camera_factory
         self.camera = None
         self.hotkey = self.session = self.pipeline = self.sink = None
+        self.instrument = None
         self.closed = False
         self.timer = QTimer(self)
         self.snapshot_received.connect(self._snapshot)
@@ -304,6 +336,8 @@ class Runtime(QObject):
             if telemetry:
                 telemetry.dominant = lambda: dominant_of(self.settings)
                 self.pipeline.add_frame_observer(telemetry.on_frame)
+            # Enstrüman mode: audio + window, fed by a frame observer; the controller only knows the mode.
+            self.instrument = (instrument_factory or _make_instrument)(self)
             self.pipeline.start()
             self.session = session_factory(self._session_event)
             self.session.start()
@@ -369,6 +403,9 @@ class Runtime(QObject):
             return
         try:
             self.camera = self.camera_factory(self.pipeline, start=False)
+            loop = getattr(self.camera, 'loop', None)
+            if self.instrument is not None and loop is not None:
+                loop.on_image = self.instrument.tap_image   # camera image for the Enstrüman window
             self.camera.start()
         except Exception as exc:
             self.stop_camera()
@@ -525,6 +562,8 @@ class Runtime(QObject):
             self.pipeline.gestures = GestureRecognizer(gesture_config(settings), dominant_of(settings))
             self.pipeline.request_gesture_reset(full=True)
             self.pipeline.set_mode(Mode(settings.default_mode))
+        if self.instrument is not None:
+            self.instrument.apply_settings(settings)
 
     def calibrated(self, result):
         b = result.bounds
@@ -546,6 +585,11 @@ class Runtime(QObject):
         if self.pipeline:
             self.pipeline.emergency_stop()
             self.pipeline.stop()
+        if self.instrument is not None:
+            try:
+                self.instrument.close()
+            except Exception:
+                logging.getLogger(__name__).debug('instrument close failed', exc_info=True)
         if self.telemetry:
             self.telemetry.close()
         for service in (self.sink, self.hotkey, self.session, self.displays):
@@ -557,6 +601,12 @@ class Runtime(QObject):
         if self.camera:
             self.camera.camera.stop()
             self.camera = None
+
+
+def _make_instrument(runtime: 'Runtime'):
+    from handcontrol.instrument_runtime import InstrumentRuntime
+    return InstrumentRuntime(runtime.pipeline, runtime.settings, bridge=runtime.bridge,
+        notify=lambda text: runtime.bridge.show_feedback(message=text), parent=runtime)
 
 
 def show_or_reuse_dialog(ref: list, factory):
@@ -669,8 +719,10 @@ def main(argv=None) -> int:
     def settings_dialog():
         runtime.pipeline.pause('Ayarlar')
         s = runtime.settings
-        dialog = SettingsDialog(initial=settings_to_dialog_data(s, startup_enabled=runtime.startup_enabled()),
-            bridge=bridge, parent=window)
+        initial = settings_to_dialog_data(s, startup_enabled=runtime.startup_enabled())
+        if 'audio_device_choices' in {f.name for f in fields(initial)}:
+            initial = replace(initial, audio_device_choices=audio_device_names())
+        dialog = SettingsDialog(initial=initial, bridge=bridge, parent=window)
         wire_settings_dialog(dialog)
         dialog.exec()
     onboarding_ref: list = []
@@ -691,12 +743,17 @@ def main(argv=None) -> int:
             tray.showMessage('Holoscobe', f'Tanılama dosyası hazır: {path}')
     def wire_settings_dialog(dialog):
         for name, slot in (('export_settings_requested', export_settings), ('import_settings_requested', import_settings),
-                ('diagnostics_requested', diagnostics_zip), ('tutorial_requested', open_onboarding)):
+                ('diagnostics_requested', diagnostics_zip), ('tutorial_requested', open_onboarding),
+                ('test_sound_requested', runtime.instrument.play_test_tone if runtime.instrument else None)):
+            if slot is None:
+                continue
             signal = getattr(dialog, name, None)
             if signal is not None:
                 signal.connect(slot)
     # The tray click emits both its own signal and bridge.tutorial_requested; connect only the bridge one.
     bridge.tutorial_requested.connect(open_onboarding)
+    if runtime.instrument is not None and hasattr(bridge, 'instrument_window_requested'):
+        bridge.instrument_window_requested.connect(runtime.instrument.show_window)
     def calibration_dialog():
         if runtime.pipeline.controller.begin_calibration():
             CalibrationWizard(bridge=bridge, parent=window).exec()
