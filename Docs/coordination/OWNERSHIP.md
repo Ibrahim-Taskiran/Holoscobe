@@ -157,3 +157,10 @@ Sözleşmeler (yönetici yazdı, bu tur dondurulmuş):
   `synth.py` numpy, `audio.py` sounddevice kullanır; saf modüller bunları içe aktarmaz.
 - Mevcut testler değişmez. İstisnalar: şema sürümü sabiti (`== 3` → `== 4`, 2 satır) ve `Mode` üzerinde dolaşan
   parametreli testlerin yeni `INSTRUMENT` durumu (Enstrüman modunda pencere komutu yok).
+
+### 7. tur kapanış (2026-11-22)
+
+- Yönetici ayrıca yazdı: `src/handcontrol/instrument_runtime.py` (Qt bağlantısı), `tests/camera/test_tracking_image_tap.py`,
+  `tests/ui/test_round6_ui.py` ve `tests/ui/test_ui_components.py` içinde yeni sekme/alan güncellemesi, sürüm 1.1.0.
+- Bitiş: tam takım 1750 geçti, 7 manuel seçilmedi. Paket derlendi, `--self-test`: `OK ... audio=ok`.
+- Donanım kabulü (gerçek kamera, ses kalitesi, gecikme hissi): bekliyor. Liste: `Docs/reports/instrument.md` §4.
