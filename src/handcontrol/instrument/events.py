@@ -48,6 +48,7 @@ class NoteOn:
     velocity: float      # 0..1
     note_id: int         # unique, increasing per engine; Bend.voice refers to it
     t_ms: float          # capture_ms of the frame with the strike (latency measurement)
+    delay_ms: float = 0.0   # start this long after the event is consumed (strum spacing inside one frame)
 
 
 @dataclass(frozen=True)
