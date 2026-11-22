@@ -76,6 +76,7 @@ MODE_LABELS_TR: dict[Mode, str] = {
     Mode.VOLUME: "Ses",
     Mode.WINDOWS: "Pencere",
     Mode.COMMANDS: "Komutlar",
+    Mode.INSTRUMENT: "Enstrüman",
 }
 
 # Short Turkish labels for contracts.KeyCommand values (keyed by value; ui never imports windows/).
@@ -481,7 +482,7 @@ def create_mode_menu_items(
     hovered_mode: Optional[Mode] = None,
     hold_progress: float = 0.0,
 ) -> tuple[OverlayMenuItem, ...]:
-    """Create one mode menu item per Mode (6 with Komutlar) in Turkish."""
+    """Create one mode menu item per Mode (7 with Komutlar and Enstrüman) in Turkish."""
     items: list[OverlayMenuItem] = []
     for mode in Mode:
         is_hovered = mode == hovered_mode
@@ -558,6 +559,7 @@ class UiBridge(QObject):
     calibration_requested = Signal()
     tutorial_requested = Signal()
     exit_requested = Signal()
+    instrument_window_requested = Signal()      # tray "Enstrüman penceresi"
     mode_selected = Signal(object)              # Mode
     window_action_selected = Signal(str)        # WindowActionKind.value
     settings_saved = Signal(object)             # SettingsData or dict
@@ -865,6 +867,11 @@ class UiBridge(QObject):
     def request_tutorial(self) -> None:
         """Emit first-run tutorial (onboarding) request."""
         self.tutorial_requested.emit()
+
+    @Slot()
+    def request_instrument_window(self) -> None:
+        """Emit the request to show the instrument (Enstrüman) window."""
+        self.instrument_window_requested.emit()
 
     @Slot()
     def request_exit(self) -> None:

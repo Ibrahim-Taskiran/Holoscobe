@@ -293,12 +293,15 @@ class CameraPreviewWidget(QWidget):
         painter.drawRoundedRect(canvas, 8.0, 8.0)
 
         if self._camera_image is not None and not self._camera_image.isNull():
-            img = (
-                self._camera_image.mirrored(True, False)
-                if self._mirrored
-                else self._camera_image
-            )
-            painter.drawImage(canvas, img)
+            if self._mirrored:
+                # Flip with the painter transform: no full-image copy per paint.
+                painter.save()
+                painter.translate(canvas.left() + canvas.right(), 0.0)
+                painter.scale(-1.0, 1.0)
+                painter.drawImage(canvas, self._camera_image)
+                painter.restore()
+            else:
+                painter.drawImage(canvas, self._camera_image)
 
         # Subtle center guide lines
         grid_pen = QPen(QColor(38, 45, 58), 1.0, Qt.PenStyle.DotLine)

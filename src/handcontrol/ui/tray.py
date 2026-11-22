@@ -118,11 +118,12 @@ MODE_ICON_COLORS: dict[Mode, QColor] = {
     Mode.VOLUME: QColor(178, 132, 255),
     Mode.WINDOWS: QColor(240, 148, 72),
     Mode.COMMANDS: QColor(236, 94, 140),
+    Mode.INSTRUMENT: QColor(38, 198, 218),
 }
 
 
 def create_mode_pixmap(mode: Mode, size: int = 32) -> QPixmap:
-    """Procedural glyph per mode (arrow, scroll, magnifier, speaker, window, keys)."""
+    """Procedural glyph per mode (arrow, scroll, magnifier, speaker, window, keys, guitar)."""
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     p = QPainter(pixmap)
@@ -167,6 +168,17 @@ def create_mode_pixmap(mode: Mode, size: int = 32) -> QPixmap:
         p.drawRoundedRect(QRectF(s * 0.18, s * 0.30, s * 0.64, s * 0.40), s * 0.08, s * 0.08)
         p.drawPolyline([pt(0.40, 0.42), pt(0.30, 0.50), pt(0.40, 0.58)])
         p.drawPolyline([pt(0.60, 0.42), pt(0.70, 0.50), pt(0.60, 0.58)])
+    elif mode == Mode.INSTRUMENT:
+        # Guitar body (two circles), neck and three strings.
+        p.setBrush(QColor(255, 255, 255))
+        p.drawEllipse(pt(0.36, 0.64), s * 0.15, s * 0.15)
+        p.drawEllipse(pt(0.48, 0.52), s * 0.11, s * 0.11)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(pt(0.50, 0.50), pt(0.78, 0.22))
+        thin = QPen(MODE_ICON_COLORS[Mode.INSTRUMENT], max(1.0, s * 0.035))
+        p.setPen(thin)
+        for off in (-0.035, 0.0, 0.035):
+            p.drawLine(pt(0.30 + off, 0.66 + off), pt(0.56 + off, 0.40 + off))
     p.end()
     return pixmap
 
@@ -201,6 +213,8 @@ class HandControlTray(QSystemTrayIcon):
         self.action_camera_toggle = QAction("Kamerayı Başlat", self.menu)
         self.action_settings = QAction("Ayarlar", self.menu)
         self.action_calibrate = QAction("Kalibre Et", self.menu)
+        self.action_instrument_window = QAction(
+            create_mode_icon(Mode.INSTRUMENT), "Enstrüman penceresi", self.menu)
         self.action_tutorial = QAction("Eğitimi başlat", self.menu)
         self.action_exit = QAction("Çıkış", self.menu)
 
@@ -236,6 +250,7 @@ class HandControlTray(QSystemTrayIcon):
         self.menu.addSeparator()
         self.menu.addMenu(self.mode_menu)
         self.menu.addMenu(self.guide_menu)
+        self.menu.addAction(self.action_instrument_window)
         self.menu.addAction(self.action_settings)
         self.menu.addAction(self.action_calibrate)
         self.menu.addAction(self.action_tutorial)
@@ -250,6 +265,7 @@ class HandControlTray(QSystemTrayIcon):
         self.action_settings.triggered.connect(self._bridge.request_settings)
         self.action_calibrate.triggered.connect(self._bridge.request_calibration)
         self.action_exit.triggered.connect(self._bridge.request_exit)
+        self.action_instrument_window.triggered.connect(self._bridge.request_instrument_window)
         self.action_tutorial.triggered.connect(self._on_tutorial)
 
         self._bridge.state_changed.connect(self.apply_state)

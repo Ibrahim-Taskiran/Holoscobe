@@ -269,6 +269,17 @@ def test_settings_dialog_dataclass_and_dict_roundtrip() -> None:
         "dwell_ms": 1500,
         "click_sound": True,
         "cursor_feedback": False,
+        # schema 4 (round 7, Enstrüman)
+        "instrument_layout": "chord",
+        "instrument_scale": "a_minor",
+        "instrument_quantize": False,
+        "instrument_chords": ("Am", "F", "C", "G"),
+        "instrument_volume": 0.8,
+        "instrument_tone": "electric",
+        "audio_device": "",
+        "audio_latency": "normal",
+        "instrument_particles": False,
+        "audio_device_choices": (),
     }
 
     dlg.set_values(custom_dict)

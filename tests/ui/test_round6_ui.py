@@ -145,7 +145,7 @@ def test_settings_new_fields_defaults_and_round_trip() -> None:
 
 def test_settings_labels_and_tabs() -> None:
     dlg = SettingsDialog()
-    assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Genel", "İmleç", "Hareketler", "Gelişmiş"]
+    assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Genel", "İmleç", "Hareketler", "Enstrüman", "Gelişmiş"]  # round 7: Enstrüman tab
     assert [dlg.combo_swipe_profile.itemText(i) for i in range(dlg.combo_swipe_profile.count())] == [
         "Otomatik", "Sunum", "Tarayıcı", "Medya", "Sanal masaüstleri"]
     assert [dlg.combo_auto_pause.itemText(i) for i in range(dlg.combo_auto_pause.count())] == [

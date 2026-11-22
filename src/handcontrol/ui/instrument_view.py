@@ -1,0 +1,459 @@
+"""Enstrüman window: camera, hand skeleton, glowing guitar strings and spark particles.
+
+GUI thread only. The instrument engine produces `InstrumentView` render states (camera px on the
+UNMIRRORED frame); this module maps them through the camera preview's normalized mapping so the
+strings line up with the skeleton for both mirror settings.
+
+`SparkSystem` is Qt-free and deterministic for a given seed, so it can be tested without a display.
+"""
+from __future__ import annotations
+
+import math
+import random
+import time
+from typing import Callable, Optional
+
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+from handcontrol.contracts import FrameFeatures
+from handcontrol.instrument.events import HitView, InstrumentView, StringView
+from handcontrol.ui.preview import CameraPreviewWidget
+from handcontrol.ui.viewmodel import UiBridge
+
+INSTRUMENT_WINDOW_TITLE_TR = "Holoscobe — Enstrüman"
+LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor"}
+WAITING_STATUS_TR = "Enstrüman modunu seçin ve iki elinizi gösterin"
+
+FRAME_INTERVAL_MS = 33            # ~30 fps repaint while visible
+MAX_WAVE_PX = 14.0                # peak string displacement at amplitude 1
+WAVE_HZ = 7.0                     # visual (slowed) vibration frequency
+WAVE_SEGMENTS = 24
+
+# String colors (enabled): thumb side to index side, warm to cool.
+STRING_COLORS: tuple[QColor, ...] = (
+    QColor(255, 196, 92),
+    QColor(255, 132, 102),
+    QColor(112, 214, 255),
+    QColor(150, 140, 255),
+)
+DISABLED_STRING_COLOR = QColor(130, 138, 150)
+SPARK_COLOR = QColor(255, 214, 120)
+# Glow passes: (width scale, alpha scale), wide/faint first, thin/bright core last.
+GLOW_PASSES: tuple[tuple[float, float], ...] = ((5.0, 0.10), (3.0, 0.22), (1.7, 0.50), (1.0, 1.0))
+
+
+class Spark:
+    """One particle. Positions in camera px (unmirrored), velocities in px/s."""
+
+    __slots__ = ("x", "y", "vx", "vy", "born_ms", "life_ms", "size", "brightness")
+
+    def __init__(self, x: float, y: float, vx: float, vy: float, born_ms: float, life_ms: float,
+                 size: float, brightness: float) -> None:
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.born_ms = born_ms
+        self.life_ms = life_ms
+        self.size = size
+        self.brightness = brightness
+
+    def alpha(self, now_ms: float) -> float:
+        """1 at birth, 0 at end of life."""
+        return max(0.0, min(1.0, 1.0 - (now_ms - self.born_ms) / self.life_ms))
+
+
+class SparkSystem:
+    """Cheap, bounded, deterministic spark particles for string hits."""
+
+    def __init__(
+        self,
+        seed: int = 0,
+        max_particles: int = 200,
+        min_count: int = 4,
+        max_count: int = 28,
+        life_ms: tuple[float, float] = (250.0, 500.0),
+        gravity: float = 900.0,        # px/s^2, image y grows downward
+        drag: float = 3.0,             # 1/s, velocity decay rate
+    ) -> None:
+        self._rng = random.Random(seed)
+        self.max_particles = max(1, int(max_particles))
+        self.min_count = max(0, int(min_count))
+        self.max_count = max(self.min_count, int(max_count))
+        self.life_ms = (float(life_ms[0]), float(max(life_ms[0], life_ms[1])))
+        self.gravity = float(gravity)
+        self.drag = float(drag)
+        self._particles: list[Spark] = []
+        self._last_ms: Optional[float] = None
+
+    @property
+    def particles(self) -> tuple[Spark, ...]:
+        return tuple(self._particles)
+
+    def __len__(self) -> int:
+        return len(self._particles)
+
+    def count_for(self, velocity: float) -> int:
+        """Particles per hit: grows linearly with strike velocity (0..1)."""
+        v = max(0.0, min(1.0, float(velocity)))
+        return int(round(self.min_count + (self.max_count - self.min_count) * v))
+
+    def emit(self, hit: HitView, now_ms: float) -> int:
+        """Spawn sparks at the hit point; returns how many were spawned. Oldest drop past the cap."""
+        n = self.count_for(hit.velocity)
+        if n <= 0:
+            return 0
+        v = max(0.0, min(1.0, float(hit.velocity)))
+        rng = self._rng
+        direction = 1.0 if hit.direction >= 0 else -1.0
+        base_speed = 180.0 + 520.0 * v
+        lo, hi = self.life_ms
+        for _ in range(n):
+            # Mostly along the strike direction, fanned sideways.
+            angle = rng.uniform(-1.25, 1.25)
+            speed = base_speed * rng.uniform(0.35, 1.0)
+            vx = math.sin(angle) * speed
+            vy = math.cos(angle) * speed * direction
+            self._particles.append(Spark(
+                float(hit.x), float(hit.y), vx, vy, float(now_ms), rng.uniform(lo, hi),
+                rng.uniform(1.4, 2.6) + 1.2 * v, 0.55 + 0.45 * v,
+            ))
+        overflow = len(self._particles) - self.max_particles
+        if overflow > 0:
+            del self._particles[:overflow]
+        if self._last_ms is None:
+            self._last_ms = float(now_ms)
+        return n
+
+    def step(self, now_ms: float) -> None:
+        """Advance physics to now_ms and drop dead particles."""
+        now = float(now_ms)
+        last = self._last_ms if self._last_ms is not None else now
+        self._last_ms = now
+        dt = max(0.0, min(0.1, (now - last) / 1000.0))
+        damp = max(0.0, 1.0 - self.drag * dt)
+        g = self.gravity * dt
+        alive: list[Spark] = []
+        for p in self._particles:
+            if now - p.born_ms >= p.life_ms:
+                continue
+            p.vx *= damp
+            p.vy = p.vy * damp + g
+            p.x += p.vx * dt
+            p.y += p.vy * dt
+            alive.append(p)
+        self._particles = alive
+
+    def clear(self) -> None:
+        self._particles = []
+        self._last_ms = None
+
+
+def _string_color(s: StringView) -> QColor:
+    if not s.enabled:
+        return DISABLED_STRING_COLOR
+    return STRING_COLORS[s.index % len(STRING_COLORS)]
+
+
+class InstrumentCanvas(CameraPreviewWidget):
+    """Camera preview (image + skeleton) with strings, sparks and HUD painted on top."""
+
+    def __init__(self, sparks: SparkSystem, clock: Callable[[], float],
+                 bridge: Optional[UiBridge] = None, parent: Optional[QWidget] = None) -> None:
+        super().__init__(bridge=bridge, parent=parent)
+        self._sparks = sparks
+        self._clock = clock
+        self._view: Optional[InstrumentView] = None
+        self._particles_enabled = True
+        self._hud_font = QFont("Segoe UI", 10)
+        self._hud_big_font = QFont("Segoe UI", 20)
+        self._hud_big_font.setBold(True)
+        self._label_font = QFont("Segoe UI", 8)
+        self._label_font.setBold(True)
+        self.setMinimumSize(480, 360)
+
+    @property
+    def view(self) -> Optional[InstrumentView]:
+        return self._view
+
+    def set_view(self, view: Optional[InstrumentView]) -> None:
+        self._view = view
+
+    def set_particles_enabled(self, enabled: bool) -> None:
+        self._particles_enabled = bool(enabled)
+
+    # ---------- geometry ----------
+
+    @staticmethod
+    def canvas_rect_for(full_rect: QRectF) -> QRectF:
+        """Same canvas rect CameraPreviewWidget._paint_contents uses (below its top HUD bar)."""
+        top_bar_bottom = full_rect.top() + 6.0 + 32.0
+        return QRectF(full_rect.left() + 8.0, top_bar_bottom + 6.0, full_rect.width() - 16.0,
+                      max(60.0, full_rect.height() - 32.0 - 18.0))
+
+    def map_camera_point(self, x: float, y: float, canvas: QRectF) -> QPointF:
+        """Camera px (unmirrored) -> widget point, honoring the mirror setting."""
+        view = self._view
+        w = float(view.width) if view is not None and view.width > 0 else 1.0
+        h = float(view.height) if view is not None and view.height > 0 else 1.0
+        return self.map_normalized_point(x / w, y / h, canvas)
+
+    def string_points(self, s: StringView, canvas: QRectF) -> tuple[QPointF, QPointF]:
+        return self.map_camera_point(*s.p0, canvas), self.map_camera_point(*s.p1, canvas)
+
+    # ---------- painting ----------
+
+    def _draw_hand_info_card(self, *args: object, **kwargs: object) -> None:
+        """Per-finger cards are hidden here: the corner HUD owns that space."""
+        return
+
+    def _paint_contents(self, painter: QPainter, full_rect: QRectF) -> None:
+        super()._paint_contents(painter, full_rect)
+        canvas = self.canvas_rect_for(full_rect)
+        now = self._clock()
+        painter.save()
+        painter.setClipRect(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        view = self._view
+        if view is not None:
+            for s in view.strings:
+                self._draw_string(painter, canvas, s, now)
+            if view.pick_tip is not None:
+                self._draw_pick(painter, self.map_camera_point(*view.pick_tip, canvas), view.playing)
+        if self._particles_enabled and len(self._sparks):
+            self._draw_sparks(painter, canvas, now)
+        painter.restore()
+        self._draw_hud(painter, canvas)
+
+    def _draw_string(self, painter: QPainter, canvas: QRectF, s: StringView, now_ms: float) -> None:
+        a, b = self.string_points(s, canvas)
+        dx, dy = b.x() - a.x(), b.y() - a.y()
+        length = math.hypot(dx, dy)
+        if length < 1.0:
+            return
+        amp = max(0.0, min(1.0, float(s.amplitude))) if s.enabled else 0.0
+        color = QColor(_string_color(s))
+        alpha_base = 0.35 if not s.enabled else 0.70 + 0.30 * amp
+        base_w = 2.0 + 1.6 * amp
+
+        path = QPainterPath(a)
+        if amp > 0.01:
+            # Standing wave: fundamental + a little 2nd harmonic, perpendicular to the string.
+            nx, ny = -dy / length, dx / length
+            phase = 2.0 * math.pi * WAVE_HZ * (now_ms / 1000.0) + s.index * 1.3
+            disp = MAX_WAVE_PX * amp
+            c1, c2 = math.sin(phase), 0.35 * math.sin(2.0 * phase + 0.7)
+            for i in range(1, WAVE_SEGMENTS + 1):
+                t = i / WAVE_SEGMENTS
+                d = disp * (math.sin(math.pi * t) * c1 + math.sin(2.0 * math.pi * t) * c2)
+                path.lineTo(a.x() + dx * t + nx * d, a.y() + dy * t + ny * d)
+        else:
+            path.lineTo(b)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        pen = QPen()
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        for i, (w_scale, a_scale) in enumerate(GLOW_PASSES):
+            c = QColor(color) if i < len(GLOW_PASSES) - 1 else QColor(color).lighter(150 if s.enabled else 100)
+            c.setAlphaF(max(0.0, min(1.0, alpha_base * a_scale * (1.0 + amp if i < 3 else 1.0))))
+            pen.setColor(c)
+            pen.setWidthF(base_w * w_scale)
+            painter.setPen(pen)
+            painter.drawPath(path)
+
+        # End caps and the note label at the index side.
+        painter.setPen(Qt.PenStyle.NoPen)
+        cap = QColor(color)
+        cap.setAlphaF(alpha_base)
+        painter.setBrush(cap)
+        painter.drawEllipse(a, 3.5, 3.5)
+        painter.drawEllipse(b, 3.5, 3.5)
+        if s.label:
+            painter.setFont(self._label_font)
+            label_c = QColor(235, 240, 248) if s.enabled else QColor(150, 156, 166)
+            painter.setPen(label_c)
+            # Put the label beyond the index-side end, away from the string.
+            if b.x() >= a.x():
+                painter.drawText(QPointF(b.x() + 8.0, b.y() + 4.0), s.label)
+            else:
+                box = QRectF(b.x() - 68.0, b.y() - 10.0, 60.0, 20.0)
+                painter.drawText(box, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), s.label)
+
+    def _draw_pick(self, painter: QPainter, pt: QPointF, playing: bool) -> None:
+        c = QColor(255, 255, 255) if playing else QColor(160, 166, 176)
+        painter.setPen(Qt.PenStyle.NoPen)
+        glow = QColor(c)
+        glow.setAlphaF(0.25)
+        painter.setBrush(glow)
+        painter.drawEllipse(pt, 11.0, 11.0)
+        painter.setBrush(c)
+        painter.drawEllipse(pt, 4.5, 4.5)
+
+    def _draw_sparks(self, painter: QPainter, canvas: QRectF, now_ms: float) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        c = QColor(SPARK_COLOR)
+        for p in self._sparks.particles:
+            alpha = p.alpha(now_ms) * p.brightness
+            if alpha <= 0.0:
+                continue
+            pt = self.map_camera_point(p.x, p.y, canvas)
+            c.setAlphaF(alpha * 0.35)
+            painter.setBrush(c)
+            painter.drawEllipse(pt, p.size * 2.2, p.size * 2.2)
+            c.setAlphaF(alpha)
+            painter.setBrush(c)
+            painter.drawEllipse(pt, p.size, p.size)
+
+    def hud_lines(self) -> tuple[str, str, str]:
+        """(note or chord, "Düzen: …", status) shown in the corner HUD."""
+        view = self._view
+        if view is None:
+            return ("—", "Düzen: —", WAITING_STATUS_TR)
+        if view.layout == "chord":
+            main = view.chord_label or "—"
+            if view.note_label:
+                main = f"{main}  ·  {view.note_label}" if view.chord_label else view.note_label
+        else:
+            main = view.note_label or "—"
+        layout = LAYOUT_LABELS_TR.get(view.layout, view.layout)
+        return (main, f"Düzen: {layout}", view.status)
+
+    def _draw_hud(self, painter: QPainter, canvas: QRectF) -> None:
+        main, layout_line, status = self.hud_lines()
+        playing = self._view.playing if self._view is not None else False
+        box = QRectF(canvas.left() + 12.0, canvas.top() + 12.0, 280.0, 92.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(14, 18, 26, 200))
+        painter.drawRoundedRect(box, 10.0, 10.0)
+        painter.setBrush(QColor(82, 214, 148) if playing else QColor(120, 128, 140))
+        painter.drawEllipse(QPointF(box.left() + 18.0, box.top() + 26.0), 5.0, 5.0)
+
+        painter.setFont(self._hud_big_font)
+        painter.setPen(QColor(245, 248, 252))
+        painter.drawText(QRectF(box.left() + 32.0, box.top() + 6.0, box.width() - 40.0, 40.0),
+                         int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), main)
+        painter.setFont(self._hud_font)
+        painter.setPen(QColor(178, 188, 202))
+        painter.drawText(QRectF(box.left() + 14.0, box.top() + 46.0, box.width() - 24.0, 20.0),
+                         int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), layout_line)
+        painter.setPen(QColor(255, 206, 120) if not playing else QColor(160, 230, 190))
+        painter.drawText(QRectF(box.left() + 14.0, box.top() + 66.0, box.width() - 24.0, 20.0),
+                         int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), status)
+
+
+class InstrumentWindow(QWidget):
+    """Top-level "Holoscobe — Enstrüman" window. Closing it hides it; the app keeps running."""
+
+    closed = Signal()
+
+    def __init__(
+        self,
+        bridge: Optional[UiBridge] = None,
+        parent: Optional[QWidget] = None,
+        seed: int = 0,
+        clock: Optional[Callable[[], float]] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowFlag(Qt.WindowType.Window, True)
+        self.setWindowTitle(INSTRUMENT_WINDOW_TITLE_TR)
+        self.resize(960, 620)
+        self._clock: Callable[[], float] = clock or (lambda: time.monotonic() * 1000.0)
+        self.sparks = SparkSystem(seed=seed)
+        self.canvas = InstrumentCanvas(self.sparks, self._clock, bridge=bridge, parent=self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.canvas)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(FRAME_INTERVAL_MS)
+        self._timer.timeout.connect(self._tick)
+
+    # ---------- state ----------
+
+    @property
+    def view(self) -> Optional[InstrumentView]:
+        return self.canvas.view
+
+    @property
+    def particles_enabled(self) -> bool:
+        return self.canvas._particles_enabled
+
+    @property
+    def mirrored(self) -> bool:
+        return self.canvas.mirrored
+
+    @property
+    def is_animating(self) -> bool:
+        return self._timer.isActive()
+
+    def hud_lines(self) -> tuple[str, str, str]:
+        return self.canvas.hud_lines()
+
+    # ---------- slots (GUI thread) ----------
+
+    @Slot(object)
+    def update_view(self, view: Optional[InstrumentView]) -> None:
+        """New engine render state. Hits spawn sparks once; strings are redrawn on the next tick."""
+        self.canvas.set_view(view)
+        if view is not None and self.canvas._particles_enabled:
+            now = self._clock()
+            for hit in view.hits:
+                self.sparks.emit(hit, now)
+        if not self.is_animating:
+            self.canvas.update()
+
+    @Slot(object)
+    def set_camera_image(self, image: Optional[QImage]) -> None:
+        self.canvas.set_camera_image(image)
+
+    @Slot(object)
+    def set_frame(self, frame: Optional[FrameFeatures]) -> None:
+        """Hand skeleton source when no bridge is given (the bridge feeds frame_updated itself)."""
+        self.canvas.set_frame(frame)
+
+    @Slot(bool)
+    def set_mirrored(self, mirrored: bool) -> None:
+        self.canvas.set_mirrored(mirrored)
+
+    @Slot(bool)
+    def set_particles_enabled(self, enabled: bool) -> None:
+        self.canvas.set_particles_enabled(enabled)
+        if not enabled:
+            self.sparks.clear()
+        self.canvas.update()
+
+    # ---------- animation ----------
+
+    @Slot()
+    def _tick(self) -> None:
+        self.sparks.step(self._clock())
+        self.canvas.update()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._timer.stop()
+        self.sparks.clear()
+        event.accept()
+        self.closed.emit()
+
+    def render_to_image(self, width: int = 960, height: int = 620) -> QImage:
+        """Render offscreen (tests, screenshots). Advances sparks to the current clock first."""
+        self.sparks.step(self._clock())
+        return self.canvas.render_to_image(width, height)
+
+
+__all__ = [
+    "INSTRUMENT_WINDOW_TITLE_TR", "InstrumentCanvas", "InstrumentWindow", "LAYOUT_LABELS_TR", "Spark",
+    "SparkSystem",
+]

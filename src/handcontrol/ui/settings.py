@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from handcontrol.contracts import Handedness, Mode
+from handcontrol.instrument.events import CHORD_NAMES, DEFAULT_CHORDS, LATENCIES, LAYOUTS, SCALE_NAMES, TONES
 from handcontrol.ui.tray import create_mode_icon
 from handcontrol.ui.viewmodel import MODE_LABELS_TR, SWIPE_PROFILE_LABELS_TR, UiBridge
 
@@ -67,6 +68,32 @@ SENSITIVITY_PRESET_LABELS_TR: dict[str, str] = {
     "fast": "Hızlı",
     "custom": "Özel",
 }
+
+
+INSTRUMENT_LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor"}
+INSTRUMENT_SCALE_LABELS_TR: dict[str, str] = {
+    "e_minor_pentatonic": "Mi minör pentatonik",
+    "a_minor_pentatonic": "La minör pentatonik",
+    "e_blues": "Mi blues",
+    "e_minor": "Mi minör",
+    "a_minor": "La minör",
+    "c_major": "Do majör",
+    "g_major": "Sol majör",
+    "d_dorian": "Re dorian",
+    "chromatic": "Kromatik",
+}
+INSTRUMENT_TONE_LABELS_TR: dict[str, str] = {"clean": "Temiz", "electric": "Elektro"}
+AUDIO_LATENCY_LABELS_TR: dict[str, str] = {"low": "Düşük", "normal": "Normal"}
+CHORD_ZONE_LABELS_TR: tuple[str, str, str, str] = ("Üst bölge", "Üst orta bölge", "Alt orta bölge", "Alt bölge")
+AUDIO_DEFAULT_DEVICE_LABEL_TR = "Sistem varsayılanı"
+
+
+def _clean_chords(value: Any) -> tuple[str, str, str, str]:
+    """Exactly four known chord names; a bad entry falls back to the default chord of its zone."""
+    items = list(value) if isinstance(value, (list, tuple)) else []
+    out = [str(items[i]) if i < len(items) and str(items[i]) in CHORD_NAMES else DEFAULT_CHORDS[i]
+           for i in range(4)]
+    return (out[0], out[1], out[2], out[3])
 
 
 def preset_for(pointer_speed: float, pointer_sensitivity: float) -> str:
@@ -116,6 +143,25 @@ class SettingsData:
     dwell_ms: int = 1000                        # 400 .. 3000
     click_sound: bool = False
     cursor_feedback: bool = True                # hold ring next to the cursor
+    # Schema 4 (Enstrüman). Names match config.Settings exactly.
+    instrument_layout: str = "solo"             # LAYOUTS
+    instrument_scale: str = "e_minor_pentatonic"  # SCALE_NAMES
+    instrument_quantize: bool = True
+    instrument_chords: tuple[str, ...] = DEFAULT_CHORDS   # 4 zones, top first
+    instrument_volume: float = 0.5              # 0..1
+    instrument_tone: str = "clean"              # TONES
+    audio_device: str = ""                      # "" = system default
+    audio_latency: str = "low"                  # LATENCIES
+    instrument_particles: bool = True
+    # Display only: output device names offered in the Ses cihazı list (not persisted).
+    audio_device_choices: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Settings stores lists; keep the frozen dataclass hashable and comparable.
+        if not isinstance(self.instrument_chords, tuple):
+            object.__setattr__(self, "instrument_chords", tuple(self.instrument_chords))
+        if not isinstance(self.audio_device_choices, tuple):
+            object.__setattr__(self, "audio_device_choices", tuple(self.audio_device_choices))
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain dictionary copy of all settings."""
@@ -195,6 +241,29 @@ class SettingsData:
         dwell_ms = max(DWELL_MS_MIN, min(DWELL_MS_MAX, _int_or(data.get("dwell_ms"), defaults.dwell_ms)))
         dwell_ms = int(round(dwell_ms / _DWELL_UNIT_MS) * _DWELL_UNIT_MS)
 
+        layout = str(data.get("instrument_layout", defaults.instrument_layout)).lower()
+        if layout not in LAYOUTS:
+            layout = defaults.instrument_layout
+        scale = str(data.get("instrument_scale", defaults.instrument_scale))
+        if scale not in SCALE_NAMES:
+            scale = defaults.instrument_scale
+        tone = str(data.get("instrument_tone", defaults.instrument_tone)).lower()
+        if tone not in TONES:
+            tone = defaults.instrument_tone
+        latency = str(data.get("audio_latency", defaults.audio_latency)).lower()
+        if latency not in LATENCIES:
+            latency = defaults.audio_latency
+        try:
+            volume = float(data.get("instrument_volume", defaults.instrument_volume))
+        except (TypeError, ValueError):
+            volume = defaults.instrument_volume
+        if volume != volume:  # NaN
+            volume = defaults.instrument_volume
+        raw_dev = data.get("audio_device", defaults.audio_device)
+        device = raw_dev.strip()[:200] if isinstance(raw_dev, str) else ""
+        raw_choices = data.get("audio_device_choices", ())
+        choices = tuple(str(c) for c in raw_choices) if isinstance(raw_choices, (list, tuple)) else ()
+
         return cls(
             camera_index=max(0, int(data.get("camera_index", defaults.camera_index))),
             camera_backend=backend,
@@ -236,6 +305,16 @@ class SettingsData:
             dwell_ms=dwell_ms,
             click_sound=bool(data.get("click_sound", defaults.click_sound)),
             cursor_feedback=bool(data.get("cursor_feedback", defaults.cursor_feedback)),
+            instrument_layout=layout,
+            instrument_scale=scale,
+            instrument_quantize=bool(data.get("instrument_quantize", defaults.instrument_quantize)),
+            instrument_chords=_clean_chords(data.get("instrument_chords", defaults.instrument_chords)),
+            instrument_volume=round(max(0.0, min(1.0, volume)), 2),
+            instrument_tone=tone,
+            audio_device=device,
+            audio_latency=latency,
+            instrument_particles=bool(data.get("instrument_particles", defaults.instrument_particles)),
+            audio_device_choices=choices,
         )
 
 
@@ -246,7 +325,7 @@ def _format_auto_pause(seconds: int) -> str:
 
 
 class SettingsDialog(QDialog):
-    """Settings window with tabs: Genel, İmleç, Hareketler, Gelişmiş."""
+    """Settings window with tabs: Genel, İmleç, Hareketler, Enstrüman, Gelişmiş."""
 
     settings_applied = Signal(object)       # SettingsData
     settings_dict_applied = Signal(dict)    # dict[str, Any]
@@ -254,6 +333,7 @@ class SettingsDialog(QDialog):
     import_settings_requested = Signal(str)  # source JSON path chosen in QFileDialog
     diagnostics_requested = Signal()
     tutorial_requested = Signal()
+    test_sound_requested = Signal(str)      # "Test sesi çal": selected audio device name ("" = default)
 
     def __init__(
         self,
@@ -297,6 +377,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_general_tab(), "Genel")
         self.tabs.addTab(self._build_pointer_tab(), "İmleç")
         self.tabs.addTab(self._build_gestures_tab(), "Hareketler")
+        self.tabs.addTab(self._build_instrument_tab(), "Enstrüman")
         self.tabs.addTab(self._build_advanced_tab(), "Gelişmiş")
         root.addWidget(self.tabs, 1)
 
@@ -496,6 +577,116 @@ class SettingsDialog(QDialog):
 
         layout.addStretch(1)
         return page
+
+    def _build_instrument_tab(self) -> QWidget:
+        page, layout = self._page()
+
+        play_group = QGroupBox("Çalış")
+        play_form = QFormLayout(play_group)
+        self.combo_instrument_layout = QComboBox()
+        for key in LAYOUTS:
+            self.combo_instrument_layout.addItem(INSTRUMENT_LAYOUT_LABELS_TR.get(key, key), key)
+        play_form.addRow("Düzen:", self.combo_instrument_layout)
+        play_form.addRow("", self._hint(
+            "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, tel eli yüksekliği akoru seçer."))
+
+        self.combo_instrument_scale = QComboBox()
+        for key in SCALE_NAMES:
+            self.combo_instrument_scale.addItem(INSTRUMENT_SCALE_LABELS_TR.get(key, key), key)
+        play_form.addRow("Dizi:", self.combo_instrument_scale)
+        self.chk_instrument_quantize = QCheckBox("Diziye kilitle")
+        play_form.addRow("", self.chk_instrument_quantize)
+        layout.addWidget(play_group)
+
+        chord_group = QGroupBox("Akorlar (Akor düzeni)")
+        chord_form = QFormLayout(chord_group)
+        self.combo_chords: list[QComboBox] = []
+        for zone_label in CHORD_ZONE_LABELS_TR:
+            combo = QComboBox()
+            for name in CHORD_NAMES:
+                combo.addItem(name, name)
+            chord_form.addRow(f"{zone_label}:", combo)
+            self.combo_chords.append(combo)
+        layout.addWidget(chord_group)
+
+        sound_group = QGroupBox("Ses")
+        sound_form = QFormLayout(sound_group)
+        vol_row = QWidget()
+        vol_layout = QHBoxLayout(vol_row)
+        vol_layout.setContentsMargins(0, 0, 0, 0)
+        self.slider_instrument_volume = QSlider(Qt.Orientation.Horizontal)
+        self.slider_instrument_volume.setRange(0, 100)
+        self.slider_instrument_volume.setSingleStep(5)
+        self.slider_instrument_volume.setPageStep(10)
+        self.label_instrument_volume = QLabel()
+        self.label_instrument_volume.setMinimumWidth(40)
+        self.slider_instrument_volume.valueChanged.connect(self._update_volume_label)
+        vol_layout.addWidget(self.slider_instrument_volume, 1)
+        vol_layout.addWidget(self.label_instrument_volume)
+        sound_form.addRow("Ses düzeyi:", vol_row)
+
+        self.combo_instrument_tone = QComboBox()
+        for key in TONES:
+            self.combo_instrument_tone.addItem(INSTRUMENT_TONE_LABELS_TR.get(key, key), key)
+        sound_form.addRow("Tını:", self.combo_instrument_tone)
+
+        device_row = QWidget()
+        device_layout = QHBoxLayout(device_row)
+        device_layout.setContentsMargins(0, 0, 0, 0)
+        self.combo_audio_device = QComboBox()
+        self.btn_test_sound = QPushButton("Test sesi çal")
+        self.btn_test_sound.clicked.connect(self.request_test_sound)
+        device_layout.addWidget(self.combo_audio_device, 1)
+        device_layout.addWidget(self.btn_test_sound)
+        sound_form.addRow("Ses cihazı:", device_row)
+
+        self.combo_audio_latency = QComboBox()
+        for key in LATENCIES:
+            self.combo_audio_latency.addItem(AUDIO_LATENCY_LABELS_TR.get(key, key), key)
+        sound_form.addRow("Gecikme:", self.combo_audio_latency)
+        sound_form.addRow("", self._hint("Ses kesik kesik gelirse gecikmeyi Normal yapın."))
+        layout.addWidget(sound_group)
+
+        view_group = QGroupBox("Görünüm")
+        view_form = QFormLayout(view_group)
+        self.chk_instrument_particles = QCheckBox("Kıvılcım efektleri")
+        view_form.addRow(self.chk_instrument_particles)
+        layout.addWidget(view_group)
+
+        layout.addStretch(1)
+        return page
+
+    # ---------- instrument ----------
+
+    def instrument_volume(self) -> float:
+        return round(self.slider_instrument_volume.value() / 100.0, 2)
+
+    @Slot()
+    def _update_volume_label(self, *_: Any) -> None:
+        self.label_instrument_volume.setText(f"%{self.slider_instrument_volume.value()}")
+
+    def _set_audio_devices(self, choices: Sequence[str], selected: str) -> None:
+        """Fill Ses cihazı: Sistem varsayılanı first, then choices; a stored unknown device is kept."""
+        self._audio_device_choices = tuple(choices)
+        combo = self.combo_audio_device
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(AUDIO_DEFAULT_DEVICE_LABEL_TR, "")
+        for name in choices:
+            if name and combo.findData(name) < 0:
+                combo.addItem(name, name)
+        if selected and combo.findData(selected) < 0:
+            combo.addItem(f"{selected} (bulunamadı)", selected)
+        idx = combo.findData(selected)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
+    def selected_audio_device(self) -> str:
+        return str(self.combo_audio_device.currentData() or "")
+
+    @Slot()
+    def request_test_sound(self) -> None:
+        self.test_sound_requested.emit(self.selected_audio_device())
 
     def _build_advanced_tab(self) -> QWidget:
         page, layout = self._page()
@@ -704,6 +895,19 @@ class SettingsDialog(QDialog):
         self._update_dwell_enabled()
         self.chk_click_sound.setChecked(cfg.click_sound)
         self.chk_cursor_feedback.setChecked(cfg.cursor_feedback)
+        self._set_combo_by_data(self.combo_instrument_layout, cfg.instrument_layout)
+        self._set_combo_by_data(self.combo_instrument_scale, cfg.instrument_scale)
+        self.chk_instrument_quantize.setChecked(cfg.instrument_quantize)
+        for combo, name in zip(self.combo_chords, _clean_chords(cfg.instrument_chords)):
+            self._set_combo_by_data(combo, name)
+        self.slider_instrument_volume.setValue(round(max(0.0, min(1.0, cfg.instrument_volume)) * 100))
+        self._update_volume_label()
+        self._set_combo_by_data(self.combo_instrument_tone, cfg.instrument_tone)
+        # An empty choice list (e.g. reset to defaults) keeps the devices already listed.
+        choices = cfg.audio_device_choices or getattr(self, "_audio_device_choices", ())
+        self._set_audio_devices(choices, cfg.audio_device)
+        self._set_combo_by_data(self.combo_audio_latency, cfg.audio_latency)
+        self.chk_instrument_particles.setChecked(cfg.instrument_particles)
 
     def get_settings(self) -> SettingsData:
         """Read current UI control values as a validated SettingsData instance."""
@@ -737,6 +941,16 @@ class SettingsDialog(QDialog):
             dwell_ms=self.dwell_ms(),
             click_sound=bool(self.chk_click_sound.isChecked()),
             cursor_feedback=bool(self.chk_cursor_feedback.isChecked()),
+            instrument_layout=str(self.combo_instrument_layout.currentData() or "solo"),
+            instrument_scale=str(self.combo_instrument_scale.currentData() or "e_minor_pentatonic"),
+            instrument_quantize=bool(self.chk_instrument_quantize.isChecked()),
+            instrument_chords=_clean_chords([c.currentData() for c in self.combo_chords]),
+            instrument_volume=self.instrument_volume(),
+            instrument_tone=str(self.combo_instrument_tone.currentData() or "clean"),
+            audio_device=self.selected_audio_device(),
+            audio_latency=str(self.combo_audio_latency.currentData() or "low"),
+            instrument_particles=bool(self.chk_instrument_particles.isChecked()),
+            audio_device_choices=tuple(getattr(self, "_audio_device_choices", ())),
         )
 
     def get_values_dict(self) -> dict[str, Any]:

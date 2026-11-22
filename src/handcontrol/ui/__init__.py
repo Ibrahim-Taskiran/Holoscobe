@@ -14,6 +14,7 @@ from handcontrol.ui.feedback import (
     FeedbackOverlay,
     FeedbackToast,
 )
+from handcontrol.ui.instrument_view import InstrumentWindow, SparkSystem
 from handcontrol.ui.onboarding import OnboardingDialog, OnboardingStep
 from handcontrol.ui.overlay import (
     CursorFeedbackOverlay,
@@ -104,6 +105,7 @@ __all__ = [
     "FeedbackOverlay",
     "FeedbackToast",
     "HandControlTray",
+    "InstrumentWindow",
     "MovementBounds",
     "OverlayMenuItem",
     "OverlayMenuKind",
@@ -115,6 +117,7 @@ __all__ = [
     "SettingsData",
     "SettingsDialog",
     "SettingsWindow",
+    "SparkSystem",
     "SystemTray",
     "TrayController",
     "TrayIconState",
