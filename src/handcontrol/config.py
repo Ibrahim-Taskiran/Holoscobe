@@ -14,14 +14,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-SCHEMA_VERSION = 3
+from handcontrol.instrument.events import CHORD_NAMES, DEFAULT_CHORDS, LATENCIES, LAYOUTS, SCALE_NAMES, TONES
+
+SCHEMA_VERSION = 4
 APP_DIR_NAME = "Holoscobe"
 SETTINGS_FILE = "settings.json"
 
 BACKENDS = ("msmf", "dshow", "auto")
 HANDS = ("right", "left")
 DIRECTIONS = ("normal", "reversed")
-MODES = ("pointer", "scroll", "zoom", "volume", "windows", "commands")
+MODES = ("pointer", "scroll", "zoom", "volume", "windows", "commands", "instrument")
 MONITOR_MODES = ("primary", "virtual_desktop", "monitor")
 POINTER_MODES = ("relative", "absolute")
 SWIPE_PROFILES = ("auto", "slides", "browser", "media", "desktops")
@@ -100,6 +102,16 @@ class Settings:
     click_sound: bool = False             # short system sound on click/command
     cursor_feedback: bool = True          # progress ring next to the cursor for hold gestures
     onboarding_done: bool = False         # first-run tutorial finished or skipped
+    # schema 4 (round 7, Enstrüman mode)
+    instrument_layout: str = "solo"       # "solo" (1 string, length = pitch) | "chord" (4 strings, strum)
+    instrument_scale: str = "e_minor_pentatonic"
+    instrument_quantize: bool = True      # True: pitch locked to the scale; False: continuous
+    instrument_chords: list[str] = field(default_factory=lambda: list(DEFAULT_CHORDS))   # 4 vertical zones, top first
+    instrument_volume: float = 0.5        # 0..1
+    instrument_tone: str = "clean"        # "clean" | "electric"
+    audio_device: str = ""                # output device name; "" = system default
+    audio_latency: str = "low"            # "low" | "normal"
+    instrument_particles: bool = True     # spark particles in the Enstrüman window
 
 
 # ---------- validation helpers ----------
@@ -128,6 +140,17 @@ def _choice(v: Any, options: tuple[str, ...], default: str) -> str:
 
 def _dict(v: Any) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
+
+
+def _exact(v: Any, options: tuple[str, ...], default: str) -> str:
+    """Case-sensitive choice (chord and scale names)."""
+    return v if isinstance(v, str) and v in options else default
+
+
+def _chords(v: Any) -> list[str]:
+    """Exactly four known chord names; a bad entry falls back to the default chord of its zone."""
+    items = v if isinstance(v, (list, tuple)) else []
+    return [_exact(items[i] if i < len(items) else None, CHORD_NAMES, DEFAULT_CHORDS[i]) for i in range(4)]
 
 
 def validate(data: Any) -> Settings:
@@ -169,6 +192,16 @@ def validate(data: Any) -> Settings:
     s.click_sound = _bool(d.get("click_sound"), s.click_sound)
     s.cursor_feedback = _bool(d.get("cursor_feedback"), s.cursor_feedback)
     s.onboarding_done = _bool(d.get("onboarding_done"), s.onboarding_done)
+    s.instrument_layout = _choice(d.get("instrument_layout"), LAYOUTS, s.instrument_layout)
+    s.instrument_scale = _exact(d.get("instrument_scale"), SCALE_NAMES, s.instrument_scale)
+    s.instrument_quantize = _bool(d.get("instrument_quantize"), s.instrument_quantize)
+    s.instrument_chords = _chords(d.get("instrument_chords"))
+    s.instrument_volume = _num(d.get("instrument_volume"), s.instrument_volume, 0.0, 1.0)
+    s.instrument_tone = _choice(d.get("instrument_tone"), TONES, s.instrument_tone)
+    dev = d.get("audio_device")
+    s.audio_device = dev.strip()[:200] if isinstance(dev, str) else ""
+    s.audio_latency = _choice(d.get("audio_latency"), LATENCIES, s.audio_latency)
+    s.instrument_particles = _bool(d.get("instrument_particles"), s.instrument_particles)
 
     m, md = s.monitor_mapping, _dict(d.get("monitor_mapping"))
     m.mode = _choice(md.get("mode"), MONITOR_MODES, m.mode)
@@ -208,7 +241,12 @@ def _migrate_v2(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1, 2: _migrate_v2}
+def _migrate_v3(data: dict[str, Any]) -> dict[str, Any]:
+    """Schema 3 -> 4: Enstrüman mode fields only; validate() fills their defaults. Nothing else changes."""
+    return data
+
+
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1, 2: _migrate_v2, 3: _migrate_v3}
 
 
 def migrate(data: dict[str, Any]) -> dict[str, Any]:

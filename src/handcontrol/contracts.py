@@ -64,6 +64,7 @@ class Mode(Enum):
     VOLUME = "volume"
     WINDOWS = "windows"
     COMMANDS = "commands"     # swipe/pinch -> keyboard and media commands (round 6)
+    INSTRUMENT = "instrument" # virtual guitar strings -> audio only; never any OS input (round 7)
 
 
 class KeyCommand(Enum):

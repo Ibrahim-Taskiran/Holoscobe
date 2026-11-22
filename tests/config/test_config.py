@@ -11,7 +11,7 @@ from handcontrol.config import Settings, SettingsStore, validate
 
 def test_defaults():
     s = Settings()
-    assert s.schema_version == C.SCHEMA_VERSION == 3 and s.emergency_hotkey == "Ctrl+Alt+Shift+F12"
+    assert s.schema_version == C.SCHEMA_VERSION == 4 and s.emergency_hotkey == "Ctrl+Alt+Shift+F12"
     assert s.pointer_mode == "relative" and s.pointer_speed == 1.0
     assert s.monitor_mapping.mode == "virtual_desktop"
     assert (s.pinch_on_threshold, s.pinch_off_threshold) == (0.33, 0.48)
@@ -201,7 +201,7 @@ def test_schema2_file_migrates_with_onboarding_done(tmp_path):
     p = tmp_path / "settings.json"
     p.write_text(json.dumps({"schema_version": 2, "pointer_speed": 1.5}), encoding="utf-8")
     s = SettingsStore(p).load()
-    assert s.onboarding_done is True and s.pointer_speed == 1.5 and s.schema_version == SCHEMA_VERSION == 3
+    assert s.onboarding_done is True and s.pointer_speed == 1.5 and s.schema_version == SCHEMA_VERSION == 4
     assert SettingsStore(tmp_path / "new.json").load().onboarding_done is False
 
 
@@ -226,3 +226,50 @@ def test_schema2_file_migrates_with_onboarding_done(tmp_path):
 ])
 def test_emergency_hotkey_validation(raw, expected):
     assert validate({"emergency_hotkey": raw}).emergency_hotkey == expected
+
+
+# ---------- schema 4 (round 7, Enstrüman mode) ----------
+
+def test_schema3_file_migrates_losslessly_to_schema4(tmp_path):
+    import json
+    from dataclasses import asdict
+    from handcontrol.config import SCHEMA_VERSION, Settings, SettingsStore
+    v3 = {k: v for k, v in asdict(Settings()).items() if not k.startswith(("instrument_", "audio_"))}
+    v3.update(schema_version=3, pointer_speed=1.7, swipe_profile="media", dwell_click=True, dwell_ms=1500,
+              onboarding_done=True, default_mode="volume", dominant_hand="left", auto_pause_s=30,
+              camera={"index": 2, "backend": "dshow", "width": 1280, "height": 720, "fps": 60})
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps(v3), encoding="utf-8")
+    s = SettingsStore(p).load()
+    assert s.schema_version == SCHEMA_VERSION == 4
+    got = asdict(s)
+    for key, value in v3.items():
+        if key != "schema_version":
+            assert got[key] == value, key
+    assert (s.instrument_layout, s.instrument_scale, s.instrument_quantize) == ("solo", "e_minor_pentatonic", True)
+    assert s.instrument_chords == ["Em", "C", "G", "D"] and s.instrument_volume == 0.5
+    assert (s.instrument_tone, s.audio_device, s.audio_latency, s.instrument_particles) == ("clean", "", "low", True)
+
+
+def test_schema4_instrument_fields_validate_and_round_trip(tmp_path):
+    from handcontrol.config import Settings, SettingsStore, validate
+    s = validate({"instrument_layout": "CHORD", "instrument_scale": "a_minor", "instrument_quantize": False,
+                  "instrument_chords": ["Am", "F", "C", "G"], "instrument_volume": 0.8, "instrument_tone": "electric",
+                  "audio_device": "  Hoparlör (Realtek)  ", "audio_latency": "normal", "instrument_particles": False,
+                  "default_mode": "instrument"})
+    assert (s.instrument_layout, s.instrument_scale, s.instrument_quantize) == ("chord", "a_minor", False)
+    assert s.instrument_chords == ["Am", "F", "C", "G"] and s.instrument_volume == 0.8
+    assert (s.instrument_tone, s.audio_device, s.audio_latency) == ("electric", "Hoparlör (Realtek)", "normal")
+    assert s.instrument_particles is False and s.default_mode == "instrument"
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save(s)
+    assert store.load() == s
+    bad = validate({"instrument_layout": "harp", "instrument_scale": "E_MINOR", "instrument_quantize": 1,
+                    "instrument_chords": ["Am", "X#", 5], "instrument_volume": 7, "instrument_tone": None,
+                    "audio_device": 12, "audio_latency": "ultra", "instrument_particles": "yes"})
+    d = Settings()
+    assert (bad.instrument_layout, bad.instrument_scale, bad.instrument_quantize) == ("solo", d.instrument_scale, True)
+    assert bad.instrument_chords == ["Am", "C", "G", "D"] and bad.instrument_volume == 1.0
+    assert (bad.instrument_tone, bad.audio_device, bad.audio_latency, bad.instrument_particles) == ("clean", "", "low", True)
+    assert validate({"instrument_volume": -1}).instrument_volume == 0.0
+    assert validate({"instrument_chords": "Em"}).instrument_chords == ["Em", "C", "G", "D"]

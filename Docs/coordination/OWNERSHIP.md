@@ -132,3 +132,28 @@ Kullanıcı: projeyi araştırma ve muadillere göre final hâline getir. Yönet
 
 Sözleşme (yönetici yazdı): `Mode.COMMANDS`, `KeyCommand`, `ActionKind.KEY_COMMAND`, `Action.command`, `ProcessNames`.
 Ayarlar şema 3: `swipe_profile`, `auto_pause_s`, `dwell_click`, `dwell_ms`, `click_sound`, `cursor_feedback`, `onboarding_done`.
+## 7. tur — Enstrüman modu (2026-11-22)
+
+Kullanıcı: kamerada iki el arasına sanal gitar telleri, parmakla vurunca gerçek zamanlı gitar sesi. Yönetici Claude (Opus 5.5).
+Bu turda Codex ve Antigravity yok. Dal: `feature/instrument-mode`. Commit'i yalnız yönetici atar, push yok.
+Başlangıç: tam takım 1455 geçti, 3 seçilmedi (manual).
+
+| Sahip | Yazabileceği yollar |
+|---|---|
+| Claude yönetici | `contracts.py` (yalnız `Mode.INSTRUMENT`), `config.py` (şema 4), `tests/config/**`, `src/handcontrol/instrument/__init__.py`, `src/handcontrol/instrument/events.py`, `app.py`, `tests/app/**`, `tracking.py` (yalnız görüntü kancası), `README.md`, `CHANGELOG.md`, `Docs/reports/instrument.md`, bu dosya |
+| Claude T (enstrüman motoru) | `src/handcontrol/instrument/geometry.py`, `strings.py`, `music.py`, `engine.py`, `session.py`, `tests/instrument/**` |
+| Claude U (ses motoru) | `src/handcontrol/instrument/synth.py`, `src/handcontrol/instrument/audio.py`, `tests/audio/**` |
+| Claude V (jest + denetleyici) | `gestures.py`, `controller.py`, `pipeline.py`, `tests/gestures/**`, `tests/controller/**`, `tests/integration/**` |
+| Claude W (arayüz) | `src/handcontrol/ui/**`, `tests/ui/**` |
+| Claude X (paketleme) | `requirements.txt`, `requirements.lock`, `pyproject.toml`, `THIRD_PARTY_NOTICES.md`, `packaging/**`, `scripts/build.ps1`, `tests/packaging/**` |
+
+Sözleşmeler (yönetici yazdı, bu tur dondurulmuş):
+- `contracts.Mode.INSTRUMENT = "instrument"`. Enstrüman modunda denetleyici yalnız `RELEASE_ALL` gönderebilir.
+- `instrument/events.py`: `NoteOn`, `Bend`, `AllOff`, `StringView`, `HitView`, `InstrumentView`, ad listeleri
+  (`SCALE_NAMES`, `CHORD_NAMES`, `LAYOUTS`, `TONES`, `LATENCIES`).
+- Ayarlar şema 4: `instrument_layout`, `instrument_scale`, `instrument_quantize`, `instrument_chords`, `instrument_volume`,
+  `instrument_tone`, `audio_device`, `audio_latency`, `instrument_particles`. `MODES` listesine `instrument` eklendi.
+- `geometry/strings/music/engine/session` yalnız stdlib + `contracts` + `instrument.events` içe aktarır.
+  `synth.py` numpy, `audio.py` sounddevice kullanır; saf modüller bunları içe aktarmaz.
+- Mevcut testler değişmez. İstisnalar: şema sürümü sabiti (`== 3` → `== 4`, 2 satır) ve `Mode` üzerinde dolaşan
+  parametreli testlerin yeni `INSTRUMENT` durumu (Enstrüman modunda pencere komutu yok).
