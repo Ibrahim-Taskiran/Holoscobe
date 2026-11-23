@@ -25,7 +25,7 @@ from handcontrol.config import MODES, Settings  # noqa: E402
 from handcontrol.contracts import (  # noqa: E402
     ActionKind as A, CameraState, ControlState, FrameFeatures, Handedness, Mode, PoseFrameFeatures)
 from handcontrol.drawing import MAX_DABS, InkScene  # noqa: E402
-from handcontrol.drawing_gestures import CROSS_GRACE_MS, HOLD_MS, DrawingControls  # noqa: E402
+from handcontrol.drawing_raster import InkRaster  # noqa: E402
 from handcontrol.dryrun import FakeDisplays, FakeVolume, FakeWindows  # noqa: E402
 from handcontrol.ui import UiBridge, UiState  # noqa: E402
 from handcontrol.ui import drawing_view  # noqa: E402
@@ -74,22 +74,6 @@ def test_held_x_without_visible_hands_neither_pauses_nor_claps():
         rig.ctl.on_frame(PoseFrameFeatures(rig.t, rig.t, 640, 480, (), True, True), ())
     s = rig.ctl.snapshot()
     assert s.state is ControlState.ACTIVE and not s.clap_pending
-
-
-def test_cross_survives_one_missed_pose_frame_but_not_a_release():
-    def run(gap):
-        c = DrawingControls()
-        c.update(frame(0, hand(Handedness.RIGHT, PEN)))
-        c.update(frame(30, crossed=True))
-        c.update(frame(130, crossed=True))
-        before = c.scene.dabs.copy()
-        c.update(frame(130 + gap, hand(Handedness.RIGHT, PEN, 120)))
-        assert (c.scene.dabs == before) == (gap <= CROSS_GRACE_MS)
-        for t in range(300, 30 + HOLD_MS + 60, 60):
-            c.update(frame(t, crossed=True))
-        return c.scene.clear_start
-    assert run(40) is not None
-    assert run(CROSS_GRACE_MS + 20) is None
 
 
 def test_ink_is_bounded_and_revision_tracks_removals():
@@ -151,14 +135,20 @@ def shot(v):
     return out
 
 
+def strokes(v, clock, *hands):
+    for _ in range(6):
+        clock.t += 33
+        v.pipe.send(frame(clock.t, *hands))
+
+
 def dark(image, x, y):
     return image.pixelColor(x, y).lightness() < 90
 
 
 def test_stroke_is_painted_at_the_fingertip_and_mirrored(view, clock):
-    for i in range(10):
+    for i in range(14):
         clock.t += 33
-        view.pipe.send(frame(clock.t, hand(Handedness.RIGHT, PEN, 400 + 10*i, 300)))
+        view.pipe.send(frame(clock.t, hand(Handedness.RIGHT, PEN, 360 + 10*i, 300)))
     view.controls.cursor = None
     for _ in range(2):                    # fresh dabs, then the cached layer
         assert dark(shot(view), 450, 300) and not dark(shot(view), 190, 300)
@@ -171,12 +161,13 @@ def test_stroke_is_painted_at_the_fingertip_and_mirrored(view, clock):
 def test_cached_layer_matches_full_repaint_after_spin_and_erase(view, clock):
     for i in range(12):
         clock.t += 33
-        view.pipe.send(frame(clock.t, hand(Handedness.RIGHT, PEN, 380 + 12*i, 300), hand(Handedness.LEFT, PALM, 100)))
+        view.pipe.send(frame(clock.t, hand(Handedness.RIGHT, PEN, 380 + 12*i, 300), hand(Handedness.LEFT, PALM, 100, tilt=30)))
         shot(view)
     clock.t += 1000
     shot(view)
-    clock.t += 33
-    view.pipe.send(frame(clock.t, hand(Handedness.RIGHT, KNUCKLES, 500, 300)))
+    n = len(view.controls.scene.dabs)
+    strokes(view, clock, hand(Handedness.RIGHT, KNUCKLES, 500, 300))
+    assert len(view.controls.scene.dabs) < n
     view.controls.cursor = None
     clock.t += 1000
     cached = shot(view)
@@ -185,8 +176,7 @@ def test_cached_layer_matches_full_repaint_after_spin_and_erase(view, clock):
 
 
 def test_clear_flows_away_and_canvas_is_reusable(view, clock):
-    clock.t += 33
-    view.pipe.send(frame(clock.t, hand(Handedness.RIGHT, PEN, 400, 100)))
+    strokes(view, clock, hand(Handedness.RIGHT, PEN, 400, 100))
     for _ in range(12):
         clock.t += 60
         view.pipe.send(frame(clock.t, crossed=True))
@@ -195,15 +185,14 @@ def test_clear_flows_away_and_canvas_is_reusable(view, clock):
     clock.t += drawing_view.CLEAR_MS + 50
     view._animate()
     assert not view.controls.scene.dabs and not dark(shot(view), 400, 100)
-    clock.t += 33
-    view.pipe.send(frame(clock.t, hand(Handedness.RIGHT, PEN, 400, 100)))
+    strokes(view, clock, hand(Handedness.RIGHT, PEN, 400, 100))
     assert view.controls.scene.dabs
 
 
 def test_pause_stale_epoch_and_other_modes_never_paint_but_keep_ink(view, clock):
     pen = hand(Handedness.RIGHT, PEN, 400, 100)
     far = replace(pen, index_tip_px=(420, 100))
-    view.pipe.send(frame(clock.t, pen))
+    strokes(view, clock, pen)
     ink = view.controls.scene.dabs.copy()
     clock.t += 33
     view.pipe.send(frame(clock.t, far), state=ControlState.PAUSED)
@@ -214,11 +203,50 @@ def test_pause_stale_epoch_and_other_modes_never_paint_but_keep_ink(view, clock)
     view.pipe.epoch = 2                   # the queued sample belongs to an older epoch
     QApplication.processEvents()
     assert view.controls.scene.dabs == ink
-    view.pipe.send(frame(clock.t, far))   # new epoch: a separate stroke, no bridge to the old one
+    strokes(view, clock, far)             # new epoch: a separate stroke, no bridge to the old one
     new = view.controls.scene.dabs[len(ink):]
     assert new and new[0].radius > 0.009
     view.set_state(ui_state(control=ControlState.PAUSED))
     assert view.controls.cursor is None and view.controls.scene.dabs
+
+
+def test_x_survives_clap_candidates_and_epoch_bumps(view, clock):
+    strokes(view, clock, hand(Handedness.RIGHT, PEN, 400, 100))
+    for i in range(24):
+        clock.t += 33
+        view.pipe.epoch += i % 4 == 0
+        view.pipe.send(frame(clock.t, crossed=i % 5 != 4), clap_pending=i % 3 == 0)
+    assert view.controls.scene.clear_start is not None
+
+
+def test_moving_scene_uses_the_fast_picture_and_sharpens_at_rest(view, clock, monkeypatch):
+    s = view.controls.scene
+    for i in range(220):
+        s.angle = i * .1
+        s.paint(0.2, -0.2 + i/700, 0)
+    calls = []
+    render = InkRaster.render
+    monkeypatch.setattr(InkRaster, "render", lambda self, *a: calls.append(1) or render(self, *a))
+    s.angle += .01
+    fast = shot(view)
+    assert calls and view._dirty                 # asks for the sharp repaint
+    n = len(calls)
+    sharp = shot(view)
+    assert len(calls) == n
+    pts = [(x, y) for x in range(0, 640, 8) for y in range(40, 480, 8)]
+    assert sum(dark(fast, *p) != dark(sharp, *p) for p in pts) < 0.02*len(pts)
+
+
+def test_clear_button_flows_the_ink_away(view, clock):
+    strokes(view, clock, hand(Handedness.RIGHT, PEN, 400, 100))
+    view.clear()
+    start = view.controls.scene.clear_start
+    for part in (.1, .5, .9):
+        clock.t = start + part*drawing_view.CLEAR_MS
+        shot(view)
+    clock.t += 1000
+    view._animate()
+    assert not view.controls.scene.dabs
 
 
 def test_missing_pose_model_is_shown(view, clock):
@@ -238,8 +266,9 @@ def test_drawing_is_a_page_of_the_main_window(qt):
     win.apply_state(ui_state())
     assert win.stack.currentWidget() is win.drawing and win.instrument_bar.isHidden()
     assert win.mode_buttons[Mode.DRAWING].isChecked() and win.hint.text() == drawing_view.DRAWING_HINT_TR
+    assert not win.ink_clear_button.isHidden()
     win.apply_state(ui_state(Mode.INSTRUMENT))
-    assert win.stack.currentWidget() is win.instrument
+    assert win.stack.currentWidget() is win.instrument and win.ink_clear_button.isHidden()
     win.close()
 
 

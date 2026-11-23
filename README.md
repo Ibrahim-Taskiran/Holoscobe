@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1820 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1829 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -126,9 +126,9 @@ hiçbir komut gitmez; komutsuz denemede de tam çalışır. **Çizim** düğmesi
 |---|---|
 | Sağ el: yalnız işaret parmağı açık | Fırça. Parmak ucunda mürekkep bırakır |
 | Sağ el: dört parmak açık | Taşı. İz bırakmadan başka yere geç |
-| Sağ el: yumruk | Silgi. Yalnız ön yüzeydeki mürekkebi siler, arkadaki kalır |
-| Sol el: dört parmak açık | Sahneyi döndürür. Aynı anda çizersen sarmal oluşur |
-| Ön kolları göğüs önünde X yapıp 0,45 sn tut | Bütün mürekkep aşağı akıp silinir |
+| Sağ el: yumruk | Silgi. İlk değdiği yüzeyi siler (önde mürekkep varsa ön). Arkadakini silmek için yumruğu açıp o izin üstünde yeniden kapat |
+| Sol el: dört parmak açık, sağa ya da sola yatır | Sahneyi o yöne döndürür; çok yatırmak hızlandırır, dik tutmak durdurur. Aynı anda çizersen sarmal oluşur |
+| Ön kolları göğüs önünde X yapıp yaklaşık yarım saniye tut (ya da pencerede **Temizle**) | Bütün mürekkep aşağı akıp silinir |
 | El çırpma, `Ctrl+Alt+Shift+F12` | Duraklatır. Mürekkep ekranda kalır |
 
 X hareketi `pose_landmarker_lite.task` modelini ister (`scripts\setup.ps1` indirir). Model yoksa çizim çalışır,

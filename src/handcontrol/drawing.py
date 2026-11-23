@@ -7,10 +7,12 @@ from dataclasses import dataclass
 
 
 WORK_DEPTH = 0.075
-ERASER_RADIUS = 0.038
+ERASER_RADIUS = 0.05
+FRONT_DEPTH = -0.02      # ink behind this depth is the rear surface
+SPIN_EASE_MS = 120.0
 CLEAR_MS = 1750.0
 SPACING = 0.005
-MAX_DABS = 4000        # repaint budget while spinning (about 22 ms): 18 camera widths of stroke, oldest ink goes first
+MAX_DABS = 4000        # repaint budget: 18 camera widths of stroke, oldest ink goes first
 
 
 def projected_y(y: float, depth: float) -> float:
@@ -37,15 +39,20 @@ class InkScene:
     def __init__(self, seed: int = 72):
         self.dabs: list[Dab] = []
         self.angle = 0.0
+        self.spin_target = 0.0   # rad/ms; the real speed eases towards it
+        self.spin_speed = 0.0
+        self._spin_t: float | None = None
         self.revision = 0        # bumped whenever existing ink goes away (appending does not count)
         self.clear_start: float | None = None
         self._rng = random.Random(seed)
         self._last: tuple[float, float, float] | None = None
         self._distance = 0.0
+        self.erase_front: bool | None = None      # surface of the running eraser stroke
 
     def lift(self):
         self._last = None
         self._distance = 0.0
+        self.erase_front = None
 
     def clear(self, now: float):
         self.lift()
@@ -53,6 +60,15 @@ class InkScene:
             self.clear_start = now
 
     def advance(self, now: float):
+        """Called with capture times and with repaint times; whichever is newer moves the scene."""
+        dt = 0.0 if self._spin_t is None else min(100.0, now - self._spin_t)
+        if dt >= 0:
+            self._spin_t = now
+        if dt > 0 and (self.spin_target or self.spin_speed):
+            self.spin_speed += (self.spin_target - self.spin_speed) * (1 - math.exp(-dt/SPIN_EASE_MS))
+            if not self.spin_target and abs(self.spin_speed) < 4e-5:
+                self.spin_speed = 0.0
+            self.angle = (self.angle + self.spin_speed*dt) % math.tau
         if self.clear_start is not None and now - self.clear_start >= CLEAR_MS:
             self.dabs.clear()
             self.revision += 1
@@ -103,8 +119,9 @@ class InkScene:
         self._last = target
 
     def erase(self, x: float, y: float, previous: tuple[float, float] | None = None):
-        """Sweep a local eraser through the front work plane. Holding it cannot tunnel into the back."""
-        self.lift()
+        """Sweep a local eraser. The first ink it meets picks the surface (front wins) for the whole stroke,
+        so holding it cannot tunnel into the back; ink that is only in the back needs a new stroke."""
+        self._last = None
         if self.clear_start is not None:
             return
         c, s = math.cos(self.angle), math.sin(self.angle)
@@ -112,17 +129,18 @@ class InkScene:
         dx, dy = x - ax, y - ay
         length2 = dx*dx + dy*dy
 
-        def hit(d: Dab) -> bool:
+        hits: dict[bool, set[int]] = {True: set(), False: set()}
+        for i, d in enumerate(self.dabs):
             px, depth = turn(d.x, d.z, c, s)
-            if abs(depth - WORK_DEPTH) > 0.009:
-                return False
             py = projected_y(d.y, depth)
             t = min(1.0, max(0.0, ((px-ax)*dx + (py-ay)*dy)/length2)) if length2 else 0.0
             # The elongated body of a drip is pickable along its full height.
             ry = max(0.0, abs(py - ay - t*dy) - d.radius * max(0.0, d.stretch - 1))
-            return math.hypot(px - ax - t*dx, ry) <= ERASER_RADIUS + d.radius
-
-        kept = [d for d in self.dabs if not hit(d)]
-        if len(kept) != len(self.dabs):
-            self.dabs = kept
+            if math.hypot(px - ax - t*dx, ry) <= ERASER_RADIUS + d.radius:
+                hits[depth >= FRONT_DEPTH].add(i)
+        if self.erase_front is None and (hits[True] or hits[False]):
+            self.erase_front = bool(hits[True])
+        gone = hits[self.erase_front] if self.erase_front is not None else ()
+        if gone:
+            self.dabs = [d for i, d in enumerate(self.dabs) if i not in gone]
             self.revision += 1
