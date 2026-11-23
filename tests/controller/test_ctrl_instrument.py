@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from ctrl_helpers import G, K, LEFT, RIGHT, W, WIN_A, Rig, hand, tcfg
+from ctrl_helpers import posed as wheel_hand
 from handcontrol.contracts import ControlState, FingerInfo, FingerName, FingerState, Landmark, Mode
 from handcontrol.controller import AUTO_PAUSE_REASON, ControllerConfig, MenuKind
 
@@ -189,22 +190,21 @@ def _both(tip_y: float = 240.0):
     return hand(RIGHT, tip=(420, tip_y)), hand(LEFT, tip=(200, 240))
 
 
-def test_mode_menu_opens_and_leaves_instrument_then_pointer_works():
+def test_wheel_leaves_instrument_then_pointer_works():
     r = Rig(tcfg())
     r.ctl.set_mode(Mode.INSTRUMENT)
     r.settle(*_both())
-    r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
+    r.frame(hand(RIGHT), wheel_hand("v"), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     m = r.ctl.snapshot().menu
-    assert m is not None and m.kind is MenuKind.MODE and len(m.items) == len(Mode)
+    assert m is not None and m.kind is MenuKind.MODE
     item = next(i for i in m.items if i.key == "instrument")
     assert item.label == "Enstrüman" and item.selected
-    r.frame(*_both(140.0))                                     # row 0 = pointer
-    assert r.ctl.snapshot().menu.hovered == 0
-    r.frame(*_both(140.0), events=[(G.PINCH_START, RIGHT)])
+    r.frame(hand(RIGHT), wheel_hand("v", (200.0, 240.0)))       # up = pointer
+    for _ in range(5):
+        r.frame(hand(RIGHT), wheel_hand("fist", (200.0, 240.0)))
     s = r.ctl.snapshot()
     assert s.mode is Mode.POINTER and s.menu is None
     assert set(r.kinds()) <= {K.RELEASE_ALL}
-    r.frame(*_both(140.0), events=[(G.PINCH_END, RIGHT)])
     r.settle(*_both(140.0))
     for i in range(10):
         r.frame(hand(RIGHT, tip=(300 + 10 * i, 240)))
@@ -214,13 +214,13 @@ def test_mode_menu_opens_and_leaves_instrument_then_pointer_works():
 def test_mode_menu_blocked_by_need_neutral_and_times_out():
     r = Rig(tcfg())
     r.ctl.set_mode(Mode.INSTRUMENT)
-    r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])   # right after the mode change: no neutral yet
+    r.frame(hand(RIGHT), wheel_hand("v"), events=[(G.MENU_DWELL_COMPLETE, LEFT)])   # right after the mode change: no neutral yet
     assert r.ctl.snapshot().menu is None
     r.settle(*_both())
-    r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
+    r.frame(hand(RIGHT), wheel_hand("v"), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     assert r.ctl.snapshot().menu is not None
     for _ in range(170):                                       # 5 s menu timeout
-        r.frame(*_both())
+        r.frame(hand(RIGHT), wheel_hand("v"))
     assert r.ctl.snapshot().menu is None and r.ctl.snapshot().mode is Mode.INSTRUMENT
     assert set(r.kinds()) <= {K.RELEASE_ALL}
 

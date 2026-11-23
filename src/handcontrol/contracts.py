@@ -157,7 +157,7 @@ class GestureKind(Enum):
     PINCH_START = "pinch_start"                     # after debounce
     PINCH_END = "pinch_end"
     NEUTRAL = "neutral"                             # 200 ms usable, pinches released, no pending clap
-    MENU_DWELL_COMPLETE = "menu_dwell_complete"     # non-dominant open palm held 600 ms
+    MENU_DWELL_COMPLETE = "menu_dwell_complete"     # non-dominant V pose held 500 ms
 
 
 @dataclass(frozen=True)

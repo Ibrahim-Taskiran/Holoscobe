@@ -44,6 +44,8 @@ from handcontrol.swipe import (COMMAND_LABELS, PROFILES, SwipeRecognizer, pinch_
                                swipe_command)
 from handcontrol.mapping import (CalibrationRect, map_normalized, normalize_camera_point, project_to_monitors,
                                  threshold_physical_px)
+from handcontrol.mode_wheel import (BACK as WHEEL_BACK, CANCEL as WHEEL_CANCEL, LOST_MS as WHEEL_LOST_MS, MORE as WHEEL_MORE,
+                                    MORE_PAGE as WHEEL_MORE_PAGE, ModeWheel)
 from handcontrol.safety import GuardedSink, Watchdog
 from handcontrol.index_tap import IndexTapRecognizer
 from handcontrol.relative_pointer import AccelCurve, RelativeMotion, advance
@@ -175,8 +177,9 @@ class MenuItem:
 
 @dataclass(frozen=True)
 class MenuSnapshot:
-    """Layout rule for renderers: items are a vertical list; item i covers pointer y in
-    [i/n, (i+1)/n). `pointer` is the virtual pointer in [0,1]^2 of the menu panel."""
+    """Layout rule for renderers. WINDOW: items are a vertical list; item i covers pointer y in
+    [i/n, (i+1)/n). MODE: a wheel; item i is centred i/n of a turn clockwise from the top.
+    `pointer` is the virtual pointer in [0,1]^2 of the menu panel."""
 
     kind: MenuKind
     items: tuple[MenuItem, ...]
@@ -204,6 +207,7 @@ class ControllerSnapshot:
     pointer: Optional[tuple[int, int]]
     dropped_actions: int
     t_ms: float
+    menu_dwell: float = 0.0        # 0..1 of the V hold that opens the mode wheel
     pointer_engaged: bool = False  # POINTER mode, relative pointer: the cursor follows the hand
     tracking_ok: bool = True       # dominant hand usable in the last frame (or inside the short-gap tolerance)
     last_cancel: str = ""          # Turkish reason of the last cancelled/refused click, drag or right click
@@ -374,6 +378,7 @@ class _Menu:
     confirm_needs_release: bool = False
     hold_t0: Optional[float] = None
     hold_now: float = 0.0
+    wheel: Optional[ModeWheel] = None     # MenuKind.MODE
 
 
 _MODE_LABELS = {
@@ -386,6 +391,7 @@ _MODE_LABELS = {
     Mode.INSTRUMENT: "Enstrüman",
     Mode.DRAWING: "Çizim",
 }
+_WHEEL_LABELS = {Mode.POINTER.value: "İmleç", WHEEL_MORE: "Diğer", WHEEL_BACK: "Geri"}
 _WINDOW_ACTIONS = {
     "minimize": ActionKind.WINDOW_MINIMIZE,
     "maximize": ActionKind.WINDOW_TOGGLE_MAXIMIZE,
@@ -506,6 +512,7 @@ class Controller:
 
         self._eng: Optional[_Eng] = None
         self._menu: Optional[_Menu] = None
+        self._menu_dwell = 0.0
         self._pinched: dict[int, float] = {}
         self._need_neutral = True
         self._neutral_since: Optional[float] = None
@@ -748,6 +755,7 @@ class Controller:
                 hold_progress=hold_progress,
                 last_command=self._last_command,
                 command_seq=self._command_seq,
+                menu_dwell=self._menu_dwell if self._wheel_allowed() else 0.0,
                 swipe_profile_active=self._profile_active if self._mode is Mode.COMMANDS else "",
             )
 
@@ -1323,7 +1331,7 @@ class Controller:
             self._middle.reset()
 
         if self._menu is not None:
-            self._menu_frame(frame, events, dom, palm_uv, now)
+            self._menu_frame(frame, events, hands, dom, palm_uv, now)
             return
 
         if self._eng is not None:
@@ -1333,8 +1341,7 @@ class Controller:
                 self._eng_frame(frame, events, hands, dom, pos, raw, now)
             return
 
-        if GestureKind.MENU_DWELL_COMPLETE in kinds and not self._need_neutral:
-            self._open_mode_menu(dom, palm_uv, now)
+        if GestureKind.MENU_DWELL_COMPLETE in kinds and self._open_mode_menu(hands, events, now):
             return
 
         if self._mode is Mode.COMMANDS:   # swipes and short pinches only; the pointer never moves
@@ -1392,8 +1399,7 @@ class Controller:
     def _canvas_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], kinds: set[GestureKind],
                       stale: bool, now: float) -> None:
         """INSTRUMENT and DRAWING (ACTIVE): a separate engine turns the frames into sound or ink. The
-        controller only keeps loss / neutral bookkeeping and the INSTRUMENT mode menu (in DRAWING the
-        open left palm spins the scene, so the mode is left with the window buttons or tray). Nothing
+        controller only keeps loss / neutral bookkeeping and the mode wheel, so the user can leave. Nothing
         here dispatches OS input; only resets (RELEASE_ALL) reach the sink."""
         self._index_tap.reset()
         self._middle.reset()
@@ -1427,11 +1433,10 @@ class Controller:
         dom = self._dominant(hands)
         palm_uv = self._palm_uv(dom, frame) if dom is not None else None
         if self._menu is not None:
-            self._menu_frame(frame, events, dom, palm_uv, now)
-        elif (self._mode is Mode.INSTRUMENT and GestureKind.MENU_DWELL_COMPLETE in kinds
-              and not self._need_neutral and not self._pinched):
-            # a pinching hand is drawing or moving a string: never interrupt it with the menu
-            self._open_mode_menu(dom, palm_uv, now)
+            self._menu_frame(frame, events, hands, dom, palm_uv, now)
+        elif GestureKind.MENU_DWELL_COMPLETE in kinds and not self._pinched:
+            # a pinching hand is drawing or moving a string: never interrupt it with the wheel
+            self._open_mode_menu(hands, events, now)
 
     def _pointer_geometry_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], now: float) -> bool:
         """Keep an already engaged pointer moving through a brief finger-only geometry failure.
@@ -2317,11 +2322,44 @@ class Controller:
 
     # ------------------------------------------------------------ menus
 
-    def _open_mode_menu(self, dom: Optional[HandFeatures], uv: Optional[tuple[float, float]], now: float) -> None:
-        items = [MenuItem(m.value, _MODE_LABELS[m], True, m is self._mode) for m in Mode]
-        armed = dom is not None and dom.hand_id not in self._pinched
-        self._menu = _Menu(MenuKind.MODE, items, None, now, now, armed, anchor=uv)
+    def _wheel_allowed(self) -> bool:
+        return (self._state is ControlState.ACTIVE and self._menu is None and self._eng is None
+                and not self._need_neutral and not self._clap_pending)
+
+    def set_menu_dwell(self, progress: float) -> None:
+        """0..1 of the running V hold (UI feedback only)."""
+        self._menu_dwell = progress
+
+    def _open_mode_menu(self, hands: Sequence[HandFeatures], events: tuple[GestureEvent, ...], now: float) -> bool:
+        ids = {ev.hand_id for ev in events if ev.kind is GestureKind.MENU_DWELL_COMPLETE}
+        hand = next((h for h in hands if h.hand_id in ids), None)
+        if hand is None or not self._wheel_allowed():
+            return False
+        self._menu = _Menu(MenuKind.MODE, [], None, now, now, True, wheel=ModeWheel(hand, now, self._cfg.mirror))
+        self._wheel_items(self._menu)
         self._notice = ""
+        return True
+
+    def _wheel_items(self, m: _Menu) -> None:
+        mode = self._mode.value
+        m.items = [MenuItem(k, _WHEEL_LABELS.get(k) or _MODE_LABELS[Mode(k)], True,
+                            k == mode or (k == WHEEL_MORE and mode in WHEEL_MORE_PAGE)) for k in m.wheel.keys]
+
+    def _wheel_frame(self, m: _Menu, hands: Sequence[HandFeatures], now: float) -> None:
+        w = m.wheel
+        before = w.keys, w.hovered
+        key = w.update(w.pick_hand(hands), now)
+        if key == WHEEL_CANCEL:
+            self._close_menu("Mod çarkı kapatıldı")
+        elif key is not None:
+            self._close_menu()
+            self._set_mode(Mode(key))
+        else:
+            if w.keys is not before[0]:
+                self._wheel_items(m)
+            if (w.keys, w.hovered) != before:
+                m.last_interaction_ms = now
+            m.hovered, m.pointer = w.hovered, w.pointer
 
     def _window_items(self, close_armed: bool) -> list[MenuItem]:
         multi = len(self._monitors) >= 2
@@ -2351,6 +2389,8 @@ class Controller:
         m = self._menu
         if m is not None and m.hold_t0 is None and now - m.last_interaction_ms >= self._cfg.menu_timeout_ms:
             self._close_menu("Menü zaman aşımı")
+        elif m is not None and m.wheel is not None and now - m.wheel.seen_ms > WHEEL_LOST_MS:
+            self._close_menu("Mod çarkı: el görünmüyor")
 
     def _cancel_confirmation(self, m: _Menu) -> None:
         if m.close_armed or m.hold_t0 is not None:
@@ -2360,10 +2400,13 @@ class Controller:
             if m.kind is MenuKind.WINDOW:
                 m.items = self._window_items(False)
 
-    def _menu_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], dom: Optional[HandFeatures],
-                    uv: Optional[tuple[float, float]], now: float) -> None:
+    def _menu_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], hands: Sequence[HandFeatures],
+                    dom: Optional[HandFeatures], uv: Optional[tuple[float, float]], now: float) -> None:
         m = self._menu
         assert m is not None
+        if m.wheel is not None:
+            self._wheel_frame(m, hands, now)
+            return
         if m.kind is MenuKind.WINDOW and not self._valid(m.target):
             self._close_menu("Hedef pencere kayboldu")
             return
@@ -2423,10 +2466,6 @@ class Controller:
         if not item.enabled:
             self._notice = f"{item.label}: kullanılamıyor"
             return
-        if m.kind is MenuKind.MODE:
-            self._close_menu()
-            self._set_mode(Mode(item.key))
-            return
         if item.key == "close":
             if not m.close_armed:
                 m.close_armed = True
@@ -2465,6 +2504,8 @@ class Controller:
     def _pending_text(self, now: float) -> str:
         m = self._menu
         if m is not None:
+            if m.wheel is not None:
+                return "Mod çarkı: V ile yönel, yumrukla seç"
             if m.hold_t0 is not None:
                 return "Kapatma onayı: basılı tutun"
             if m.close_armed:

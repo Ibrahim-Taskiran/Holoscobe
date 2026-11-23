@@ -43,6 +43,7 @@ SCALE = 100.0                       # wrist..MCP9 px; features palm_scale_px is 
 OPEN = {n: 0.0 for n in FINGER_NAMES}
 POINT = {"thumb": 1.0, "index": 0.0, "middle": 1.0, "ring": 1.0, "little": 1.0}
 PINCH = {"thumb": 0.5, "index": 0.65, "middle": 0.0, "ring": 0.0, "little": 0.0}   # pinch ~0.12 pu
+V = {"thumb": 1.0, "index": 0.0, "middle": 0.0, "ring": 1.0, "little": 1.0}
 FIST = {n: 1.0 for n in FINGER_NAMES}
 
 

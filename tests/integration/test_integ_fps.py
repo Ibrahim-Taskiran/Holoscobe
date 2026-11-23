@@ -49,9 +49,10 @@ def test_legacy_pinch_click_at_rate(fps, jitter, seed):
 def test_menu_dwell_at_rate(fps, jitter, seed):
     rig = _rig(fps, jitter, seed)
     rig.activate([hand(POINT, R0), hand(POINT, (440, 300), side="left")])
-    rig.run(500, [hand(POINT, R0), hand(OPEN, (440, 300), side="left")])
-    assert rig.ctl.snapshot().menu is None                   # 600 ms not reached
-    rig.run(500, [hand(POINT, R0), hand(OPEN, (440, 300), side="left")])
+    v = {**POINT, "middle": 0.0}
+    rig.run(450, [hand(POINT, R0), hand(v, (440, 300), side="left")])
+    assert rig.ctl.snapshot().menu is None                   # 500 ms not reached
+    rig.run(550, [hand(POINT, R0), hand(v, (440, 300), side="left")])
     m = rig.ctl.snapshot().menu
     assert m is not None and m.kind is MenuKind.MODE
 

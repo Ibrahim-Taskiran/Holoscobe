@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ctrl_helpers import G, K, LEFT, RIGHT, WIN_A, Rig, hand
+from ctrl_helpers import G, K, LEFT, RIGHT, WIN_A, Rig, hand, posed
 
 from handcontrol.contracts import ControlState, Mode
 from handcontrol.controller import MenuKind
@@ -247,31 +247,16 @@ def _both(tip_y: float = 240.0):
     return hand(RIGHT, tip=(420, tip_y)), hand(LEFT, tip=(200, 240))
 
 
-def test_mode_menu_opens_on_dwell_and_selects_mode():
-    r = Rig()
-    r.settle(*_both())
-    r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
-    m = r.ctl.snapshot().menu
-    assert m is not None and m.kind is MenuKind.MODE and len(m.items) == len(Mode)
-    e = r.ctl.current_epoch()
-    r.frame(*_both(170.0))  # row 1 = scroll (round 7: 7 rows, was 192.0)
-    assert r.ctl.snapshot().menu.hovered == 1
-    r.frame(*_both(170.0), events=[(G.PINCH_START, RIGHT)])
-    s = r.ctl.snapshot()
-    assert s.mode is Mode.SCROLL and s.menu is None and s.epoch > e and s.needs_neutral
-    assert r.kinds() == []
-
-
 def test_mode_menu_blocked_while_engaged_and_freezes_pointer():
     r = Rig()
     r.settle(*_both())
     r.frame(*_both(), events=[(G.PINCH_START, RIGHT)])
-    r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
+    r.frame(hand(RIGHT, tip=(420, 240)), posed("v"), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     assert r.ctl.snapshot().menu is None
     r.frame(*_both(), events=[(G.PINCH_END, RIGHT)])
-    r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
+    r.frame(hand(RIGHT, tip=(420, 240)), posed("v"), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     assert r.ctl.snapshot().menu is not None
     r.sink.clear()
     for i in range(10):
-        r.frame(hand(RIGHT, tip=(300 + 10 * i, 240)), hand(LEFT, tip=(200, 240)))
+        r.frame(hand(RIGHT, tip=(300 + 10 * i, 240)), posed("v"))
     assert r.kinds() == []

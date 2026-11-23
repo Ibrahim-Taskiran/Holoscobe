@@ -213,7 +213,7 @@ GESTURE_GUIDE_TR: tuple[tuple[str, str], ...] = (
     ("Açık elden başparmak + orta parmak", "Sağ tık (alternatif)"),
     ("Sağ yumruk tut (önce el açık olmalı)", "Ön plandaki pencereyi küçült"),
     ("Sol yumruk tut (önce el açık olmalı)", "Son küçültülen pencereyi geri aç"),
-    ("Baskın olmayan elin açık avucunu 600 ms sabit tut", "Mod menüsü"),
+    ("Sol elle V yap, yarım saniye tut", "Mod çarkı: V ile yönel, yumrukla seç, avucu açınca vazgeç"),
     ("İmleci yerinde sabit tut (Bekleyerek tıkla açıksa)", "Sol tık; imlecin yanındaki halka dolunca tıklar"),
     ("Kalibrasyon dikdörtgeni", "Yalnız mutlak imleç türünde geçerli"),
 )

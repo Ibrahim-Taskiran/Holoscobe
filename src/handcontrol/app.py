@@ -150,9 +150,12 @@ def snapshot_to_viewmodel(snapshot, *, dry_run: bool = True, mirrored: bool = Tr
             menu.hold_progress if item.key == 'close' else 0) for index, item in enumerate(menu.items))
         overlay = OverlayState(visible=True,
             kind=OverlayMenuKind.MODE_MENU if menu.kind == MenuKind.MODE else OverlayMenuKind.WINDOW_ACTION_MENU,
-            title='Mod Seçimi' if menu.kind == MenuKind.MODE else 'Pencere Eylemleri', items=items,
+            title='Mod Çarkı' if menu.kind == MenuKind.MODE else 'Pencere Eylemleri', items=items,
             cursor=VirtualCursorState(*menu.pointer, visible=True, hold_progress=menu.hold_progress),
             inactivity_ms=max(0, 5000 - menu.remaining_ms))
+    elif getattr(snapshot, "menu_dwell", 0.0) >= 0.2:          # V held: the ring that fills before the wheel opens
+        overlay = OverlayState(visible=True, kind=OverlayMenuKind.MODE_MENU,
+            cursor=VirtualCursorState(hold_progress=snapshot.menu_dwell))
     return UiState(control_state=snapshot.state, camera_state=snapshot.camera_state,
         mode=snapshot.mode, menu_items=overlay.items, virtual_cursor=overlay.cursor,
         hold_progress=menu.hold_progress if menu else 0, overlay=overlay,
@@ -767,6 +770,7 @@ def main(argv=None) -> int:
     screen = app.primaryScreen()
     if screen:
         area = screen.availableGeometry()
+        overlay.move(area.center() - overlay.rect().center())
         indicator.move(area.right() - indicator.width() - 16, area.top() + 16)
     bridge.settings_saved.connect(lambda _data: indicator.apply_indicator(indicator.indicator_state))
     panel = DryRunPanel(bridge)

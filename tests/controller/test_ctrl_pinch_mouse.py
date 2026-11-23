@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 from ctrl_helpers import LEFT, RIGHT, G, K, Rig, W, hand, tcfg
+from ctrl_helpers import posed
 
 from handcontrol.contracts import CameraState, FingerInfo, FingerName, FingerState, Handedness, Landmark, Mode, Quality
 from handcontrol.controller import ControllerConfig
@@ -325,10 +326,10 @@ def test_left_hand_pinch_never_clicks():
     assert set(r.kinds()) <= {K.MOVE_POINTER}
 
 
-def test_menu_dwell_then_pinch_selects_without_clicking():
+def test_pinch_while_the_wheel_is_open_does_not_click():
     r = rig()
     pointer_at(r)
-    r.frame(mh(), events=[(G.MENU_DWELL_COMPLETE,)])
+    r.frame(mh(), posed("v"), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     assert r.ctl.snapshot().menu is not None
     tap(r, 33.4)
     for d in (0.1, 0.1, 0.1, 0.1, 1.2, 1.2, 1.2):

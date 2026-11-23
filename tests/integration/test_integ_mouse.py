@@ -177,7 +177,7 @@ def test_clap_never_clicks(rig):
 
 def test_menu_dwell_then_pinch_selects_without_clicking(rig):
     rig.activate([hand(POINT, DOM_C), hand(POINT, (440, 300), side="left")])
-    rig.run(1000, [hand(POINT, DOM_C), hand(OPEN, (440, 300), side="left")])
+    rig.run(1000, [hand(POINT, DOM_C), hand({**POINT, "middle": 0.0}, (440, 300), side="left")])
     m = rig.ctl.snapshot().menu
     assert m is not None and m.kind is MenuKind.MODE
     rig.run(150, [hand(PINCH, DOM_C)]).run(300, [hand(POINT, DOM_C)])

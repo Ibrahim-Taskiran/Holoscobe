@@ -66,6 +66,18 @@ def test_drawing_session_sends_no_os_input_and_never_opens_the_menu():
     assert set(rig.sink.kinds()) <= {A.RELEASE_ALL}
 
 
+def test_left_v_leaves_drawing_with_the_wheel():
+    rig = drawing_rig()
+    v = {**POINT, "middle": 0.0}
+    rig.run(900, [raw_hand(POINT, R), raw_hand(v, L, side="left")])
+    assert rig.ctl.snapshot().menu is not None
+    up = (L[0], L[1] - 90)
+    rig.run(250, [raw_hand(POINT, R), raw_hand(v, up, side="left")])
+    rig.run(350, [raw_hand(POINT, R), raw_hand(FIST, up, side="left")])
+    assert rig.mode is Mode.POINTER and rig.ctl.snapshot().menu is None
+    assert set(rig.sink.kinds()) <= {A.RELEASE_ALL}
+
+
 def test_held_x_without_visible_hands_neither_pauses_nor_claps():
     rig = drawing_rig()
     t0 = rig.t
@@ -265,7 +277,7 @@ def test_drawing_is_a_page_of_the_main_window(qt):
     win.apply_state(ui_state(Mode.POINTER))
     win.apply_state(ui_state())
     assert win.stack.currentWidget() is win.drawing and win.instrument_bar.isHidden()
-    assert win.mode_buttons[Mode.DRAWING].isChecked() and win.hint.text() == drawing_view.DRAWING_HINT_TR
+    assert win.mode_buttons[Mode.DRAWING].isChecked() and win.hint.text().startswith(drawing_view.DRAWING_HINT_TR)
     assert not win.ink_clear_button.isHidden()
     win.apply_state(ui_state(Mode.INSTRUMENT))
     assert win.stack.currentWidget() is win.instrument and win.ink_clear_button.isHidden()

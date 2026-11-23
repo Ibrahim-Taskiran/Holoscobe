@@ -123,10 +123,11 @@ def test_clap_cooldown_survives_reset(tl, rec):
 
 
 def test_reset_requires_menu_release(tl, rec):
-    tl.add(300, (tl.hand(1, (300, 360)),))
+    v = tl.hand(1, (300, 360), extended=2, thumb=False)
+    tl.add(300, (v,))
     tl.run(rec)
     rec.reset()
-    tl.add(1200, (tl.hand(1, (300, 360)),))
+    tl.add(1200, (v,))
     assert K.MENU_DWELL_COMPLETE not in [e.kind for e in tl.run(rec)]
 
 

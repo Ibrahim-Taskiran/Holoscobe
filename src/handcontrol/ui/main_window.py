@@ -9,9 +9,9 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from PySide6.QtCore import QSize, Qt, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QSlider, QSpinBox,
+    QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu, QPushButton, QSlider, QSpinBox,
     QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -32,7 +32,19 @@ CONTROL_HINT_TR = ("İşaret parmağı: imleç  ·  El açık: imleç durur  · 
 INSTRUMENT_HINTS_TR = {"free": FREE_HINT_TR, "fixed": FIXED_HINT_TR,
                        "solo": "Sol elin başparmak-işaret arası teldir, sağ işaret parmağınla vur",
                        "chord": "Sol elin yüksekliği akoru seçer, sağ işaret parmağınla tellere vur"}
-BACK_HINT_TR = "İmlece dönmek için: İmleç düğmesi ya da sol avucunu açıp bekle"
+WHEEL_HINT_TR = "Mod çarkı: sol elinle V yap, yarım saniye tut"
+PRIMARY_MODES = (Mode.POINTER, Mode.SCROLL, Mode.INSTRUMENT, Mode.DRAWING)
+MORE_MODES = tuple(m for m in Mode if m not in PRIMARY_MODES)
+MODE_HINTS_TR = {
+    Mode.POINTER: CONTROL_HINT_TR,
+    Mode.SCROLL: "Sayfayı kaydır: başparmakla işareti birleştir, elini yukarı ya da aşağı taşı",
+    Mode.ZOOM: "Yakınlaştır: iki elinde de başparmakla işareti birleştir, ellerini aç ya da kapat",
+    Mode.VOLUME: "Sistem sesi: başparmakla işareti birleştir, elini yukarı ya da aşağı taşı",
+    Mode.WINDOWS: "Başparmakla işareti kısa birleştir: pencere menüsü  ·  Basılı tut ve taşı: pencereyi sürükle",
+    Mode.COMMANDS: "Açık avuçla kaydır: sağa ve sola önceki/sonraki, yukarı görev görünümü, aşağı masaüstü  ·  "
+                   "Kısa pinch: oynat/duraklat",
+    Mode.DRAWING: DRAWING_HINT_TR,
+}
 
 STYLE = """
 #root { background: #12161c; }
@@ -126,7 +138,7 @@ class MainWindow(QMainWindow):
         self.mode_group = QButtonGroup(self)
         self.mode_group.setExclusive(True)
         self.mode_buttons: dict[Mode, QToolButton] = {}
-        for mode in Mode:
+        for mode in PRIMARY_MODES:
             b = QToolButton()
             b.setText(MODE_LABELS_TR[mode])
             b.setIcon(create_mode_icon(mode))
@@ -137,6 +149,20 @@ class MainWindow(QMainWindow):
             self.mode_group.addButton(b)
             self.mode_buttons[mode] = b
             row.addWidget(b)
+        self.more_button = QToolButton()
+        self.more_button.setText("Diğer")
+        self.more_button.setIconSize(QSize(18, 18))
+        self.more_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.more_button.setCheckable(True)
+        self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(self.more_button)
+        self.more_actions = {}
+        for mode in MORE_MODES:
+            self.more_actions[mode] = action = menu.addAction(create_mode_icon(mode), MODE_LABELS_TR[mode])
+            action.triggered.connect(lambda _=False, m=mode: self._bridge.select_mode(m))
+        self.more_button.setMenu(menu)
+        self.mode_group.addButton(self.more_button)
+        row.addWidget(self.more_button)
         row.addStretch(1)
         self.status = QLabel()
         row.addWidget(self.status)
@@ -235,7 +261,10 @@ class MainWindow(QMainWindow):
             return
         entered = (drawing or instrument) and self._mode is not None
         self._mode = state.mode
-        self.mode_buttons[state.mode].setChecked(True)
+        more = state.mode in MORE_MODES
+        self.mode_buttons.get(state.mode, self.more_button).setChecked(True)
+        self.more_button.setText(MODE_LABELS_TR[state.mode] if more else "Diğer")
+        self.more_button.setIcon(create_mode_icon(state.mode) if more else QIcon())
         self.instrument_bar.setVisible(instrument)
         self.details_button.setVisible(not (drawing or instrument))
         self.ink_clear_button.setVisible(drawing)
@@ -245,11 +274,8 @@ class MainWindow(QMainWindow):
             self.bring_up(focus=False)
 
     def _show_hint(self, state: UiState) -> None:
-        tip = (f"{INSTRUMENT_HINTS_TR.get(self._layout, '')}  ·  {BACK_HINT_TR}"
-               if state.mode is Mode.INSTRUMENT else CONTROL_HINT_TR)
-        if state.mode is Mode.DRAWING:
-            tip = DRAWING_HINT_TR
-        self.hint.setText(state.error_text or tip)
+        tip = MODE_HINTS_TR.get(state.mode) or INSTRUMENT_HINTS_TR.get(self._layout, "")
+        self.hint.setText(state.error_text or f"{tip}  ·  {WHEEL_HINT_TR}")
 
     @Slot()
     def bring_up(self, focus: bool = True) -> None:

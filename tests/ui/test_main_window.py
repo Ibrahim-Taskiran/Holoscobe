@@ -39,17 +39,34 @@ def test_instrument_is_a_page_of_the_same_window(win):
     assert win.pos() == place and win.isVisible()          # same place, brought up if it was closed
     assert win.mode_buttons[Mode.INSTRUMENT].isChecked()
     win.apply_state(state(Mode.WINDOWS))
-    assert win.stack.currentWidget() is win.preview and win.mode_buttons[Mode.WINDOWS].isChecked()
+    assert win.stack.currentWidget() is win.preview and win.more_button.isChecked()
 
 
 def test_mode_buttons_and_start_button_emit_requests(win):
     modes, pauses = [], []
     win._bridge.mode_selected.connect(modes.append)
     win._bridge.pause_resume_requested.connect(lambda: pauses.append(1))
-    for m in Mode:
-        win.mode_buttons[m].click()
+    for button in win.mode_buttons.values():
+        button.click()
+    for action in win.more_actions.values():
+        action.trigger()
     win.start_button.click()
-    assert modes == list(Mode) and pauses == [1]
+    assert set(modes) == set(Mode) and len(modes) == len(Mode) and pauses == [1]
+    assert len(win.mode_buttons) == 4
+
+
+def test_every_mode_has_its_own_hint_and_more_shows_the_mode(win):
+    hints = set()
+    for m in Mode:
+        win.apply_state(state(m))
+        hints.add(win.hint.text())
+        assert "V yap" in win.hint.text()
+        assert win.more_button.isChecked() is (m not in win.mode_buttons)
+    assert len(hints) == len(Mode)
+    win.apply_state(state(Mode.ZOOM))
+    assert win.more_button.text() == "Yakınlaştırma"
+    win.apply_state(state(Mode.POINTER))
+    assert win.more_button.text() == "Diğer" and win.mode_buttons[Mode.POINTER].isChecked()
 
 
 def test_instrument_bar_mirrors_settings_and_emits_single_changes(win):

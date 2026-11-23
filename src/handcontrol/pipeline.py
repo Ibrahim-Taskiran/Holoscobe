@@ -193,6 +193,7 @@ class Pipeline:
             events = pre + self.gestures.update(ff)
             self.last_features = ff
             self.last_events = tuple(events)
+            self.controller.set_menu_dwell(getattr(self.gestures, "menu_dwell_progress", 0.0))
             self.controller.on_frame(ff, events)
             if self._frame_observers:
                 self._notify_observers(ff, self.last_events)

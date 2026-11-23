@@ -25,6 +25,7 @@ from handcontrol.contracts import (
     Handedness,
     Quality,
 )
+from handcontrol.mode_wheel import is_v
 
 
 @dataclass(frozen=True)
@@ -62,18 +63,14 @@ class GestureConfig:
     # ambiguous frame counts as reaching the near zone if the last clean pair distance was at most this.
     clap_ambiguous_near_max_pu: float = 1.3
 
-    # mode-menu dwell
-    menu_dwell_ms: float = 600.0
+    # mode-wheel dwell (V pose, see mode_wheel.py)
+    menu_dwell_ms: float = 500.0
     menu_max_displacement_pu: float = 0.15
-    menu_min_extended: int = 4
-    menu_min_extended_non_thumb: int = 3
     menu_approach_cancel_speed_pu_s: float = 1.0
 
     # instrument profile (GestureRecognizer.set_instrument_profile(True), Mode.INSTRUMENT). The playing
     # pose (pick hand: index only; string hand: thumb+index spread) must never clap or open the menu.
     instrument_clap_min_extended_non_thumb: int = 4   # both hands, checked when arming and at candidate entry
-    instrument_menu_min_extended: int = 5             # all five fingers open
-    instrument_menu_min_extended_non_thumb: int = 4
     instrument_menu_max_displacement_pu: float = 0.12  # stricter stillness for the dwell
 
     # timing robustness
@@ -594,19 +591,6 @@ class GestureRecognizer:
 
     # ------------------------------------------------------------------ menu dwell
 
-    def _is_open(self, h: HandFeatures) -> bool:
-        non_thumb, thumb = _extended(h)
-        cfg = self._cfg
-        if self._instrument:
-            return (
-                non_thumb >= cfg.instrument_menu_min_extended_non_thumb
-                and non_thumb + thumb >= cfg.instrument_menu_min_extended
-            )
-        return (
-            non_thumb >= cfg.menu_min_extended_non_thumb
-            and non_thumb + thumb >= cfg.menu_min_extended
-        )
-
     def _update_menu(
         self, frame: FrameFeatures, t: float, speed: Optional[float]
     ) -> list[GestureEvent]:
@@ -615,9 +599,9 @@ class GestureRecognizer:
             self._cancel_dwell()
             return []
         nd = [h for h in frame.hands if h.handedness is self._non_dominant]
-        if self._menu_latch and all(_usable(h) and not self._is_open(h) for h in nd):
-            self._menu_latch = False                  # palm closed or hand gone = released
-        hand = nd[0] if len(nd) == 1 and _usable(nd[0]) and self._is_open(nd[0]) else None
+        if self._menu_latch and all(_usable(h) and not is_v(h) for h in nd):
+            self._menu_latch = False                  # V released or hand gone
+        hand = nd[0] if len(nd) == 1 and _usable(nd[0]) and is_v(nd[0]) else None
         blocked = (
             hand is None
             or self._menu_latch

@@ -5,6 +5,7 @@ from handcontrol.contracts import ActionKind as A, Mode
 from handcontrol.controller import MenuKind
 
 from integ_synth import OPEN, PINCH, POINT, Rig, TARGET, hand, lerp
+from integ_synth import FIST, V
 
 R0 = (220.0, 260.0)
 LP = (440.0, 300.0)            # non-dominant palm
@@ -102,37 +103,58 @@ def test_overlay_times_out_on_tick_without_frames(rig):
 
 
 def _dwell(rig: Rig, ms: float = 900, dom=POINT) -> None:
-    rig.run(ms, [hand(dom, R0), hand(OPEN, LP, side="left")])
+    rig.run(ms, [hand(dom, R0), hand(V, LP, side="left")])
 
 
-def test_non_dominant_palm_dwell_opens_mode_menu_and_freezes_os(rig):
+def test_left_v_opens_the_wheel_and_freezes_os(rig):
     rig.activate([hand(POINT, R0), hand(POINT, LP, side="left")])
     _dwell(rig)
     m = _menu(rig)
     assert m is not None and m.kind is MenuKind.MODE
     n = len(rig.sink.actions)
-    rig.run(400, lambda u: [hand(POINT, (lerp(220, 300, u), 260)), hand(OPEN, LP, side="left")])
+    rig.run(400, lambda u: [hand(POINT, (lerp(220, 300, u), 260)), hand(V, LP, side="left")])
     assert len(rig.sink.actions) == n                                 # OS pointer frozen
 
 
-def test_mode_menu_pick_by_pinch_then_pointer_recovers(rig):
-    """Pipeline gesture-reset protocol: after a mode change the controller must not keep the
-    selecting hand as pinched forever (it would freeze the pointer and block neutral)."""
+def test_wheel_pick_by_fist_then_pointer_recovers(rig):
+    """Wheel -> Diğer -> Pencereler with the left hand only. The picking fist must not restore a window, and
+    the new mode starts after a fresh neutral."""
     rig.activate([hand(POINT, R0), hand(POINT, LP, side="left")])
     _dwell(rig)
-    # 8 rows since the drawing mode was appended; windows is row 4 = pointer y in [4/8, 5/8)
-    rig.run(200, lambda u: [hand(POINT, (220, lerp(260, 272, u))), hand(FIST := {"thumb": 1, "index": 1, "middle": 1, "ring": 1, "little": 1}, LP, side="left")])
-    menu = _menu(rig)
-    assert menu.items[menu.hovered].key == "windows"
-    rig.run(150, [hand(PINCH, (220, 272))])
+
+    def aim(dx, dy, pose, ms=250):
+        rig.run(ms, [hand(POINT, R0), hand(pose, (LP[0] + dx, LP[1] + dy), side="left")])
+    more = (-90.0, -52.0)                                            # slice 5 of 6, mirrored camera below
+    sign = -1.0 if rig.ctl.config.mirror else 1.0
+    aim(sign * more[0], more[1], V)
+    assert _menu(rig).items[_menu(rig).hovered].key == "more"
+    aim(sign * more[0], more[1], FIST)
+    assert [i.key for i in _menu(rig).items] == ["zoom", "volume", "windows", "back"]
+    aim(0, 0, V)
+    aim(0, 95, V)                                                    # down = slice 2 of 4
+    assert _menu(rig).items[_menu(rig).hovered].key == "windows"
+    aim(0, 95, FIST, 400)
     assert rig.mode is Mode.WINDOWS and _menu(rig) is None
+    aim(0, 95, FIST, 800)                                            # still a fist: nothing else happens
     assert set(rig.kinds()) <= {A.MOVE_POINTER}
     n = rig.count(A.MOVE_POINTER)
-    rig.run(400, [hand(PINCH, (220, 272))])                          # still holding the selecting pinch
-    rig.run(400, [hand(POINT, (220, 272))])                          # release + neutral
-    rig.run(400, lambda u: [hand(POINT, (lerp(220, 320, u), 272))])
+    rig.run(500, [hand(POINT, R0), hand(POINT, LP, side="left")])    # release + neutral
+    rig.run(400, lambda u: [hand(POINT, (lerp(220, 320, u), 260))])
     assert rig.count(A.MOVE_POINTER) > n + 3
-    assert rig.count(A.WINDOW_DRAG_BEGIN) == 0 and _menu(rig) is None
+    assert rig.count(A.WINDOW_RESTORE) == 0 and rig.count(A.WINDOW_DRAG_BEGIN) == 0
+
+
+def test_open_palm_cancels_and_a_lost_hand_never_picks(rig):
+    rig.activate([hand(POINT, R0), hand(POINT, LP, side="left")])
+    _dwell(rig)
+    rig.run(200, [hand(POINT, R0), hand(V, (LP[0], LP[1] - 90), side="left")])
+    rig.run(400, [hand(POINT, R0), hand(OPEN, (LP[0], LP[1] - 90), side="left")])
+    assert _menu(rig) is None and rig.mode is Mode.POINTER
+    rig.run(400, [hand(POINT, R0), hand(POINT, LP, side="left")])
+    _dwell(rig)
+    rig.run(200, [hand(POINT, R0), hand(V, (LP[0] + 90, LP[1] + 50), side="left")])
+    rig.run(1200, [hand(POINT, R0)])
+    assert _menu(rig) is None and rig.mode is Mode.POINTER
 
 
 def test_tray_mode_change_while_pinched_does_not_stick(rig):
@@ -147,17 +169,17 @@ def test_tray_mode_change_while_pinched_does_not_stick(rig):
     assert rig.count(A.SCROLL) == 0
 
 
-def test_dominant_palm_does_not_open_menu(rig):
-    rig.activate([hand(OPEN, R0)])
-    rig.run(1000, [hand(OPEN, R0)])
+def test_dominant_v_does_not_open_the_wheel(rig):
+    rig.activate([hand(V, R0)])
+    rig.run(1000, [hand(V, R0)])
     assert _menu(rig) is None
 
 
-def test_menu_needs_palm_release_before_reopening(rig):
+def test_wheel_needs_v_release_before_reopening(rig):
     rig.activate([hand(POINT, R0), hand(POINT, LP, side="left")])
     _dwell(rig)
     rig.clock.advance(0)
-    rig.run(5300, [hand(POINT, R0), hand(OPEN, LP, side="left")])    # timeout, palm still open
+    rig.run(5300, [hand(POINT, R0), hand(V, LP, side="left")])       # timeout, V still held
     assert _menu(rig) is None
     rig.run(300, [hand(POINT, R0), hand(POINT, LP, side="left")])    # release
     _dwell(rig)

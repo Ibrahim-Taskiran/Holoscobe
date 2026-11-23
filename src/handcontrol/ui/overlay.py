@@ -13,11 +13,12 @@ from dataclasses import replace
 from typing import Callable, Optional
 
 from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from handcontrol.contracts import Mode
 from handcontrol.ui.dpi import physical_to_logical
+from handcontrol.ui.tray import create_mode_pixmap
 from handcontrol.ui.viewmodel import (
     COMMAND_TOAST_MS,
     CursorFeedbackState,
@@ -242,7 +243,7 @@ class OverlayWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.resize(480, 360)
+        self.resize(480, 460)
 
         self._overlay_state: OverlayState = build_mode_overlay_state()
         self._last_drawn_close_progress: float = 0.0
@@ -448,6 +449,10 @@ class OverlayWindow(QWidget):
             painter.scale(scale, scale)
             painter.translate(-cx, -cy)
 
+        if self._overlay_state.kind is OverlayMenuKind.MODE_MENU:
+            self._paint_wheel(painter, rect)
+            return
+
         panel_rect = rect.adjusted(16.0, 16.0, -16.0, -16.0)
         painter.setPen(QPen(QColor(86, 152, 224, 210), 2.0))
         painter.setBrush(QColor(18, 24, 34, 225))
@@ -533,6 +538,78 @@ class OverlayWindow(QWidget):
             cursor_bounds = QRectF(panel_rect.left() + 16.0, top_y,
                                    panel_rect.width() - 32.0, avail_h) if items else panel_rect
             self._draw_virtual_cursor(painter, cursor_bounds, cursor)
+
+    def _paint_wheel(self, painter: QPainter, rect: QRectF) -> None:
+        """Mode wheel: slice i is centred i/n of a turn clockwise from the top (mode_wheel.py)."""
+        state = self._overlay_state
+        c = rect.center()
+        outer = min(rect.width(), rect.height()) / 2.0 - 18.0
+        inner = outer * 0.36
+        if not state.items:                              # V is being held: only the filling ring
+            box = QRectF(c.x() - 34.0, c.y() - 34.0, 68.0, 68.0)
+            painter.setBrush(QColor(18, 24, 34, 225))
+            painter.setPen(QPen(QColor(80, 92, 110), 6.0))
+            painter.drawEllipse(box)
+            painter.setPen(QPen(QColor(38, 198, 218), 6.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawArc(box, 90 * 16, -int(max(0.0, min(1.0, state.cursor.hold_progress)) * 360 * 16))
+            painter.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+            painter.setPen(QColor(235, 242, 250))
+            painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), "V")
+            return
+        step = 360.0 / len(state.items)
+        for i, item in enumerate(state.items):
+            r = outer + (10.0 if item.hovered else 0.0)
+            path = QPainterPath()
+            start = 90.0 - (i - 0.5) * step - 1.2        # Qt: degrees counter-clockwise from 3 o'clock
+            span = -(step - 2.4)
+            path.arcMoveTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start)
+            path.arcTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start, span)
+            path.arcTo(QRectF(c.x() - inner, c.y() - inner, 2 * inner, 2 * inner), start + span, -span)
+            path.closeSubpath()
+            fill, edge = QColor(24, 31, 42, 238), QColor(64, 82, 106)
+            if item.hovered:
+                fill, edge = QColor(15, 85, 97, 248), QColor(38, 198, 218)
+            elif item.active:
+                fill, edge = QColor(28, 72, 58, 238), QColor(82, 214, 148)
+            painter.setPen(QPen(edge, 2.4 if item.hovered else 1.4))
+            painter.setBrush(fill)
+            painter.drawPath(path)
+            a = math.radians(i * step)
+            mid = (inner + r) / 2.0
+            at = QPointF(c.x() + mid * math.sin(a), c.y() - mid * math.cos(a))
+            size = 38.0 if item.hovered else 32.0
+            icon = QRectF(at.x() - size / 2, at.y() - size / 2 - 11.0, size, size)
+            try:
+                painter.drawPixmap(icon, create_mode_pixmap(Mode(item.item_id), 64), QRectF(0, 0, 64, 64))
+            except ValueError:                           # "more" / "back" are not modes
+                painter.setFont(QFont("Segoe UI", 17, QFont.Weight.Bold))
+                painter.setPen(QColor(218, 228, 240))
+                painter.drawText(icon, int(Qt.AlignmentFlag.AlignCenter), "•••" if item.item_id == "more" else "←")
+            painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold if item.hovered else QFont.Weight.Normal))
+            painter.setPen(QColor(255, 255, 255) if item.hovered else QColor(218, 228, 240))
+            painter.drawText(QRectF(at.x() - 60.0, icon.bottom() + 2.0, 120.0, 20.0),
+                             int(Qt.AlignmentFlag.AlignCenter), item.label)
+        painter.setPen(QPen(QColor(64, 82, 106), 1.4))
+        painter.setBrush(QColor(18, 24, 34, 238))
+        hub = inner - 6.0
+        painter.drawEllipse(c, hub, hub)
+        left = 1.0 - state.inactivity_ms / max(1.0, state.timeout_ms)
+        painter.setPen(QPen(QColor(72, 172, 242), 3.0))
+        painter.drawArc(QRectF(c.x() - hub, c.y() - hub, 2 * hub, 2 * hub), 90 * 16,
+                        -int(max(0.0, min(1.0, left)) * 360 * 16))
+        hovered = next((i.label for i in state.items if i.hovered), "")
+        painter.setFont(QFont("Segoe UI", 9))
+        painter.setPen(QColor(200, 210, 224))
+        painter.drawText(QRectF(c.x() - hub + 6, c.y() - hub, 2 * hub - 12, 2 * hub),
+                         int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap),
+                         "Yumruk: seç" if hovered else "Elini bir dilime götür")
+        cursor = state.cursor
+        if cursor.visible:
+            self._last_drawn_cursor_visible = True
+            at = QPointF(c.x() + (cursor.x - 0.5) * 2 * outer, c.y() + (cursor.y - 0.5) * 2 * outer)
+            painter.setPen(QPen(QColor(12, 16, 22), 2.0))
+            painter.setBrush(QColor(255, 255, 255))
+            painter.drawEllipse(at, 7.0, 7.0)
 
     def _draw_menu_item(
         self,

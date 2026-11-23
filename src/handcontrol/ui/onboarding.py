@@ -143,7 +143,7 @@ def _step_texts(hand: str) -> dict[OnboardingStep, _StepText]:
             "Alternatif: pinch'i kapalı tutup eli taşı."),
         OnboardingStep.MODES: _StepText(
             "Kaydırma ve Komutlar",
-            "İki kullanışlı mod daha var. Mod menüsünden istediğin zaman geçebilirsin.",
+            "İki kullanışlı mod daha var. Mod çarkından istediğin zaman geçebilirsin.",
             ""),
         OnboardingStep.DONE: _StepText(
             "Hazırsın!",
@@ -494,8 +494,8 @@ class OnboardingDialog(QDialog):
         col.setContentsMargins(0, 4, 0, 0)
         col.setSpacing(12)
         col.addWidget(_card(
-            "Mod menüsü",
-            "Baskın olmayan elinin açık avucunu 600 ms sabit tut; menüden modu seç.", "M"))
+            "Mod çarkı",
+            "Sol elinle V yap ve yarım saniye tut; V ile dilime yönel, yumrukla seç.", "M"))
         col.addWidget(_card(
             "Kaydırma modu",
             "Pinch yap ve eli yukarı ya da aşağı taşı: sayfa dikey kayar.", "K"))

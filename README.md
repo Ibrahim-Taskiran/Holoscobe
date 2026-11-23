@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1829 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1859 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -36,7 +36,10 @@ Sekiz mod vardır: İşaretçi, Kaydırma, Yakınlaştırma, Ses, Pencereler, Ko
 | Enstrüman | Sağ işaret parmağıyla tele vur | Gitar sesi; Windows'a hiçbir komut gitmez (aşağıya bakın) |
 | Çizim | Sağ işaret parmağıyla havada çiz | Kamera görüntüsünün üstünde 3B mürekkep; Windows'a hiçbir komut gitmez (aşağıya bakın) |
 
-Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut. Çizim modunda açık sol avuç sahneyi döndürür; o moddan pencere düğmeleriyle ya da tepsiden çıkılır.
+**Mod çarkı (her modda, kontrol etkinken):** Sol elle V yap (işaret + orta açık) ve yarım saniye tut; ekranın
+ortasında çark açılır. V'yi bozmadan elini bir dilime götür, **yumruk yap: seçilir**. Avucu açmak ya da ortada
+yumruk yapmak vazgeçer. El kaybolursa hiçbir şey seçilmez. Dilimler: İmleç, Kaydırma, Çizim, Enstrüman, Komutlar,
+Diğer (Yakınlaştırma, Ses, Pencereler, Geri). Çark açıkken Windows'a komut gitmez, mürekkep ve ses üretilmez.
 
 Kaydırma yönü kullanıcının bakışındandır: elini kendi soluna götürmek "sola kaydır"dır. Önizlemenin ayna ayarı bunu değiştirmez.
 
@@ -80,7 +83,7 @@ sağ işaret parmağı tele vurunca gerçek zamanlı gitar sesi çıkar. Bu modd
 giriş komutu gitmez (imleç, tık, tuş, ses seviyesi, pencere yok); yalnız ses ve görüntü üretilir.
 Bu yüzden komutsuz denemede (dry-run) de tam çalışır.
 
-Açmak için mod menüsünden ya da tepsiden **Enstrüman**'ı seç. Mod seçilince **Enstrüman penceresi**
+Açmak için mod çarkından ya da tepsiden **Enstrüman**'ı seç. Mod seçilince **Enstrüman penceresi**
 açılır (tepsiden de açılır): kamera görüntüsü, el iskeleti, parlayan teller, vuruşta kıvılcımlar,
 köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise roller yer değiştirir.
 
@@ -93,7 +96,7 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 | Akor: sol eli yukarı/aşağı taşı | 4 bölgeden akor seçilir (varsayılan Em, C, G, D) |
 | Akor: sağ elle 4 telin üstünden süpür | Strum: teller kesişme sırasıyla birkaç ms arayla çalar; aşağı ve yukarı ayrılır |
 | İki elle çırp (iki elde de 4 parmak açık) | Kontrolü duraklatır / açar. Çalma pozu çırpma sayılmaz |
-| Sol eli 5 parmak açık, sabit tut (600 ms) | Mod menüsü. Tel tutma pozu menü açmaz |
+| Sol elle V, sabit tut (500 ms) | Mod çarkı. Tel tutma pozu çarkı açmaz |
 | Sabit teller: herhangi bir elin işaret parmağıyla tellerin üstünden geç | Teller ekranda durur (3-8 tel, üstteki en kalın). İki el de çalar |
 | Sabit teller: iki elle çimdikle, 0,4 sn tut, ellerini aç/kapat, bırak | Tel alanı iki çimdik noktası arasına taşınır ve boyutlanır; kaydedilir |
 | Sabit teller: pencerede fareyle sürükle (köşeden boyutlandır) | Aynı ayar fareyle |

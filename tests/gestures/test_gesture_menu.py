@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from handcontrol.contracts import GestureKind as K, Handedness, Quality
 from handcontrol.gestures import GestureRecognizer
 
@@ -13,8 +15,9 @@ def _menus(events):
     return [e for e in events if e.kind is K.MENU_DWELL_COMPLETE]
 
 
-def _left(tl, center=LEFT_AT, **kw):
-    return tl.hand(1, center, **kw)
+def _left(tl, center=LEFT_AT, *, extended=2, thumb=False, **kw):
+    """Left hand, V pose by default."""
+    return tl.hand(1, center, extended=extended, thumb=thumb, **kw)
 
 
 def _pointer(tl, x=1000.0):
@@ -22,7 +25,7 @@ def _pointer(tl, x=1000.0):
     return tl.hand(2, (x, 360.0), extended=1, thumb=False)
 
 
-def test_dwell_completes_at_600ms(tl, rec):
+def test_dwell_completes_at_500ms(tl, rec):
     t0 = tl.t
     progress = []
 
@@ -38,23 +41,21 @@ def test_dwell_completes_at_600ms(tl, rec):
         events += ev
     m = _menus(events)
     assert len(m) == 1 and m[0].hand_id == 1
-    assert 600 <= m[0].t_ms - t0 < 600 + FRAME
+    assert 500 <= m[0].t_ms - t0 < 500 + FRAME
     before = progress[:-1]
-    assert before == sorted(before) and 0.85 < max(before) < 1.0
+    assert before == sorted(before) and 0.8 < max(before) < 1.0
     assert rec.menu_dwell_progress == 0.0                      # latched until release
 
 
-def test_four_fingers_without_thumb_is_open(tl, rec):
-    tl.add(800, (_left(tl, thumb=False),))
+def test_thumb_does_not_matter(tl, rec):
+    tl.add(800, (_left(tl, thumb=True),))
     assert len(_menus(tl.run(rec))) == 1
 
 
-def test_three_fingers_plus_thumb_is_open_but_three_alone_is_not(tl, rec, make_tl):
-    tl.add(800, (_left(tl, extended=3, thumb=True),))
-    assert len(_menus(tl.run(rec))) == 1
-    tl2, rec2 = make_tl(), GestureRecognizer()
-    tl2.add(1200, (_left(tl2, extended=3, thumb=False),))
-    assert _menus(tl2.run(rec2)) == []
+@pytest.mark.parametrize("extended", [0, 1, 3, 4])
+def test_other_poses_never_open_the_wheel(tl, rec, extended):
+    tl.add(1500, (_left(tl, extended=extended, thumb=True),))
+    assert _menus(tl.run(rec)) == [] and rec.menu_dwell_progress == 0.0
 
 
 def test_moving_palm_cancels(tl, rec):
@@ -70,13 +71,13 @@ def test_approaching_hands_cancel_dwell(tl, rec):
     tl.add(900, (_left(tl), _pointer(tl, 550.0)))
     m = _menus(tl.run(rec))
     assert len(m) == 1
-    assert m[0].t_ms >= t_stop + 600 - FRAME * 3              # restarted after the approach
+    assert m[0].t_ms >= t_stop + 500 - FRAME * 3              # restarted after the approach
 
 
 def test_no_refire_without_release(tl, rec):
     tl.add(2500, (_left(tl),))
     assert len(_menus(tl.run(rec))) == 1
-    tl.add(100, (_left(tl, extended=1, thumb=False),))       # fist = release
+    tl.add(100, (_left(tl, extended=1, thumb=False),))       # not a V = release
     tl.add(800, (_left(tl),))
     assert len(_menus(tl.run(rec))) == 1
 
@@ -86,7 +87,7 @@ def test_hand_gone_counts_as_release(tl, rec):
     assert len(_menus(tl.run(rec))) == 2
 
 
-def test_degraded_open_palm_neither_dwells_nor_releases(tl, rec):
+def test_degraded_v_neither_dwells_nor_releases(tl, rec):
     tl.add(1000, (_left(tl, quality=Quality.DEGRADED),))
     assert _menus(tl.run(rec)) == []
     tl.add(800, (_left(tl),)).add(200, (_left(tl, quality=Quality.DEGRADED),)).add(800, (_left(tl),))
@@ -100,13 +101,13 @@ def test_active_pinch_blocks_dwell(tl, rec):
 
 
 def test_dominant_hand_never_opens_menu(tl, rec):
-    tl.add(1500, (tl.hand(2, (900, 360)),))
+    tl.add(1500, (tl.hand(2, (900, 360), extended=2, thumb=False),))
     assert _menus(tl.run(rec)) == []
 
 
-def test_left_dominant_uses_right_palm(tl):
+def test_left_dominant_uses_the_right_hand(tl):
     rec = GestureRecognizer(dominant=Handedness.LEFT)
-    tl.add(800, (tl.hand(2, (900, 360)),))
+    tl.add(800, (tl.hand(2, (900, 360), extended=2, thumb=False),))
     m = _menus(tl.run(rec))
     assert len(m) == 1 and m[0].hand_id == 2
 
@@ -118,12 +119,12 @@ def test_unknown_dominant_disables_menu(tl):
 
 
 def test_clap_candidate_reserves_input(tl, rec):
-    """Left palm held still while the right hand claps onto it: no menu, even afterwards."""
-    tl.add(300, (_left(tl), tl.hand(2, (LEFT_AT[0] + 260, 360))))
-    tl.add(250, lambda u: (_left(tl), tl.hand(2, (LEFT_AT[0] + 260 - 230 * u, 360))))
-    tl.add(60, (_left(tl), tl.hand(2, (LEFT_AT[0] + 30, 360))))
-    tl.add(300, lambda u: (_left(tl), tl.hand(2, (LEFT_AT[0] + 30 + 220 * u, 360))))
-    tl.add(1200, (_left(tl), tl.hand(2, (LEFT_AT[0] + 250, 360))))
+    """Left V follows a clap while the right hand claps onto it: no menu, even afterwards."""
+    tl.add(300, (_left(tl, extended=4, thumb=True), tl.hand(2, (LEFT_AT[0] + 260, 360))))
+    tl.add(250, lambda u: (_left(tl, extended=4, thumb=True), tl.hand(2, (LEFT_AT[0] + 260 - 230 * u, 360))))
+    tl.add(60, (_left(tl, extended=4, thumb=True), tl.hand(2, (LEFT_AT[0] + 30, 360))))
+    tl.add(300, lambda u: (_left(tl, extended=4, thumb=True), tl.hand(2, (LEFT_AT[0] + 30 + 220 * u, 360))))
+    tl.add(1200, (_left(tl, extended=4, thumb=True), tl.hand(2, (LEFT_AT[0] + 250, 360))))
     events = []
     for _, ev in tl.feed(rec):
         events += ev

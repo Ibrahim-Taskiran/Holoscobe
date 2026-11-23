@@ -11,6 +11,7 @@ from gest_landmarks import (CLAP_KINDS, FOUR, LOOSE, ND, OPEN, PICK, STRING, Cha
 from handcontrol.contracts import GestureKind as G, Handedness
 from handcontrol.gestures import GestureConfig, GestureRecognizer
 
+V = {"thumb": 1.0, "index": 0.0, "middle": 0.0, "ring": 1.0, "little": 1.0}
 FPS = pytest.mark.parametrize("fps", [30.0, 15.0], ids=["30fps", "15fps"])
 
 
@@ -24,7 +25,7 @@ def test_profile_switch_api_defaults_off():
     gr.set_instrument_profile(False)
     assert gr.instrument_profile is False
     cfg = GestureConfig()
-    assert cfg.instrument_clap_min_extended_non_thumb == 4 and cfg.instrument_menu_min_extended == 5
+    assert cfg.instrument_clap_min_extended_non_thumb == 4 and cfg.menu_dwell_ms == 500.0
 
 
 # ---------------------------------------------------------------- (a) strum
@@ -99,8 +100,8 @@ def _hold_left(ch: Chain, pose, ms: float) -> Chain:
 
 
 @pytest.mark.parametrize("instrument", [True, False], ids=["instrument", "legacy"])
-def test_open_palm_still_opens_menu(instrument):
-    ch = _hold_left(Chain(instrument=instrument), OPEN, 900)
+def test_v_opens_the_wheel(instrument):
+    ch = _hold_left(Chain(instrument=instrument), V, 900)
     assert ch.count(G.MENU_DWELL_COMPLETE) == 1
 
 
@@ -111,15 +112,16 @@ def test_string_pose_held_never_opens_menu():
         assert ch.gr.menu_dwell_progress == 0.0
 
 
-def test_four_fingers_thumb_bent_opens_menu_only_in_legacy():
-    assert _hold_left(Chain(instrument=True), FOUR, 1500).count(G.MENU_DWELL_COMPLETE) == 0
-    assert _hold_left(Chain(instrument=False), FOUR, 1500).count(G.MENU_DWELL_COMPLETE) == 1
+@pytest.mark.parametrize("pose", [FOUR, OPEN], ids=["four", "open"])
+def test_open_hands_never_open_the_wheel(pose):
+    for instrument in (True, False):
+        assert _hold_left(Chain(instrument=instrument), pose, 1500).count(G.MENU_DWELL_COMPLETE) == 0
 
 
 def test_menu_dwell_needs_a_still_hand_in_instrument_profile():
     """A 0.13 pu wobble every 300 ms keeps restarting the stricter dwell (legacy 0.15 pu tolerates it)."""
     def drift(u: float):
-        return [right_at(2.6, PICK), left(OPEN, (ND[0], 300.0 + 13.0 * (int(u * 1500 // 300) % 2)))]
+        return [right_at(2.6, PICK), left(V, (ND[0], 300.0 + 13.0 * (int(u * 1500 // 300) % 2)))]
     assert Chain(instrument=True).run(1500, drift).count(G.MENU_DWELL_COMPLETE) == 0
     assert Chain(instrument=False).run(1500, drift).count(G.MENU_DWELL_COMPLETE) == 1
 
@@ -128,7 +130,7 @@ def test_menu_dwell_not_advanced_while_strumming():
     ch = Chain(instrument=True)
     strum(ch, 1500)
     assert ch.count(G.MENU_DWELL_COMPLETE) == 0 and ch.gr.menu_dwell_progress == 0.0
-    _hold_left(ch, OPEN, 900)                    # stop playing, open the left palm: menu
+    _hold_left(ch, V, 900)                       # stop playing, left V: wheel
     assert ch.count(G.MENU_DWELL_COMPLETE) == 1
 
 

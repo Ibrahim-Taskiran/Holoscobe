@@ -6,6 +6,7 @@ from typing import Optional
 
 import pytest
 from ctrl_helpers import LEFT, RIGHT, WIN_A, G, K, Rig, tcfg
+from ctrl_helpers import posed
 from test_ctrl_relative import FPS, hold, rcfg, rh, rig, stroke
 
 from handcontrol.contracts import ControlState, KeyCommand, Mode
@@ -210,7 +211,7 @@ def test_no_commands_while_the_mode_menu_is_open():
     r = crig("slides")
     left = rh((500.0, 300.0), "open", hid=LEFT)
     r.settle(rh(PALM, "open"), left)
-    r.frame(rh(PALM, "open"), left, events=[(G.MENU_DWELL_COMPLETE, LEFT)])
+    r.frame(rh(PALM, "open"), posed("v"), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     assert r.ctl.snapshot().menu is not None
     stroke(r, PALM, (PALM[0] + 2 * PU, PALM[1]), 200, 33.4, "open")
     assert cmds(r) == []

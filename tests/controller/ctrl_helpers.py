@@ -1,6 +1,7 @@
 """Shared helpers for controller tests (imported as a plain module; prepend import mode)."""
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable, Optional, Sequence, Union
 
 from handcontrol.contracts import (
@@ -60,6 +61,16 @@ def hand(hid: int = RIGHT, tip: tuple[float, float] = (320.0, 240.0), palm: Opti
         fingers=fingers, pinch_distance=1.0, index_tip_px=tip,
         landmarks=tuple(Landmark(0.5, 0.5) for _ in range(21)),
     )
+
+
+
+def posed(pose: str, palm: tuple[float, float] = (200.0, 300.0), hid: int = LEFT, **kw) -> HandFeatures:
+    """Hand in one of the mode wheel poses: "v", "fist" or "open"."""
+    ext = {"v": (1, 1, 0, 0), "fist": (0, 0, 0, 0), "open": (1, 1, 1, 1)}[pose]
+    h = hand(hid, tip=(palm[0], palm[1] - 60.0), palm=palm, **kw)
+    fingers = tuple(FingerInfo(n, FingerState.EXTENDED if e else FingerState.BENT, 0.1 if e else 0.9)
+                    for n, e in zip(FingerName, (0, *ext)))
+    return replace(h, fingers=fingers)
 
 
 EventSpec = Union[GestureEvent, tuple]

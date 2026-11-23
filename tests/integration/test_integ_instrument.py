@@ -85,21 +85,22 @@ def test_clap_pauses_and_resumes_in_instrument_mode():
     assert set(rig.sink.kinds()) <= {A.RELEASE_ALL}
 
 
-def test_mode_menu_leaves_instrument_and_profile_follows():
+def test_wheel_leaves_instrument_and_profile_follows():
+    v = {**POINT, "middle": 0.0}
     rig = instrument_rig()
-    rig.run(900, [right(2.6, POINT), string_hand(OPEN)])             # non-dominant open palm held still
+    rig.run(900, [right(2.6, POINT), string_hand(v)])                # left V held still
     menu = rig.ctl.snapshot().menu
     assert menu is not None and any(i.key == "instrument" and i.selected for i in menu.items)
-    # move the right palm up: row 0 = pointer
-    rig.run(200, lambda u: [right(2.6, POINT, lerp(300, 200, u)), string_hand(FIST)])
+    up = (ND[0], ND[1] - 90.0)
+    rig.run(200, [right(2.6, POINT), hand(v, up, side="left")])
     menu = rig.ctl.snapshot().menu
     assert menu.items[menu.hovered].key == "pointer"
-    rig.run(150, [right(2.6, PINCH, 200), string_hand(FIST)])
+    rig.run(350, [right(2.6, POINT), hand(FIST, up, side="left")])
     assert rig.mode is Mode.POINTER and rig.ctl.snapshot().menu is None
     assert set(rig.sink.kinds()) <= {A.RELEASE_ALL}
-    rig.run(100, [right(2.6, PINCH, 200)])
+    rig.run(100, [right(2.6, POINT, 200)])
     assert not rig.pipe.gestures.instrument_profile
-    rig.run(400, [right(2.6, POINT, 200)])
+    rig.run(500, [right(2.6, POINT, 200)])
     rig.run(600, lambda u: [right(lerp(2.6, 1.0, u), POINT, 200)])
     assert rig.count(A.MOVE_POINTER) > 3                             # normal behavior is back
 
