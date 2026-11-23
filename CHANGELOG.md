@@ -7,6 +7,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 ## [Unreleased]
 
 ### Added
+- Çizim modu: kamera görüntüsünün üstünde dönen 3B mürekkep. Sağ işaret çizer, sağ avuç taşır, sağ yumruk ön yüzeyi siler, açık sol avuç döndürür, X yapılan ön kollar hepsini akıtarak temizler. Windows'a komut göndermez. X için MediaPipe Pose Landmarker Lite modeli eklendi.
 - Enstrüman: "Serbest teller" düzeni. Kullanıcı telleri kendisi çizer: çimdikle-tut-çek ile yeni tel, uçtan tutup boyutlandırma ve döndürme, ortadan tutup taşıma, iki elle iki ucu tutma, kısaltıp bırakınca silme (en çok 10 tel). Fareyle de aynı düzenleme; sağ tık siler, Delete hepsini siler. Teller ayarlarda saklanır.
 - İsteğe bağlı hizalama yardımı (varsayılan açık): yakın getirilen tel yataya/dikeye düzleşir, paralel telin üstüne aynı uçlarla ve mevcut aralıkla oturur. Uzaktaki tele dokunmaz; kapatılabilir.
 

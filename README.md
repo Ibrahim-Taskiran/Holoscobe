@@ -2,17 +2,17 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1769 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1820 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
-Yedi mod vardır: İşaretçi, Kaydırma, Yakınlaştırma, Ses, Pencereler, Komutlar, Enstrüman.
+Sekiz mod vardır: İşaretçi, Kaydırma, Yakınlaştırma, Ses, Pencereler, Komutlar, Enstrüman, Çizim.
 
 | Mod | Hareket | Sonuç |
 |---|---|---|
 | Hepsi | İki elle bir kez el çırpma | Kontrolü açar ya da duraklatır |
-| Hepsi (etkin, Enstrüman hariç) | Sağ yumruk tut (önce el açık olmalı) | Ön plandaki uygulama penceresini küçültür |
-| Hepsi (etkin, Enstrüman hariç) | Sol yumruk tut (önce el açık olmalı) | Bu oturumda son küçültülen pencereyi geri açar |
+| Hepsi (etkin, Enstrüman ve Çizim hariç) | Sağ yumruk tut (önce el açık olmalı) | Ön plandaki uygulama penceresini küçültür |
+| Hepsi (etkin, Enstrüman ve Çizim hariç) | Sol yumruk tut (önce el açık olmalı) | Bu oturumda son küçültülen pencereyi geri açar |
 | Hepsi | Otomatik duraklatma (Ayarlar'dan açılır) | Ayarlanan süre kullanılabilir el görünmezse kontrol duraklar |
 | İşaretçi | İşaret açık, diğer parmaklar kapalı | İmleç hareket eder. Hızlı hareket uzağa, yavaş hareket hassas gider |
 | İşaretçi | Eli aç (ya da kadrajdan çıkar) | İmleç hemen durur; el 200 ms açık kalırsa bırakılır. Eli geri getir, yeniden işaret et: kaldığı yerden devam eder |
@@ -34,8 +34,9 @@ Yedi mod vardır: İşaretçi, Kaydırma, Yakınlaştırma, Ses, Pencereler, Kom
 | Komutlar | Açık avuçla aşağı kaydır | Masaüstünü göster (tüm profillerde) |
 | Komutlar | Kısa pinch | Oynat / duraklat (Sunum profilinde Sonraki) |
 | Enstrüman | Sağ işaret parmağıyla tele vur | Gitar sesi; Windows'a hiçbir komut gitmez (aşağıya bakın) |
+| Çizim | Sağ işaret parmağıyla havada çiz | Kamera görüntüsünün üstünde 3B mürekkep; Windows'a hiçbir komut gitmez (aşağıya bakın) |
 
-Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut.
+Mod değiştirmek için baskın olmayan elin açık avucunu 600 ms sabit tut. Çizim modunda açık sol avuç sahneyi döndürür; o moddan pencere düğmeleriyle ya da tepsiden çıkılır.
 
 Kaydırma yönü kullanıcının bakışındandır: elini kendi soluna götürmek "sola kaydır"dır. Önizlemenin ayna ayarı bunu değiştirmez.
 
@@ -115,6 +116,25 @@ kıvılcım efektleri ve **Test sesi çal** düğmesi.
 çalınır; açılamazsa DirectSound, sonra MME denenir. Toplam gecikme kamera (~33 ms kare) + izleme +
 ses çıkışı (bu makinede WASAPI ~22 ms) toplamıdır. Bluetooth kulaklık 100 ms'den fazla ekleyebilir;
 kablolu kulaklık ya da hoparlör önerilir. Tasarım ve ölçümler: [instrument.md](Docs/reports/instrument.md).
+
+## Çizim modu
+
+Kamera görüntüsünün üstünde, ortadaki dikey eksenin çevresinde dönen 3B mürekkeple çizersin. Windows'a
+hiçbir komut gitmez; komutsuz denemede de tam çalışır. **Çizim** düğmesi modu hemen başlatır.
+
+| Hareket | Sonuç |
+|---|---|
+| Sağ el: yalnız işaret parmağı açık | Fırça. Parmak ucunda mürekkep bırakır |
+| Sağ el: dört parmak açık | Taşı. İz bırakmadan başka yere geç |
+| Sağ el: yumruk | Silgi. Yalnız ön yüzeydeki mürekkebi siler, arkadaki kalır |
+| Sol el: dört parmak açık | Sahneyi döndürür. Aynı anda çizersen sarmal oluşur |
+| Ön kolları göğüs önünde X yapıp 0,45 sn tut | Bütün mürekkep aşağı akıp silinir |
+| El çırpma, `Ctrl+Alt+Shift+F12` | Duraklatır. Mürekkep ekranda kalır |
+
+X hareketi `pose_landmarker_lite.task` modelini ister (`scripts\setup.ps1` indirir). Model yoksa çizim çalışır,
+yalnız X ile temizleme kapalı kalır ve ekranda bildirilir. Çizim bellekte tutulur, dosyaya kaydedilmez; çok uzun
+çizimlerde (yaklaşık 18 kamera genişliği iz) en eski mürekkep silinir. Yol haritası ve sonuçlar:
+[CIZIM_MODU_TR.md](Docs/CIZIM_MODU_TR.md).
 
 ## İlk açılış eğitimi
 
@@ -341,6 +361,7 @@ Camera Mouse, eViacam, Project Gameface ve Ultraleap TouchFree incelendi. Bu inc
 - Yakınlaştırma, hedef uygulamanın Ctrl + tekerlek desteğine bağlıdır.
 - Komutlar modundaki kısayollar (masaüstü değiştirme, medya tuşları) hedef uygulamanın ve Windows'un o kısayolu desteklemesine bağlıdır.
 - Enstrüman modunun eşikleri (vuruş hızı, histerezis bandı, el yakınlığı, menü sabitliği) yalnız sentetik verilerle ayarlandı; gerçek kamerada ayar bekliyor.
+- Çizim modunun eşikleri (X tutma süresi, silgi derinliği, dönme hızı) yalnız sentetik verilerle ayarlandı; gerçek kamerada ayar bekliyor.
 - Gerçek kamera ve ellerle kabul testi bekliyor.
 
 ## Lisans

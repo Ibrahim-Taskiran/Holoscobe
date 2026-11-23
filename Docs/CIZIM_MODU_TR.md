@@ -13,3 +13,28 @@ Her adım kendi commit'i ve doğrulamasıyla ilerler. Son tamamlanan adımı gö
 ## Kabul senaryosu
 
 Sağ işaret ucuyla iki ayrı noktaya dokunup arada avucu aç. Sol avucu açıp sağ işareti eksenin sağında sabit tut, sonra yavaşça indir. İlk izin bir bölümünü arkaya döndür, önüne yeni bir iz koy ve yumruğu orada beklet. Arkadaki iz korunmalı. Son olarak ön kolları X yapıp tut. Mürekkep aşağı süzülüp kaybolduktan sonra yeni bir lekeyle başlanabilmeli.
+
+## Durum (2026-11-24)
+
+Beş adımın kodu ve otomatik doğrulaması tamam. Gerçek kamera ve ellerle deneme bekliyor.
+
+| Ölçüm | Sonuç |
+|---|---|
+| Otomatik takım | 1820 geçti, 7 manuel test seçilmedi |
+| El + poz izleme (640×480, rastgele görüntü, medyan) | 23,6 ms/kare; yalnız el 11,9 ms |
+| Boyama, durağan sahne (1100×680, 5700 leke) | 1,7 ms |
+| Boyama, dönen sahne | 1000 leke 9 ms, 3000 leke 19 ms; üst sınır 4000 leke |
+
+Çalıştırma: `scripts\setup.ps1` (poz modelini indirir), sonra masaüstü kısayolu ya da
+`scripts\launch.ps1`; pencerede **Çizim** düğmesi. Sınamalar: `scripts\run_tests.ps1 tests\drawing`.
+
+Kararlar:
+- Mürekkep 4000 lekeyle sınırlı; aşılınca en eskisi silinir. Dönerken boyama süresi bununla tutulur.
+- X tutulurken 120 ms'ye kadar kaçan poz kareleri tutmayı sıfırlamaz.
+- Bu modda el menüsü açılmaz (açık sol avuç döndürür). Çıkış: pencere düğmeleri ya da tepsi.
+- Duraklatma ve mod değişimi mürekkebi silmez, yalnız izi keser. Uygulama kapanınca çizim kaybolur.
+
+Gerçek kamerada denenecekler: yukarıdaki kabul senaryosu, ayrıca
+1. Fırça, taşıma ve yumruk arasında geçişte istenmeyen iz ya da silme oluyor mu.
+2. X hareketi loş ışıkta ve kollu giysiyle algılanıyor mu; alkışla karışıyor mu.
+3. Uzun çizimde dönerken görüntü ve el takibi akıcı kalıyor mu.
