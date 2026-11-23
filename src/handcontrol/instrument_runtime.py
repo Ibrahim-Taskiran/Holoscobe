@@ -16,10 +16,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
-from handcontrol.contracts import Handedness, Mode
+from handcontrol.contracts import FrameFeatures, Handedness, Mode
 from handcontrol.instrument.engine import InstrumentConfig, InstrumentEngine
 from handcontrol.instrument.events import DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS
 from handcontrol.instrument.geometry import normalize_fixed_rect
@@ -27,7 +27,9 @@ from handcontrol.instrument.session import InstrumentSession
 
 log = logging.getLogger(__name__)
 
-AUDIO_FAILED_SUFFIX_TR = "Enstrüman modu kapatıldı, kontrol duraklatıldı."
+AUDIO_FAILED_SUFFIX_TR = "Teller açık kaldı, ses yeniden deneniyor."
+AUDIO_RETRY_MS = 3000
+IMAGE_TIMEOUT_TICKS = 45      # repaint ticks without a new camera frame before the picture is cleared
 AUDIO_LOAD_FAILED_TR = "Ses motoru yüklenemedi"
 
 
@@ -60,6 +62,11 @@ def _default_audio_factory(synth: Any, settings: Any, on_error: Callable[[str], 
 def _default_window_factory(bridge: Any) -> Any:
     from handcontrol.ui.instrument_view import InstrumentWindow
     return InstrumentWindow(bridge)
+
+
+def idle_view(config: InstrumentConfig) -> Any:
+    """What the window shows before the first camera frame: the saved strings, paused."""
+    return InstrumentEngine(config).update(FrameFeatures(0.0, 0.0, 640, 480, (), False), False)[1]
 
 
 def frame_to_qimage(frame: Any) -> Optional[QImage]:
@@ -106,14 +113,22 @@ class InstrumentRuntime(QObject):
         self._image: Any = None                # newest camera frame (tracking thread writes, GUI reads)
         self._image_seq = 0
         self._image_shown = 0
+        self._image_age = 0
+        self._targets: list[Any] = []          # widgets with set_camera_image(), fed while visible
+        self._embedded = False                 # the window is a page of the main window
         self.engine = InstrumentEngine(instrument_config(settings))
         self.session = InstrumentSession(self.engine, self._emit_audio, self.view_ready.emit)
-        self._mode_seen.connect(self._on_mode)
+        # queued: the mode may change before the main window is attached (default mode = Enstrüman)
+        self._mode_seen.connect(self._on_mode, Qt.ConnectionType.QueuedConnection)
         self.view_ready.connect(self._on_view)
         self._audio_failed.connect(self._on_audio_failed)
         self._timer = QTimer(self)
         self._timer.setInterval(max(10, int(repaint_ms)))
         self._timer.timeout.connect(self._push_image)
+        self._retry = QTimer(self)
+        self._retry.setSingleShot(True)
+        self._retry.setInterval(AUDIO_RETRY_MS)
+        self._retry.timeout.connect(self._retry_audio)
         pipeline.add_frame_observer(self.session.on_frame)
         pipeline.controller.add_listener(self._on_snapshot)
         self._on_snapshot(pipeline.controller.snapshot())
@@ -145,18 +160,34 @@ class InstrumentRuntime(QObject):
 
     @Slot(object)
     def _on_mode(self, mode: Mode) -> None:
-        if self._closed:
+        if self._closed or mode is not self._last_mode:     # superseded by a newer change
             return
         if mode is Mode.INSTRUMENT:
             self._failing = False
+            self.show_window()             # strings first: a slow audio device must not hide them
+            self.view_ready.emit(idle_view(self.engine.config))
             self.open_audio()
-            if not self._failing:
-                self.show_window()
         else:
+            self._retry.stop()
+            self._set_audio_error("")
             self.close_audio()
-            if self.window is not None:
+            if self.window is not None and not self._embedded:
                 self.window.hide()
                 self._timer.stop()
+
+    def _push_idle_view(self) -> None:
+        if not self.session.active:
+            self.view_ready.emit(idle_view(self.engine.config))
+
+    def _set_audio_error(self, text: str) -> None:
+        fn = getattr(self.window, "set_audio_error", None)
+        if fn is not None:
+            fn(text)
+
+    @Slot()
+    def _retry_audio(self) -> None:
+        if not self._closed and self._last_mode is Mode.INSTRUMENT:
+            self.open_audio()
 
     def open_audio(self) -> bool:
         if self.audio is not None and self.audio.running:
@@ -173,7 +204,10 @@ class InstrumentRuntime(QObject):
         if not audio.start():
             if not self._failing:          # start() normally reported the reason through on_error
                 self._on_audio_failed("Ses çıkışı açılamadı.")
+            self._retry.start()
             return False
+        self._failing = False
+        self._set_audio_error("")
         return True
 
     def close_audio(self) -> None:
@@ -186,33 +220,48 @@ class InstrumentRuntime(QObject):
 
     @Slot(str)
     def _on_audio_failed(self, message: str) -> None:
-        """Device error: tell the user, stop audio, pause and leave the mode. Desktop control is untouched."""
-        if self._failing or self._closed:
+        """Device error: tell the user once, keep the strings on screen and retry in the background."""
+        if self._closed:
+            return
+        self.close_audio()
+        if self._last_mode is Mode.INSTRUMENT:
+            self._retry.start()
+            self._set_audio_error(f"Ses yok: {message}")
+        if self._failing:
             return
         self._failing = True
-        self.close_audio()
+        log.warning("instrument audio failed: %s", message)
         self._notify(f"{message} {AUDIO_FAILED_SUFFIX_TR}")
-        if self.window is not None:
-            self.window.hide()
-            self._timer.stop()
-        if self._last_mode is Mode.INSTRUMENT:
-            self.pipeline.pause("Ses cihazı hatası")
-            self.pipeline.set_mode(Mode.POINTER)
+
+    def attach(self, window: Any, *image_targets: Any) -> None:
+        """Use `window` (a page of the main window) instead of a separate top-level window. The camera
+        picture goes to it and to `image_targets`, whichever is visible."""
+        self._embedded = True
+        self._set_window(window)
+        self._targets += list(image_targets)
+        self._push_idle_view()
+        self._timer.start()
+
+    def _set_window(self, window: Any) -> None:
+        self.window = window
+        self._targets.append(window)
+        self.view_ready.connect(window.update_view)
+        closed = getattr(window, "closed", None)
+        if closed is not None and not self._embedded:
+            closed.connect(self._timer.stop)
+        edited = getattr(window, "fixed_rect_changed", None)
+        if edited is not None:
+            edited.connect(self.set_fixed_rect)
+        drawn = getattr(window, "free_strings_changed", None)
+        if drawn is not None:
+            drawn.connect(self.set_free_strings)
+        self._apply_window_settings()
 
     def show_window(self) -> Any:
         if self.window is None:
-            self.window = self._window_factory(self.bridge)
-            self.view_ready.connect(self.window.update_view)
-            closed = getattr(self.window, "closed", None)
-            if closed is not None:
-                closed.connect(self._timer.stop)
-            edited = getattr(self.window, "fixed_rect_changed", None)
-            if edited is not None:
-                edited.connect(self.set_fixed_rect)
-            drawn = getattr(self.window, "free_strings_changed", None)
-            if drawn is not None:
-                drawn.connect(self.set_free_strings)
-            self._apply_window_settings()
+            self._set_window(self._window_factory(self.bridge))
+        if self._embedded:            # the main window shows the page for the mode
+            return self.window
         self.window.show()
         for name in ("raise_", "activateWindow"):
             fn = getattr(self.window, name, None)
@@ -255,6 +304,7 @@ class InstrumentRuntime(QObject):
         self.settings = replace(self.settings, instrument_fixed_rect=new)
         if reconfigure:            # the engine already holds a rect it placed itself
             self.session.configure(instrument_config(self.settings))
+            self._push_idle_view()
         try:
             self._persist(self.settings)
         except Exception:
@@ -273,6 +323,7 @@ class InstrumentRuntime(QObject):
         self.settings = replace(self.settings, instrument_free_strings=new)
         if reconfigure:
             self.session.configure(instrument_config(self.settings))
+            self._push_idle_view()
         try:
             self._persist(self.settings)
         except Exception:
@@ -280,16 +331,27 @@ class InstrumentRuntime(QObject):
 
     @Slot()
     def _push_image(self) -> None:
-        if self.window is None or self._image_seq == self._image_shown:
+        targets = [w for w in self._targets if not hasattr(w, "isVisible") or w.isVisible()]
+        if not targets:
             return
+        if self._image_seq == self._image_shown:
+            self._image_age += 1
+            if self._image_age == IMAGE_TIMEOUT_TICKS:      # camera stopped: do not leave a frozen picture
+                for w in self._targets:
+                    w.set_camera_image(None)
+            return
+        self._image_age = 0
         self._image_shown = self._image_seq
         image = frame_to_qimage(self._image)
         if image is not None:
-            self.window.set_camera_image(image)
+            for w in targets:
+                w.set_camera_image(image)
 
     def apply_settings(self, settings: Any) -> None:
         previous, self.settings = self.settings, settings
-        self.session.configure(instrument_config(settings))
+        if instrument_config(previous) != instrument_config(settings):    # volume/tone must not cut notes
+            self.session.configure(instrument_config(settings))
+            self._push_idle_view()
         self._apply_window_settings()
         audio = self.audio
         if audio is None:
@@ -329,6 +391,7 @@ class InstrumentRuntime(QObject):
             return
         self._closed = True
         self._timer.stop()
+        self._retry.stop()
         try:
             self.session.stop()
         except Exception:

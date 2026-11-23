@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal, Slot
-from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QToolBar
+from PySide6.QtWidgets import QApplication
 
 from handcontrol.config import SettingsStore, CalibrationBounds, validate, migrate
 from handcontrol.contracts import CameraState, ControlState, Mode
@@ -23,7 +23,7 @@ from handcontrol.dryrun import DryRunSink, FakeVolume
 from handcontrol.pipeline import Pipeline, dominant_of, run_camera_pipeline
 from handcontrol.telemetry import SessionRecorder, TelemetrySink
 from handcontrol.ui import (UiBridge, UiState, OverlayState, OverlayMenuKind,
-    OverlayMenuItem, VirtualCursorState, HandControlTray, CameraPreviewWidget,
+    OverlayMenuItem, VirtualCursorState, HandControlTray,
     OverlayWindow, CursorFeedbackOverlay, FeedbackToast, StatusIndicator, DryRunPanel, SettingsDialog, SettingsData, CalibrationWizard)
 from handcontrol.windows import (enable_per_monitor_v2, WindowsDisplayProvider,
     WindowsWindowQuery, WindowsVolumeControl, WindowsActionSink, WindowsHotkey, WindowsSession)
@@ -50,11 +50,6 @@ def hotkey_binding(text: str) -> tuple[int, int]:
     if len(key) == 1 and key.isascii() and key.isalnum():
         return modifiers, ord(key)
     raise ValueError('Geçersiz acil durdurma kısayolu')
-
-
-STATUS_HINT_TR = ('Önce Sürdür. İşaret açık: imleç (hızlı = uzak, yavaş = hassas) | El açık: imleç durur | '
-    'Kısa pinch: sol tık, iki hızlı pinch: çift tık, ~yarım sn tut: sürükle | Başparmak+orta: sağ tık | '
-    'Sağ/sol yumruk: küçült/geri aç. Tümü: tepside Hareket Rehberi.')
 
 
 CursorSource = Callable[[], Optional[tuple[int, int]]]
@@ -282,6 +277,7 @@ class Runtime(QObject):
     """Own services; workers emit data, GUI slots own widget changes."""
     snapshot_received = Signal(object)
     action_performed = Signal(str, int, int)   # queued to the GUI thread
+    settings_changed = Signal(object)          # Settings, after any change (GUI thread)
 
     def __init__(self, bridge, store, *, live=False, displays=None, windows=None,
                  volume=None, hotkey_factory=WindowsHotkey, session_factory=WindowsSession,
@@ -311,6 +307,7 @@ class Runtime(QObject):
         self.hotkey = self.session = self.pipeline = self.sink = None
         self.instrument = None
         self.closed = False
+        self._auto_resume = False              # start the instrument as soon as the camera runs
         self.timer = QTimer(self)
         self.snapshot_received.connect(self._snapshot)
         self.action_performed.connect(self._dispatch_action_listeners)
@@ -356,7 +353,7 @@ class Runtime(QObject):
         b.pause_requested.connect(p.pause)
         b.resume_requested.connect(p.resume)
         b.pause_resume_requested.connect(self.toggle_pause)
-        b.mode_selected.connect(p.set_mode)
+        b.mode_selected.connect(self.select_mode)
         b.camera_start_requested.connect(self.start_camera)
         b.camera_stop_requested.connect(self.stop_camera)
         b.camera_toggle_requested.connect(self.toggle_camera)
@@ -364,7 +361,42 @@ class Runtime(QObject):
         b.calibration_completed.connect(self.calibrated)
         b.calibration_cancelled.connect(p.controller.end_calibration)
 
+    @Slot(object)
+    def select_mode(self, mode):
+        """Mode picked with the mouse (window button or tray)."""
+        self._auto_resume = False
+        self.pipeline.set_mode(mode)
+        if mode is Mode.INSTRUMENT:
+            self.ensure_instrument_active()
+
+    def ensure_instrument_active(self):
+        """Choosing the instrument also starts it: this mode never sends OS input, so nothing can go wrong
+        on the desktop, and paused strings look like a broken mode."""
+        snap = self.pipeline.controller.snapshot()
+        if snap.mode is not Mode.INSTRUMENT or snap.state is not ControlState.PAUSED:
+            return
+        if snap.camera_state is CameraState.RUNNING:
+            self.pipeline.resume()
+            return
+        self._auto_resume = True
+        if self.camera is None:
+            self.start_camera()
+
+    def update_instrument(self, values: dict) -> bool:
+        """Instrument bar change: apply and save at once, without pausing or restarting the camera."""
+        settings = validate({**asdict(self.settings), **values})
+        try:
+            self.store.save(settings)
+        except Exception:
+            logging.getLogger(__name__).warning('could not save instrument settings', exc_info=True)
+        self.settings = self.pipeline.settings = settings
+        if self.instrument is not None:
+            self.instrument.apply_settings(settings)
+        self.settings_changed.emit(settings)
+        return True
+
     def _emergency(self):
+        self._auto_resume = False
         if self.pipeline:
             self.pipeline.emergency_stop()
 
@@ -381,6 +413,8 @@ class Runtime(QObject):
 
     @Slot(object)
     def _snapshot(self, snapshot):
+        if self._auto_resume:
+            self._try_auto_resume()
         if snapshot.epoch != self.pipeline.controller.current_epoch():
             return
         previous = self.bridge.state
@@ -389,6 +423,14 @@ class Runtime(QObject):
             dry_run_command_text=previous.dry_run_command_text))
         self.bridge.update_overlay(state.overlay)
         self.bridge.update_snapshot(snapshot)
+
+    def _try_auto_resume(self):
+        snap = self.pipeline.controller.snapshot()
+        if snap.mode is not Mode.INSTRUMENT or snap.state is ControlState.ACTIVE:
+            self._auto_resume = False
+        elif snap.state is ControlState.PAUSED and snap.camera_state is CameraState.RUNNING:
+            self._auto_resume = False
+            self.pipeline.resume()
 
     def toggle_pause(self):
         if self.pipeline.controller.snapshot().state == ControlState.ACTIVE:
@@ -525,6 +567,7 @@ class Runtime(QObject):
         except Exception:
             logging.getLogger(__name__).warning('could not save the string area', exc_info=True)
         self.settings = self.pipeline.settings = settings
+        self.settings_changed.emit(settings)
 
     def build_diagnostics(self, dest_dir: Path | None = None) -> Path | None:
         from handcontrol import diagnostics, logsetup, telemetry as telemetry_module
@@ -584,6 +627,7 @@ class Runtime(QObject):
             self.instrument.apply_settings(settings)
         if camera_was_running:
             self.start_camera()
+        self.settings_changed.emit(settings)
 
     def calibrated(self, result):
         b = result.bounds
@@ -702,25 +746,18 @@ def main(argv=None) -> int:
     except Exception as exc:
         print(f'Başlatılamadı: {exc}', file=sys.stderr)
         return 1
-    window = QMainWindow()
-    window.setWindowTitle('Holoscobe' + (' — Canlı' if args.live else ' — Komutsuz Deneme'))
-    window.setCentralWidget(CameraPreviewWidget(bridge))
-    controls = QToolBar('Kontrol', window)
-    controls.setMovable(False)
-    activate = QPushButton('Sürdür')
-    activate.clicked.connect(runtime.toggle_pause)
-    controls.addWidget(activate)
-    status = QLabel('Duraklatıldı')
-    controls.addWidget(status)
-    window.addToolBar(controls)
-    def update_controls(state):
-        activate.setText(state.pause_resume_action_text)
-        status.setText(f'  {state.control_state_label_tr} | {state.mode_label_tr} | {state.camera_state_label_tr}')
-        window.statusBar().showMessage(state.error_text or STATUS_HINT_TR)
-    bridge.state_changed.connect(update_controls)
-    update_controls(bridge.state)
+    from handcontrol.ui.main_window import MainWindow
+    window = MainWindow(bridge, live=args.live)
+    window.apply_instrument_settings(runtime.settings)
+    window.instrument_changed.connect(runtime.update_instrument)
+    runtime.settings_changed.connect(window.apply_instrument_settings)
+    if runtime.instrument is not None:
+        runtime.instrument.attach(window.instrument, window.preview)
+        window.free_strings_changed.connect(runtime.instrument.set_free_strings)
     tray = HandControlTray(bridge, window)
     tray_ref.append(tray)
+    tray.activated.connect(lambda reason: window.bring_up()
+        if reason in (tray.ActivationReason.Trigger, tray.ActivationReason.DoubleClick) else None)
     overlay = OverlayWindow(bridge)
     cursor_ring = CursorFeedbackOverlay(bridge, enabled_fn=lambda: runtime.settings.cursor_feedback,
         follow_os_cursor=args.live)
@@ -738,6 +775,7 @@ def main(argv=None) -> int:
     runtime.timer.timeout.connect(frames)
     bridge.overlay_updated.connect(lambda state: overlay.setVisible(state.visible and runtime.settings.overlay_visible))
     def settings_dialog():
+        was_active = runtime.pipeline.controller.snapshot().state is ControlState.ACTIVE
         runtime.pipeline.pause('Ayarlar')
         s = runtime.settings
         initial = settings_to_dialog_data(s, startup_enabled=runtime.startup_enabled())
@@ -746,6 +784,8 @@ def main(argv=None) -> int:
         dialog = SettingsDialog(initial=initial, bridge=bridge, parent=window)
         wire_settings_dialog(dialog)
         dialog.exec()
+        if was_active:
+            runtime.ensure_instrument_active()     # Enstrüman only; other modes stay paused
     onboarding_ref: list = []
     def open_onboarding():
         try:
@@ -774,7 +814,10 @@ def main(argv=None) -> int:
     # The tray click emits both its own signal and bridge.tutorial_requested; connect only the bridge one.
     bridge.tutorial_requested.connect(open_onboarding)
     if runtime.instrument is not None and hasattr(bridge, 'instrument_window_requested'):
-        bridge.instrument_window_requested.connect(runtime.instrument.show_window)
+        def open_instrument():
+            bridge.select_mode(Mode.INSTRUMENT)
+            window.bring_up()
+        bridge.instrument_window_requested.connect(open_instrument)
     def calibration_dialog():
         if runtime.pipeline.controller.begin_calibration():
             CalibrationWizard(bridge=bridge, parent=window).exec()
@@ -788,6 +831,7 @@ def main(argv=None) -> int:
     if not args.live:
         panel.show()
     runtime.start_camera()
+    runtime.ensure_instrument_active()             # default mode = Enstrüman
     if not runtime.settings.onboarding_done:
         QTimer.singleShot(0, open_onboarding)
     try:

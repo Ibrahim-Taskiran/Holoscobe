@@ -8,6 +8,8 @@ Hand gestures (`FreeEditor`), all with a pinch held for `hold_ms`:
 - one hand near a string end: drag that end (resize / rotate); near the string body: move the string;
 - both hands: near the same string, grab its two ends; elsewhere, a new string between the hands.
 Release the pinch to drop. A string shorter than MIN_LENGTH on release is removed (squeeze to delete).
+Short tracking failures (hand missing, degraded, ambiguous or re-identified for at most `grace_ms`) freeze the
+edit instead of ending it.
 
 Snapping (optional, `snap=True`) only acts when the string is already close, so free placement stays
 possible: near-horizontal/vertical angles straighten, and a string parallel to another one with its ends
@@ -31,6 +33,7 @@ SNAP_ANGLE_DEG = 7.0
 SNAP_END = 0.06            # stacked ends align when each is this close to the other string's end
 SNAP_REACH = 0.30          # only strings at most this far (perpendicular) can be stacked on
 SNAP_GAP = 0.025           # gap snaps to the stack gap when this close
+REID_RADIUS = 0.15         # a new hand id pinching this close to a lost pinching hand is the same hand
 
 
 def _iso(p: Vec, aspect: float) -> Vec:
@@ -194,6 +197,7 @@ class HandPinch:
     hand_id: int
     point: Vec            # normalized pinch point (midpoint of thumb and index tips)
     distance_pu: float    # thumb-index distance in palm units
+    usable: bool = True   # False: shaky frame, keeps a running pinch alive but cannot start one
 
 
 @dataclass
@@ -218,12 +222,15 @@ class EditState:
 
 
 class FreeEditor:
-    def __init__(self, *, on_pu: float = 0.35, off_pu: float = 0.55, hold_ms: float = 400.0) -> None:
-        self.on_pu, self.off_pu, self.hold_ms = on_pu, off_pu, hold_ms
+    def __init__(self, *, on_pu: float = 0.35, off_pu: float = 0.55, hold_ms: float = 400.0,
+                 grace_ms: float = 250.0) -> None:
+        self.on_pu, self.off_pu, self.hold_ms, self.grace_ms = on_pu, off_pu, hold_ms, grace_ms
         self.reset()
 
     def reset(self) -> None:
         self._since: dict[int, tuple[float, Vec]] = {}    # hand id -> (pinch start ms, start point)
+        self._seen: dict[int, tuple[float, Vec]] = {}     # hand id -> (last pinched frame ms, point)
+        self._ok_t: Optional[float] = None                # last frame with certain tracking
         self._grab: Optional[_Grab] = None
         self._full_until = -1.0
 
@@ -236,31 +243,45 @@ class FreeEditor:
         return set(self._since)
 
     def step(self, strings: tuple[Seg, ...], pinches: list[HandPinch], t: float, aspect: float,
-             snap: bool, allowed: bool = True) -> EditState:
-        by_id = {p.hand_id: p for p in pinches}
+             snap: bool, allowed: bool = True, uncertain: bool = False) -> EditState:
+        """`allowed=False` ends everything at once; `uncertain` (shaky tracking) only freezes for grace_ms."""
+        if uncertain and (self._ok_t is None or t - self._ok_t > self.grace_ms):
+            allowed = False
+        if not uncertain:
+            self._ok_t = t
+        by_id = {} if uncertain else {p.hand_id: p for p in pinches if math.isfinite(p.distance_pu)}
         grab = self._grab
-        # pinch hysteresis per hand
-        for hid in list(self._since):
-            p = by_id.get(hid)
-            if p is None or not math.isfinite(p.distance_pu) or p.distance_pu > self.off_pu:
-                del self._since[hid]
-        if allowed:
-            for p in pinches:
-                if p.hand_id not in self._since and math.isfinite(p.distance_pu) and p.distance_pu < self.on_pu:
-                    self._since[p.hand_id] = (t, p.point)
-        else:
+        if not allowed:
             self._since.clear()
+            self._seen.clear()
+        else:
+            self._reidentify(by_id, aspect)
+            # pinch hysteresis per hand; a hand that vanished keeps its pinch for grace_ms
+            for hid in list(self._since):
+                p = by_id.get(hid)
+                if p is None:
+                    if t - self._seen[hid][0] > self.grace_ms:
+                        self._drop(hid)
+                elif p.distance_pu > self.off_pu:
+                    self._drop(hid)
+                else:
+                    self._seen[hid] = (t, p.point)
+            for p in by_id.values():
+                if p.hand_id not in self._since and p.usable and p.distance_pu < self.on_pu:
+                    self._since[p.hand_id] = (t, p.point)
+                    self._seen[p.hand_id] = (t, p.point)
 
         if grab is not None:
             if not allowed or any(h not in self._since for h in grab.hands):
                 return self._commit(strings, aspect, t)
-            self._move(grab, by_id, strings, aspect, snap)
+            if all(h in by_id for h in grab.hands):
+                self._move(grab, by_id, strings, aspect, snap)
             return self._state(strings, grab, committed=False, t=t)
 
-        ready = [h for h, (t0, _) in self._since.items() if t - t0 >= self.hold_ms]
+        ready = [h for h, (t0, _) in self._since.items() if t - t0 >= self.hold_ms and h in by_id]
         if ready and allowed:
             first = ready[0]
-            others = [h for h in self._since if h != first]
+            others = [h for h in self._since if h != first and h in by_id]
             hands = (first, others[0]) if others else (first,)
             grab = self._start(strings, hands, by_id, aspect, t)
             if grab is not None:
@@ -271,6 +292,26 @@ class FreeEditor:
         return EditState(strings, None, False, False, False, pending, t < self._full_until)
 
     # -- internals
+
+    def _drop(self, hid: int) -> None:
+        self._since.pop(hid, None)
+        self._seen.pop(hid, None)
+
+    def _reidentify(self, by_id: dict[int, HandPinch], aspect: float) -> None:
+        """The tracker gave a lost pinching hand a new id: carry its pinch (and grab) over."""
+        for old in [h for h in self._since if h not in by_id]:
+            last = _iso(self._seen[old][1], aspect)
+            near = [p for h, p in by_id.items() if h not in self._since and p.distance_pu <= self.off_pu
+                    and dist(_iso(p.point, aspect), last) <= REID_RADIUS]
+            if len(near) != 1:
+                continue
+            new = near[0].hand_id
+            self._since[new] = self._since.pop(old)
+            self._seen[new] = self._seen.pop(old)
+            g = self._grab
+            if g is not None and old in g.links:
+                g.links[new] = g.links.pop(old)
+                g.hands = tuple(new if h == old else h for h in g.hands)
 
     def _start(self, strings: tuple[Seg, ...], hands: tuple[int, ...], by_id: dict[int, HandPinch],
                aspect: float, t: float) -> Optional[_Grab]:
@@ -367,6 +408,6 @@ class FreeEditor:
 
 
 __all__ = [
-    "END_RADIUS", "EditState", "FreeEditor", "GRAB_RADIUS", "HandPinch", "MAX_STRINGS", "MIN_LENGTH", "Seg",
+    "END_RADIUS", "EditState", "FreeEditor", "GRAB_RADIUS", "HandPinch", "MAX_STRINGS", "MIN_LENGTH", "REID_RADIUS", "Seg",
     "clamp_seg", "ends", "hit_test", "normalize_free_strings", "pitch_order", "seg_length", "snap_segment",
 ]

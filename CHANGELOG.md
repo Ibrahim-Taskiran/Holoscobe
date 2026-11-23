@@ -10,7 +10,22 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Enstrüman: "Serbest teller" düzeni. Kullanıcı telleri kendisi çizer: çimdikle-tut-çek ile yeni tel, uçtan tutup boyutlandırma ve döndürme, ortadan tutup taşıma, iki elle iki ucu tutma, kısaltıp bırakınca silme (en çok 10 tel). Fareyle de aynı düzenleme; sağ tık siler, Delete hepsini siler. Teller ayarlarda saklanır.
 - İsteğe bağlı hizalama yardımı (varsayılan açık): yakın getirilen tel yataya/dikeye düzleşir, paralel telin üstüne aynı uçlarla ve mevcut aralıkla oturur. Uzaktaki tele dokunmaz; kapatılabilir.
 
+- Tek ana pencere (`ui/main_window.py`): mod düğmeleri, durum, kamera görüntüsü; Enstrüman aynı pencerede sayfa olarak açılır. Araç çubuğundan düzen, tel silme, hizalama, tel sayısı, tını ve ses anında değişir.
+- `scripts/holoscobe.pyw`: konsolsuz kaynak başlatıcı; masaüstü kısayolu artık eskimiyor.
+
+### Changed
+- Enstrümanın varsayılan düzeni "Serbest teller" oldu.
+- Enstrüman modunu düğme ya da tepsiden seçmek onu hemen başlatır (kamera kapalıysa açar); bu mod Windows'a komut göndermez.
+- Ses cihazı hatası artık modu kapatmıyor: teller ekranda kalır, ses 3 saniyede bir yeniden denenir.
+- Kamera görüntüsü gerilmeden, kendi oranında çizilir.
+- Masaüstü kısayolu tek ve `--live`.
+
 ### Fixed
+- Kamera ilk açılışta ve ayar kaydında ~11 saniye bekletiyordu (MSMF donanım dönüşümleri); 0,6 saniyeye indi. Bu sürede teller görünmüyordu.
+- Kayıtlı teller ilk kamera karesini beklemeden çiziliyor.
+- Varsayılan mod Enstrüman iken ana pencereden önce ayrı bir pencere açılıyordu.
+- Serbest teller: kısa takip kayıpları (250 ms'ye kadar), titrek kare ve el kimliği değişimi çizimi bölmüyor; çimdikliyken mod menüsü açılmıyor.
+- Ses düzeyi ya da tını değişince çalan notalar kesilmiyor.
 - Sabit teller: iki elle taşınan alan mod değişiminde eski yerine dönmüyor.
 
 ## [1.1.0] - 2026-11-22

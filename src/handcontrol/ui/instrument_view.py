@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from handcontrol.contracts import FrameFeatures
+from handcontrol.instrument.engine import STATUS_PAUSED
 from handcontrol.instrument.events import HitView, InstrumentView, StringView
 from handcontrol.instrument.freeform import (
     MAX_STRINGS, MIN_LENGTH, Seg, clamp_seg, ends, hit_test, seg_length, snap_segment,
@@ -32,6 +33,9 @@ LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "S
 WAITING_STATUS_TR = "Enstrüman modunu seçin ve iki elinizi gösterin"
 FIXED_HINT_TR = "Fareyle sürükle / köşeden boyutlandır · ya da iki elle çimdikle, tut, gerdir"
 FREE_HINT_TR = "Çimdikle, tut, çek: tel çiz · uçtan tut: boyutlandır · ortadan: taşı · sağ tık: sil"
+FREE_EMPTY_TR = ("İlk telini çiz", "Başparmak ve işaret parmağını birleştir · yarım saniye tut · çek · bırak")
+PAUSED_HINT_TR = ("Duraklatıldı", "Başlamak için Sürdür'e bas ya da el çırp")
+NO_CAMERA_HINT_TR = ("Kamera bekleniyor", "Görüntü gelince teller çalınabilir")
 SNAPPED_TR = "hizalandı"
 HANDLE_PX = 14.0                  # grab distance of a corner handle (widget px)
 AREA_COLOR = QColor(150, 200, 255)
@@ -197,6 +201,8 @@ class InstrumentCanvas(CameraPreviewWidget):
         self._fdraft_index: Optional[int] = None
         self._fdraft_snapped = False
         self._free_snap = True
+        self._audio_error = ""
+        self._show_details = False      # the instrument HUD replaces the technical read-outs
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     @property
@@ -212,14 +218,14 @@ class InstrumentCanvas(CameraPreviewWidget):
     def set_free_snap(self, enabled: bool) -> None:
         self._free_snap = bool(enabled)
 
+    def set_audio_error(self, text: str) -> None:
+        self._audio_error = str(text)
+        self.update()
+
     # ---------- geometry ----------
 
-    @staticmethod
-    def canvas_rect_for(full_rect: QRectF) -> QRectF:
-        """Same canvas rect CameraPreviewWidget._paint_contents uses (below its top HUD bar)."""
-        top_bar_bottom = full_rect.top() + 6.0 + 32.0
-        return QRectF(full_rect.left() + 8.0, top_bar_bottom + 6.0, full_rect.width() - 16.0,
-                      max(60.0, full_rect.height() - 32.0 - 18.0))
+    def _frame_aspect(self) -> float:
+        return self._aspect()
 
     def map_camera_point(self, x: float, y: float, canvas: QRectF) -> QPointF:
         """Camera px (unmirrored) -> widget point, honoring the mirror setting."""
@@ -263,7 +269,7 @@ class InstrumentCanvas(CameraPreviewWidget):
         return tuple(view.free_strings or ())
 
     def _aspect(self) -> float:
-        view = self._view
+        view = getattr(self, "_view", None)
         return view.width / view.height if view is not None and view.width > 0 and view.height > 0 else 4.0 / 3.0
 
     def _free_hit(self, pos: QPointF, strings: tuple[Seg, ...], canvas: QRectF):
@@ -444,6 +450,37 @@ class InstrumentCanvas(CameraPreviewWidget):
             self._draw_sparks(painter, canvas, now)
         painter.restore()
         self._draw_hud(painter, canvas)
+        hint = self.center_hint()
+        if hint is not None and self._fdraft is None:
+            self._draw_center_hint(painter, canvas, *hint)
+
+    def _draw_empty_notice(self, painter: QPainter, canvas: QRectF) -> None:
+        return                                  # the HUD status line already says it
+
+    def center_hint(self) -> Optional[tuple[str, str]]:
+        """Big (title, text) card for the states in which nothing can be played yet."""
+        view = self._view
+        if view is None or (view.t_ms <= 0.0 and view.status == STATUS_PAUSED):     # only the idle view so far
+            return NO_CAMERA_HINT_TR
+        if view.status == STATUS_PAUSED:
+            return PAUSED_HINT_TR
+        if view.layout == "free" and not view.strings and not view.free_pending:
+            return FREE_EMPTY_TR
+        return None
+
+    def _draw_center_hint(self, painter: QPainter, canvas: QRectF, title: str, text: str) -> None:
+        w = min(560.0, canvas.width() - 24.0)
+        box = QRectF(canvas.center().x() - w / 2.0, canvas.bottom() - 120.0, w, 96.0)
+        painter.setPen(QPen(QColor(38, 198, 218, 170), 1.4))
+        painter.setBrush(QColor(14, 18, 26, 225))
+        painter.drawRoundedRect(box, 14.0, 14.0)
+        painter.setFont(self._hud_big_font)
+        painter.setPen(QColor(245, 248, 252))
+        painter.drawText(box.adjusted(12.0, 10.0, -12.0, -44.0), int(Qt.AlignmentFlag.AlignCenter), title)
+        painter.setFont(self._hud_font)
+        painter.setPen(QColor(178, 188, 202))
+        painter.drawText(box.adjusted(12.0, 50.0, -12.0, -8.0),
+                         int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap), text)
 
     def _draw_string(self, painter: QPainter, canvas: QRectF, s: StringView, now_ms: float) -> None:
         a, b = self.string_points(s, canvas)
@@ -618,29 +655,36 @@ class InstrumentCanvas(CameraPreviewWidget):
             status = f"{status} · {FIXED_HINT_TR}"
         elif view.layout == "free" and not view.adjusting and status == "Hazır":
             status = f"{status} · {FREE_HINT_TR}"
+        if self._audio_error:
+            status = self._audio_error
         return (main, f"Düzen: {layout}", status)
 
     def _draw_hud(self, painter: QPainter, canvas: QRectF) -> None:
-        main, layout_line, status = self.hud_lines()
+        """Compact pill: state dot, last note, short status (the long hints are in the window's hint line)."""
+        main = self.hud_lines()[0]
+        status = self._audio_error or (self._view.status if self._view is not None else WAITING_STATUS_TR)
         playing = self._view.playing if self._view is not None else False
-        box = QRectF(canvas.left() + 12.0, canvas.top() + 12.0, 280.0 if len(status) < 40 else 560.0, 92.0)
+        painter.setFont(self._hud_big_font)
+        note_w = painter.fontMetrics().horizontalAdvance(main) if main != "—" else 0
+        painter.setFont(self._hud_font)
+        status_w = painter.fontMetrics().horizontalAdvance(status)
+        box = QRectF(canvas.left() + 12.0, canvas.top() + 12.0,
+                     min(canvas.width() - 24.0, 46.0 + (note_w + 14.0 if note_w else 0.0) + status_w), 42.0)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(14, 18, 26, 200))
         painter.drawRoundedRect(box, 10.0, 10.0)
         painter.setBrush(QColor(82, 214, 148) if playing else QColor(120, 128, 140))
-        painter.drawEllipse(QPointF(box.left() + 18.0, box.top() + 26.0), 5.0, 5.0)
-
-        painter.setFont(self._hud_big_font)
-        painter.setPen(QColor(245, 248, 252))
-        painter.drawText(QRectF(box.left() + 32.0, box.top() + 6.0, box.width() - 40.0, 40.0),
-                         int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), main)
+        painter.drawEllipse(QPointF(box.left() + 18.0, box.center().y()), 5.0, 5.0)
+        align = int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        x = box.left() + 32.0
+        if note_w:
+            painter.setFont(self._hud_big_font)
+            painter.setPen(QColor(245, 248, 252))
+            painter.drawText(QRectF(x, box.top(), note_w + 4.0, box.height()), align, main)
+            x += note_w + 14.0
         painter.setFont(self._hud_font)
-        painter.setPen(QColor(178, 188, 202))
-        painter.drawText(QRectF(box.left() + 14.0, box.top() + 46.0, box.width() - 24.0, 20.0),
-                         int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), layout_line)
         painter.setPen(QColor(255, 206, 120) if not playing else QColor(160, 230, 190))
-        painter.drawText(QRectF(box.left() + 14.0, box.top() + 66.0, box.width() - 24.0, 20.0),
-                         int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), status)
+        painter.drawText(QRectF(x, box.top(), max(0.0, box.right() - x - 8.0), box.height()), align, status)
 
 
 class InstrumentWindow(QWidget):
@@ -724,6 +768,10 @@ class InstrumentWindow(QWidget):
     @Slot(bool)
     def set_free_snap(self, enabled: bool) -> None:
         self.canvas.set_free_snap(enabled)
+
+    @Slot(str)
+    def set_audio_error(self, text: str) -> None:
+        self.canvas.set_audio_error(text)
 
     @Slot(bool)
     def set_particles_enabled(self, enabled: bool) -> None:

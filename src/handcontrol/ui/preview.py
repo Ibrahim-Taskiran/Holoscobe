@@ -91,6 +91,7 @@ class CameraPreviewWidget(QWidget):
         self._mirrored: bool = True
         self._fps: float = 0.0
         self._sample_age_ms: float = 0.0
+        self._show_details: bool = True    # top FPS bar, per-finger cards, long hand tags
 
         # Diagnostic counters updated on paint for verification
         self._last_rendered_hand_count: int = 0
@@ -132,6 +133,16 @@ class CameraPreviewWidget(QWidget):
     @property
     def last_had_uncertain_elements(self) -> bool:
         return self._last_had_uncertain_elements
+
+    @property
+    def show_details(self) -> bool:
+        return self._show_details
+
+    @Slot(bool)
+    def set_show_details(self, enabled: bool) -> None:
+        """Show the technical read-outs (FPS bar, finger cards). Off: a clean picture with the skeleton."""
+        self._show_details = bool(enabled)
+        self.update()
 
     @Slot(bool)
     def set_mirrored(self, mirrored: bool) -> None:
@@ -191,11 +202,23 @@ class CameraPreviewWidget(QWidget):
         py = rect.top() + norm_y * rect.height()
         return QPointF(px, py)
 
+    def _frame_aspect(self) -> float:
+        f = self._frame
+        return f.width / f.height if f is not None and f.width > 0 and f.height > 0 else 4.0 / 3.0
+
+    def canvas_rect_for(self, full_rect: QRectF) -> QRectF:
+        """Largest rect with the camera's aspect below the top bar: the picture is never stretched."""
+        top = 44.0 if self._show_details else 6.0
+        area = QRectF(full_rect.left() + 8.0, full_rect.top() + top, max(60.0, full_rect.width() - 16.0),
+                      max(60.0, full_rect.height() - top - 6.0))
+        aspect = self._frame_aspect()
+        w = min(area.width(), area.height() * aspect)
+        h = w / aspect
+        return QRectF(area.center().x() - w / 2.0, area.center().y() - h / 2.0, w, h)
+
     def _canvas_rect(self) -> QRectF:
-        top_bar_h = 38.0
-        w = max(100.0, float(self.width()))
-        h = max(100.0, float(self.height()))
-        return QRectF(8.0, top_bar_h + 6.0, w - 16.0, h - top_bar_h - 14.0)
+        return self.canvas_rect_for(QRectF(0.0, 0.0, max(100.0, float(self.width())),
+                                           max(100.0, float(self.height()))))
 
     def render_to_image(self, width: int = 640, height: int = 480) -> QImage:
         """Render the preview directly into an offscreen QImage (useful for tests)."""
@@ -224,14 +247,10 @@ class CameraPreviewWidget(QWidget):
         self._last_had_uncertain_elements = False
 
         top_bar = QRectF(full_rect.left() + 8.0, full_rect.top() + 6.0, full_rect.width() - 16.0, 32.0)
-        canvas = QRectF(
-            full_rect.left() + 8.0,
-            top_bar.bottom() + 6.0,
-            full_rect.width() - 16.0,
-            max(60.0, full_rect.height() - top_bar.height() - 18.0),
-        )
+        canvas = self.canvas_rect_for(full_rect)
 
-        self._draw_top_hud(painter, top_bar)
+        if self._show_details:
+            self._draw_top_hud(painter, top_bar)
         self._draw_canvas_background(painter, canvas)
 
         if self._frame is None or len(self._frame.hands) == 0:
@@ -245,7 +264,8 @@ class CameraPreviewWidget(QWidget):
         for idx, hand in enumerate(hands):
             self._last_rendered_hand_count += 1
             self._draw_hand_skeleton(painter, canvas, hand, self._frame.identity_ambiguous)
-            self._draw_hand_info_card(painter, canvas, hand, idx, self._frame.identity_ambiguous)
+            if self._show_details:
+                self._draw_hand_info_card(painter, canvas, hand, idx, self._frame.identity_ambiguous)
 
     def _draw_top_hud(self, painter: QPainter, rect: QRectF) -> None:
         painter.setPen(Qt.PenStyle.NoPen)
@@ -302,6 +322,7 @@ class CameraPreviewWidget(QWidget):
                 painter.restore()
             else:
                 painter.drawImage(canvas, self._camera_image)
+            return
 
         # Subtle center guide lines
         grid_pen = QPen(QColor(38, 45, 58), 1.0, Qt.PenStyle.DotLine)
@@ -424,7 +445,7 @@ class CameraPreviewWidget(QWidget):
             # Label above wrist/palm
             hand_label = HANDEDNESS_LABELS_TR.get(hand.handedness, "Belirsiz El")
             qual_label = QUALITY_LABELS_TR.get(hand.quality, "Belirsiz")
-            tag_text = f"{hand_label} (#{hand.hand_id}) [{qual_label}]"
+            tag_text = f"{hand_label} (#{hand.hand_id}) [{qual_label}]" if self._show_details else hand_label
             font = QFont("Segoe UI", 9)
             font.setBold(True)
             painter.setFont(font)

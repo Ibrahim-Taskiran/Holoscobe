@@ -1,6 +1,8 @@
 """Free layout ("Serbest teller"): the user draws, moves, resizes, stacks and deletes strings by pinching."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from handcontrol.config import validate
@@ -82,6 +84,52 @@ def test_pinch_hold_and_pull_draws_a_string_that_then_plays():
     notes = [e for e in events if isinstance(e, NoteOn)]
     assert len(notes) == 1 and notes[0].midi == 52.0
     assert clock.step(eng, hand(2, Handedness.RIGHT, (300.0, 260.0)))[1].status == STATUS_READY
+
+
+def degraded(h: HandFeatures) -> HandFeatures:
+    return replace(h, quality=Quality.DEGRADED)
+
+
+@pytest.mark.parametrize("glitch", ["missing", "degraded", "ambiguous", "new_id"])
+def test_short_tracking_failures_do_not_cut_a_string(glitch):
+    eng, clock = engine(), Clock()
+    R = Handedness.RIGHT
+    for _ in range(14):
+        clock.step(eng, hand(2, R, (100.0, 200.0), pinch=True))
+    for p in line((100.0, 200.0), (300.0, 200.0)):
+        clock.step(eng, hand(2, R, p, pinch=True))
+    hid = 2
+    if glitch == "missing":
+        for _ in range(5):
+            assert clock.step(eng)[1].adjusting
+    elif glitch == "degraded":
+        for _ in range(12):
+            assert clock.step(eng, degraded(hand(2, R, (300.0, 200.0), pinch=True)))[1].adjusting
+    elif glitch == "ambiguous":
+        for _ in range(4):
+            clock.t += 33.0
+            assert eng.update(replace(frame(clock.t, hand(2, R, (300.0, 200.0), pinch=True)),
+                                      identity_ambiguous=True), True)[1].adjusting
+    else:
+        hid = 7
+        assert clock.step(eng, hand(7, R, (306.0, 200.0), pinch=True))[1].adjusting
+    for p in line((300.0, 200.0), (500.0, 200.0)):
+        clock.step(eng, hand(hid, R, p, pinch=True))
+    clock.step(eng, hand(hid, R, (500.0, 200.0)))
+    assert len(eng.free_strings) == 1
+    assert eng.free_strings[0][0] == pytest.approx(100.0 / W, abs=0.01)
+    assert eng.free_strings[0][2] == pytest.approx(500.0 / W, abs=0.01)
+
+
+def test_a_long_loss_drops_the_string_where_it_is():
+    eng, clock = engine(), Clock()
+    for _ in range(14):
+        clock.step(eng, hand(2, Handedness.RIGHT, (100.0, 200.0), pinch=True))
+    for p in line((100.0, 200.0), (300.0, 200.0)):
+        clock.step(eng, hand(2, Handedness.RIGHT, p, pinch=True))
+    for _ in range(10):
+        _, view = clock.step(eng)
+    assert not view.adjusting and len(eng.free_strings) == 1
 
 
 def test_without_snap_the_string_stays_where_it_was_dropped():

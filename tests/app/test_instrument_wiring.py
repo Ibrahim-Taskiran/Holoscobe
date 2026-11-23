@@ -104,7 +104,7 @@ def make_runtime(qt, *, audio_ok=True, settings=None, notes=None):
     displays.start = Mock()
     displays.close = Mock()
     notes = notes if notes is not None else []
-    store = SimpleNamespace(load=lambda: settings or Settings(), save=Mock())
+    store = SimpleNamespace(load=lambda: settings or Settings(instrument_layout="solo"), save=Mock())
 
     def factory(rt):
         return InstrumentRuntime(rt.pipeline, rt.settings, bridge=rt.bridge, notify=notes.append,
@@ -195,16 +195,25 @@ def test_strikes_reach_audio_and_view_while_sink_gets_no_input(qt):
         rt.close()
 
 
-def test_audio_failure_notifies_pauses_and_leaves_the_mode(qt):
+def test_audio_failure_keeps_the_strings_notifies_once_and_retries(qt):
     rt, notes = make_runtime(qt, audio_ok=False)
     try:
         activate_instrument(rt)
         QApplication.processEvents()
+        ins = rt.instrument
         snap = rt.pipeline.controller.snapshot()
-        assert snap.mode is Mode.POINTER and snap.state is ControlState.PAUSED
-        assert rt.instrument.audio is None
-        assert len(notes) == 1 and "Ses çıkışı açılamadı" in notes[0] and "Enstrüman modu kapatıldı" in notes[0]
-        assert rt.instrument.window is None or not rt.instrument.window.visible
+        assert snap.mode is Mode.INSTRUMENT and snap.state is ControlState.ACTIVE
+        assert ins.audio is None and ins.window.visible and ins.window.views
+        assert len(notes) == 1 and "Ses çıkışı açılamadı" in notes[0]
+        assert ins._retry.isActive()
+        ins._retry_audio()                                    # still broken: no second toast
+        assert len(notes) == 1 and ins._retry.isActive()
+        ins._audio_factory = lambda synth, s, err: FakeAudio(synth, s, err)
+        ins._retry_audio()                                    # device is back
+        assert ins.audio.running
+        rt.pipeline.set_mode(Mode.POINTER)
+        QApplication.processEvents()
+        assert ins.audio is None and not ins._retry.isActive()
     finally:
         rt.close()
 
@@ -219,8 +228,75 @@ def test_audio_device_error_while_playing(qt):
         audio.on_error("Ses cihazı hatası: çıkarıldı")    # a second report is ignored
         QApplication.processEvents()
         snap = rt.pipeline.controller.snapshot()
-        assert snap.mode is Mode.POINTER and snap.state is ControlState.PAUSED and audio.stopped >= 1
-        assert len(notes) == 1
+        assert snap.mode is Mode.INSTRUMENT and audio.stopped >= 1 and rt.instrument.audio is None
+        assert rt.instrument._retry.isActive() and len(notes) == 1
+    finally:
+        rt.close()
+
+
+def test_choosing_the_instrument_starts_it_even_before_the_camera_runs(qt):
+    """Regression: the first opening showed no (or dead) strings because control was still paused."""
+    cam = SimpleNamespace(loop=SimpleNamespace(on_image=None, stop=Mock()), camera=Mock(), start=Mock())
+    rt, _ = make_runtime(qt, settings=Settings(instrument_free_strings=[[0.1, 0.2, 0.5, 0.2]]))
+    try:
+        rt.camera_factory = lambda pipeline, start=False: cam
+        rt.bridge.select_mode(Mode.INSTRUMENT)
+        QApplication.processEvents()
+        assert cam.start.called                                             # camera was off: started
+        assert rt.pipeline.controller.snapshot().state is ControlState.PAUSED
+        assert len(rt.instrument.window.views[-1].strings) == 1             # saved strings at once, no frame needed
+        rt.pipeline.set_camera_state(CameraState.RUNNING)
+        QApplication.processEvents()
+        assert rt.pipeline.controller.snapshot().state is ControlState.ACTIVE
+        rt.pipeline.pause("test")                                           # an explicit pause stays paused
+        QApplication.processEvents()
+        assert rt.pipeline.controller.snapshot().state is ControlState.PAUSED
+    finally:
+        rt.close()
+
+
+def test_pending_start_is_cancelled_by_another_mode_or_emergency(qt):
+    rt, _ = make_runtime(qt)
+    try:
+        rt.camera = SimpleNamespace(loop=Mock(), camera=Mock())
+        for cancel in (lambda: rt.bridge.select_mode(Mode.POINTER), rt._emergency):
+            rt.bridge.select_mode(Mode.INSTRUMENT)
+            cancel()
+            rt.pipeline.set_camera_state(CameraState.RUNNING)
+            QApplication.processEvents()
+            assert rt.pipeline.controller.snapshot().state is ControlState.PAUSED
+            rt.pipeline.set_camera_state(CameraState.OFF)
+            rt.pipeline.set_mode(Mode.POINTER)
+            QApplication.processEvents()
+    finally:
+        rt.close()
+
+
+def test_default_instrument_mode_waits_for_the_main_window(qt):
+    """Regression: with default mode = Enstrüman the runtime opened its own window before the main one."""
+    rt, _ = make_runtime(qt, settings=Settings(default_mode="instrument"))
+    try:
+        assert rt.instrument.window is None
+        page = FakeWindow(None)
+        rt.instrument.attach(page)
+        QApplication.processEvents()
+        assert rt.instrument.window is page and not page.visible            # a page, never shown on its own
+        assert page.views and rt.instrument.audio.running
+    finally:
+        rt.close()
+
+
+def test_instrument_bar_changes_apply_without_pausing(qt):
+    rt, _ = make_runtime(qt)
+    try:
+        activate_instrument(rt)
+        seen = []
+        rt.settings_changed.connect(seen.append)
+        rt.update_instrument({"instrument_layout": "free", "instrument_volume": 0.8, "instrument_tone": "electric"})
+        ins = rt.instrument
+        assert ins.engine.config.layout == "free" and ins.audio.volume == 0.8 and ins.audio.tone == "electric"
+        assert rt.settings.instrument_layout == "free" and rt.store.save.called and seen == [rt.settings]
+        assert rt.pipeline.controller.snapshot().state is ControlState.ACTIVE
     finally:
         rt.close()
 

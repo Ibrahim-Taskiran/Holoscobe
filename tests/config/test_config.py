@@ -246,7 +246,7 @@ def test_schema3_file_migrates_losslessly_to_schema4(tmp_path):
     for key, value in v3.items():
         if key != "schema_version":
             assert got[key] == value, key
-    assert (s.instrument_layout, s.instrument_scale, s.instrument_quantize) == ("solo", "e_minor_pentatonic", True)
+    assert (s.instrument_layout, s.instrument_scale, s.instrument_quantize) == ("free", "e_minor_pentatonic", True)
     assert s.instrument_chords == ["Em", "C", "G", "D"] and s.instrument_volume == 0.5
     assert (s.instrument_tone, s.audio_device, s.audio_latency, s.instrument_particles) == ("clean", "", "low", True)
 
@@ -268,7 +268,7 @@ def test_schema4_instrument_fields_validate_and_round_trip(tmp_path):
                     "instrument_chords": ["Am", "X#", 5], "instrument_volume": 7, "instrument_tone": None,
                     "audio_device": 12, "audio_latency": "ultra", "instrument_particles": "yes"})
     d = Settings()
-    assert (bad.instrument_layout, bad.instrument_scale, bad.instrument_quantize) == ("solo", d.instrument_scale, True)
+    assert (bad.instrument_layout, bad.instrument_scale, bad.instrument_quantize) == ("free", d.instrument_scale, True)
     assert bad.instrument_chords == ["Am", "C", "G", "D"] and bad.instrument_volume == 1.0
     assert (bad.instrument_tone, bad.audio_device, bad.audio_latency, bad.instrument_particles) == ("clean", "", "low", True)
     assert validate({"instrument_volume": -1}).instrument_volume == 0.0

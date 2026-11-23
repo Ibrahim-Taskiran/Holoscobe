@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from handcontrol.app import STATUS_HINT_TR, settings_to_dialog_data
+from handcontrol.app import settings_to_dialog_data
 from handcontrol.config import validate
+from handcontrol.ui.main_window import CONTROL_HINT_TR
 
 
 def test_settings_dialog_receives_every_stored_value() -> None:
@@ -21,5 +22,5 @@ def test_settings_dialog_defaults_round_trip() -> None:
 
 
 def test_status_hint_describes_pinch_clicks() -> None:
-    assert 'pinch' in STATUS_HINT_TR and 'sağ tık' in STATUS_HINT_TR
-    assert 'öne/geri' not in STATUS_HINT_TR
+    assert 'pinch' in CONTROL_HINT_TR and 'sağ tık' in CONTROL_HINT_TR
+    assert 'öne/geri' not in CONTROL_HINT_TR

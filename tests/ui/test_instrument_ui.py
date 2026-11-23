@@ -272,7 +272,7 @@ def test_settings_instrument_round_trip_and_reset() -> None:
 
     dlg.reset_to_defaults()
     reset = dlg.get_settings()
-    assert reset.instrument_layout == "solo"
+    assert reset.instrument_layout == "free"
     assert reset.instrument_scale == "e_minor_pentatonic"
     assert reset.instrument_quantize is True
     assert reset.instrument_chords == DEFAULT_CHORDS

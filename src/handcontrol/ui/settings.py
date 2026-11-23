@@ -148,7 +148,7 @@ class SettingsData:
     click_sound: bool = False
     cursor_feedback: bool = True                # hold ring next to the cursor
     # Schema 4 (Enstrüman). Names match config.Settings exactly.
-    instrument_layout: str = "solo"             # LAYOUTS
+    instrument_layout: str = "free"             # LAYOUTS
     instrument_scale: str = "e_minor_pentatonic"  # SCALE_NAMES
     instrument_quantize: bool = True
     instrument_chords: tuple[str, ...] = DEFAULT_CHORDS   # 4 zones, top first
@@ -966,7 +966,7 @@ class SettingsDialog(QDialog):
             dwell_ms=self.dwell_ms(),
             click_sound=bool(self.chk_click_sound.isChecked()),
             cursor_feedback=bool(self.chk_cursor_feedback.isChecked()),
-            instrument_layout=str(self.combo_instrument_layout.currentData() or "solo"),
+            instrument_layout=str(self.combo_instrument_layout.currentData() or "free"),
             instrument_scale=str(self.combo_instrument_scale.currentData() or "e_minor_pentatonic"),
             instrument_quantize=bool(self.chk_instrument_quantize.isChecked()),
             instrument_chords=_clean_chords([c.currentData() for c in self.combo_chords]),

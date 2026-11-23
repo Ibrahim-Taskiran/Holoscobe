@@ -1422,7 +1422,8 @@ class Controller:
         palm_uv = self._palm_uv(dom, frame) if dom is not None else None
         if self._menu is not None:
             self._menu_frame(frame, events, dom, palm_uv, now)
-        elif GestureKind.MENU_DWELL_COMPLETE in kinds and not self._need_neutral:
+        elif GestureKind.MENU_DWELL_COMPLETE in kinds and not self._need_neutral and not self._pinched:
+            # a pinching hand is drawing or moving a string: never interrupt it with the menu
             self._open_mode_menu(dom, palm_uv, now)
 
     def _pointer_geometry_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], now: float) -> bool:

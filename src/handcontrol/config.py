@@ -108,7 +108,7 @@ class Settings:
     cursor_feedback: bool = True          # progress ring next to the cursor for hold gestures
     onboarding_done: bool = False         # first-run tutorial finished or skipped
     # schema 4 (round 7, Enstrüman mode)
-    instrument_layout: str = "solo"       # "solo" (1 string, length = pitch) | "chord" (4 strings, strum)
+    instrument_layout: str = "free"       # "free" (user draws) | "fixed" | "solo" (length = pitch) | "chord"
     instrument_scale: str = "e_minor_pentatonic"
     instrument_quantize: bool = True      # True: pitch locked to the scale; False: continuous
     instrument_chords: list[str] = field(default_factory=lambda: list(DEFAULT_CHORDS))   # 4 vertical zones, top first

@@ -54,7 +54,7 @@ STATUS_UNCERTAIN = "Takip belirsiz"
 STATUS_NEED_HAND = "Elinizi gösterin"
 STATUS_ADJUSTING = "Teller taşınıyor"
 STATUS_EDITING = "Tel düzenleniyor"
-STATUS_NO_STRINGS = "Tel çizmek için çimdikle, tut ve çek"
+STATUS_NO_STRINGS = "Tel çizmek için çimdikle, basılı tut ve çek"
 STATUS_FULL = "En fazla 10 tel"
 
 
@@ -482,13 +482,16 @@ class InstrumentEngine:
 
         if not duplicate:
             pinches = []
-            for x in usable:
+            for x in frame.hands:        # a shaky hand may keep its pinch, only a USABLE one starts it
+                if not _scale_ok(x):
+                    continue
                 a, b = _px(x, THUMB_TIP, w, h), _px(x, INDEX_TIP, w, h)
                 if a is not None and b is not None and w > 0 and h > 0:
                     m = lerp(a, b, 0.5)
-                    pinches.append(HandPinch(x.hand_id, (m[0] / w, m[1] / h), float(x.pinch_distance)))
+                    pinches.append(HandPinch(x.hand_id, (m[0] / w, m[1] / h), float(x.pinch_distance),
+                                             x.quality is Quality.USABLE))
             self._edit = self._editor.step(self._free, pinches, t, aspect, cfg.free_snap,
-                                           allowed=active and not ambiguous and not gap)
+                                           allowed=active, uncertain=ambiguous or gap)
             if self._edit.committed:
                 self._free = self._edit.strings
                 self._cfg = replace(self._cfg, free_strings=self._free)   # survives reset()/all_off()
