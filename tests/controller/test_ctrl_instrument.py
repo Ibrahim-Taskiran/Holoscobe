@@ -196,7 +196,8 @@ def test_mode_menu_opens_and_leaves_instrument_then_pointer_works():
     r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     m = r.ctl.snapshot().menu
     assert m is not None and m.kind is MenuKind.MODE and len(m.items) == len(Mode)
-    assert m.items[-1].key == "instrument" and m.items[-1].label == "Enstrüman" and m.items[-1].selected
+    item = next(i for i in m.items if i.key == "instrument")
+    assert item.label == "Enstrüman" and item.selected
     r.frame(*_both(140.0))                                     # row 0 = pointer
     assert r.ctl.snapshot().menu.hovered == 0
     r.frame(*_both(140.0), events=[(G.PINCH_START, RIGHT)])

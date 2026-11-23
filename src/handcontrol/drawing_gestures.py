@@ -8,6 +8,7 @@ from .drawing import InkScene
 
 HOLD_MS = 450
 MAX_GAP_MS = 180
+CROSS_GRACE_MS = 120   # the pose model may miss single frames of a held X
 
 
 def crossed_forearms(points, aspect: float) -> bool:
@@ -50,6 +51,7 @@ class DrawingControls:
         self.tool = "carry"
         self.spinning = False
         self.cross_since = None
+        self.cross_seen = None
         self.last_time = None
         self.right_id = None
 
@@ -66,10 +68,14 @@ class DrawingControls:
         self.cursor, self.tool, self.spinning = None, "carry", False
         if getattr(frame, "forearms_crossed", False):
             self.scene.lift()
+            self.cross_seen = now
             if self.cross_since is None:
                 self.cross_since = now
             elif now - self.cross_since >= HOLD_MS:
                 self.scene.clear(now)
+            return
+        if self.cross_since is not None and now - self.cross_seen <= CROSS_GRACE_MS:
+            self.scene.lift()
             return
         self.cross_since = None
         if self.scene.clear_start is not None or frame.identity_ambiguous or min(frame.width, frame.height) <= 0:

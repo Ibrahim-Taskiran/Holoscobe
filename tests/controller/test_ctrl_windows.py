@@ -252,7 +252,7 @@ def test_mode_menu_opens_on_dwell_and_selects_mode():
     r.settle(*_both())
     r.frame(*_both(), events=[(G.MENU_DWELL_COMPLETE, LEFT)])
     m = r.ctl.snapshot().menu
-    assert m is not None and m.kind is MenuKind.MODE and len(m.items) == len(Mode) == 7  # round 7: INSTRUMENT appended
+    assert m is not None and m.kind is MenuKind.MODE and len(m.items) == len(Mode)
     e = r.ctl.current_epoch()
     r.frame(*_both(170.0))  # row 1 = scroll (round 7: 7 rows, was 192.0)
     assert r.ctl.snapshot().menu.hovered == 1

@@ -77,6 +77,7 @@ MODE_LABELS_TR: dict[Mode, str] = {
     Mode.WINDOWS: "Pencere",
     Mode.COMMANDS: "Komutlar",
     Mode.INSTRUMENT: "Enstrüman",
+    Mode.DRAWING: "Çizim",
 }
 
 # Short Turkish labels for contracts.KeyCommand values (keyed by value; ui never imports windows/).

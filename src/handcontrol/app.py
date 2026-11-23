@@ -366,14 +366,14 @@ class Runtime(QObject):
         """Mode picked with the mouse (window button or tray)."""
         self._auto_resume = False
         self.pipeline.set_mode(mode)
-        if mode is Mode.INSTRUMENT:
-            self.ensure_instrument_active()
+        if mode in (Mode.INSTRUMENT, Mode.DRAWING):
+            self.ensure_canvas_active()
 
-    def ensure_instrument_active(self):
-        """Choosing the instrument also starts it: this mode never sends OS input, so nothing can go wrong
-        on the desktop, and paused strings look like a broken mode."""
+    def ensure_canvas_active(self):
+        """Choosing the instrument or drawing also starts it: these modes never send OS input, so nothing can
+        go wrong on the desktop, and a paused canvas looks like a broken mode."""
         snap = self.pipeline.controller.snapshot()
-        if snap.mode is not Mode.INSTRUMENT or snap.state is not ControlState.PAUSED:
+        if snap.mode not in (Mode.INSTRUMENT, Mode.DRAWING) or snap.state is not ControlState.PAUSED:
             return
         if snap.camera_state is CameraState.RUNNING:
             self.pipeline.resume()
@@ -426,7 +426,7 @@ class Runtime(QObject):
 
     def _try_auto_resume(self):
         snap = self.pipeline.controller.snapshot()
-        if snap.mode is not Mode.INSTRUMENT or snap.state is ControlState.ACTIVE:
+        if snap.mode not in (Mode.INSTRUMENT, Mode.DRAWING) or snap.state is ControlState.ACTIVE:
             self._auto_resume = False
         elif snap.state is ControlState.PAUSED and snap.camera_state is CameraState.RUNNING:
             self._auto_resume = False
@@ -621,8 +621,8 @@ class Runtime(QObject):
             self.pipeline.gestures = GestureRecognizer(gesture_config(settings), dominant_of(settings))
             self.pipeline.request_gesture_reset(full=True)
             # Saving from the Enstrüman tab must not throw the user out of the instrument.
-            keep = previous_mode is Mode.INSTRUMENT
-            self.pipeline.set_mode(Mode.INSTRUMENT if keep else Mode(settings.default_mode))
+            keep = previous_mode in (Mode.INSTRUMENT, Mode.DRAWING)
+            self.pipeline.set_mode(previous_mode if keep else Mode(settings.default_mode))
         if self.instrument is not None:
             self.instrument.apply_settings(settings)
         if camera_was_running:
@@ -752,8 +752,9 @@ def main(argv=None) -> int:
     window.instrument_changed.connect(runtime.update_instrument)
     runtime.settings_changed.connect(window.apply_instrument_settings)
     if runtime.instrument is not None:
-        runtime.instrument.attach(window.instrument, window.preview)
+        runtime.instrument.attach(window.instrument, window.preview, window.drawing)
         window.free_strings_changed.connect(runtime.instrument.set_free_strings)
+    window.drawing.bind(runtime.pipeline)
     tray = HandControlTray(bridge, window)
     tray_ref.append(tray)
     tray.activated.connect(lambda reason: window.bring_up()
@@ -785,7 +786,7 @@ def main(argv=None) -> int:
         wire_settings_dialog(dialog)
         dialog.exec()
         if was_active:
-            runtime.ensure_instrument_active()     # Enstrüman only; other modes stay paused
+            runtime.ensure_canvas_active()     # Enstrüman/Çizim only; other modes stay paused
     onboarding_ref: list = []
     def open_onboarding():
         try:
@@ -831,7 +832,7 @@ def main(argv=None) -> int:
     if not args.live:
         panel.show()
     runtime.start_camera()
-    runtime.ensure_instrument_active()             # default mode = Enstrüman
+    runtime.ensure_canvas_active()             # default mode = Enstrüman or Çizim
     if not runtime.settings.onboarding_done:
         QTimer.singleShot(0, open_onboarding)
     try:

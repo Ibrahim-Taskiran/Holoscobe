@@ -224,6 +224,10 @@ class GestureRecognizer:
                 prev_t = None
         self._last_t = t
 
+        if getattr(frame, "forearms_crossed", False):
+            self._drop_all(t, forced)
+            return forced
+
         gap_ok = prev_t is None or t - prev_t <= cfg.clap_max_frame_interval_ms
         ids = [h.hand_id for h in frame.hands]
         if frame.identity_ambiguous or len(ids) != len(set(ids)):

@@ -118,6 +118,7 @@ MODE_ICON_COLORS: dict[Mode, QColor] = {
     Mode.VOLUME: QColor(178, 132, 255),
     Mode.WINDOWS: QColor(240, 148, 72),
     Mode.COMMANDS: QColor(236, 94, 140),
+    Mode.DRAWING: QColor(94, 83, 164),
     Mode.INSTRUMENT: QColor(38, 198, 218),
 }
 
@@ -168,6 +169,10 @@ def create_mode_pixmap(mode: Mode, size: int = 32) -> QPixmap:
         p.drawRoundedRect(QRectF(s * 0.18, s * 0.30, s * 0.64, s * 0.40), s * 0.08, s * 0.08)
         p.drawPolyline([pt(0.40, 0.42), pt(0.30, 0.50), pt(0.40, 0.58)])
         p.drawPolyline([pt(0.60, 0.42), pt(0.70, 0.50), pt(0.60, 0.58)])
+    elif mode == Mode.DRAWING:
+        p.drawLine(pt(0.46, 0.55), pt(0.76, 0.24))
+        p.setBrush(QColor(255, 255, 255))
+        p.drawPolygon([pt(0.28, 0.74), pt(0.35, 0.53), pt(0.44, 0.50), pt(0.49, 0.59), pt(0.43, 0.70)])
     elif mode == Mode.INSTRUMENT:
         # Guitar body (two circles), neck and three strings.
         p.setBrush(QColor(255, 255, 255))

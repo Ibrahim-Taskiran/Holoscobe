@@ -10,6 +10,12 @@ WORK_DEPTH = 0.075
 ERASER_RADIUS = 0.038
 CLEAR_MS = 1750.0
 SPACING = 0.005
+MAX_DABS = 4000        # repaint budget while spinning (about 22 ms): 18 camera widths of stroke, oldest ink goes first
+
+
+def projected_y(y: float, depth: float) -> float:
+    """A slightly elevated view reveals the rear arc of a level ring. The work plane maps 1:1."""
+    return y - 0.24 * (depth - WORK_DEPTH)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +37,7 @@ class InkScene:
     def __init__(self, seed: int = 72):
         self.dabs: list[Dab] = []
         self.angle = 0.0
+        self.revision = 0        # bumped whenever existing ink goes away (appending does not count)
         self.clear_start: float | None = None
         self._rng = random.Random(seed)
         self._last: tuple[float, float, float] | None = None
@@ -48,10 +55,14 @@ class InkScene:
     def advance(self, now: float):
         if self.clear_start is not None and now - self.clear_start >= CLEAR_MS:
             self.dabs.clear()
+            self.revision += 1
             self.clear_start = None
 
     def _stamp(self, x, y, z, radius, stretch, now):
         self.dabs.append(Dab(x, y, z, radius, stretch, now, self._rng.random()))
+        if len(self.dabs) > MAX_DABS:
+            del self.dabs[:MAX_DABS // 20]
+            self.revision += 1
 
     def _ink(self, x, y, z, now, first):
         r = self._rng
@@ -105,9 +116,13 @@ class InkScene:
             px, depth = turn(d.x, d.z, c, s)
             if abs(depth - WORK_DEPTH) > 0.009:
                 return False
-            t = min(1.0, max(0.0, ((px-ax)*dx + (d.y-ay)*dy)/length2)) if length2 else 0.0
+            py = projected_y(d.y, depth)
+            t = min(1.0, max(0.0, ((px-ax)*dx + (py-ay)*dy)/length2)) if length2 else 0.0
             # The elongated body of a drip is pickable along its full height.
-            ry = max(0.0, abs(d.y - ay - t*dy) - d.radius * max(0.0, d.stretch - 1))
+            ry = max(0.0, abs(py - ay - t*dy) - d.radius * max(0.0, d.stretch - 1))
             return math.hypot(px - ax - t*dx, ry) <= ERASER_RADIUS + d.radius
 
-        self.dabs = [d for d in self.dabs if not hit(d)]
+        kept = [d for d in self.dabs if not hit(d)]
+        if len(kept) != len(self.dabs):
+            self.dabs = kept
+            self.revision += 1

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from handcontrol.contracts import CameraState, ControlState, Mode
 from handcontrol.instrument.events import FIXED_STRINGS_RANGE, TONES
+from handcontrol.ui.drawing_view import DRAWING_HINT_TR, DrawingView
 from handcontrol.ui.instrument_view import FIXED_HINT_TR, FREE_HINT_TR, LAYOUT_LABELS_TR, InstrumentWindow
 from handcontrol.ui.preview import CameraPreviewWidget
 from handcontrol.ui.settings import INSTRUMENT_TONE_LABELS_TR
@@ -97,9 +98,11 @@ class MainWindow(QMainWindow):
         self.preview = CameraPreviewWidget(bridge)
         self.preview.set_show_details(False)
         self.instrument = InstrumentWindow(bridge)
+        self.drawing = DrawingView()
         self.stack = QStackedWidget()
         self.stack.addWidget(self.preview)
         self.stack.addWidget(self.instrument)
+        self.stack.addWidget(self.drawing)
         column.addWidget(self.stack, 1)
         self.hint = QLabel()
         self.hint.setObjectName("hint")
@@ -219,21 +222,26 @@ class MainWindow(QMainWindow):
         self.status.setText(f'<span style="color:{color}">●</span> {state.control_state_label_tr} · '
                             f'Kamera: {state.camera_state_label_tr}')
         instrument = state.mode is Mode.INSTRUMENT
+        drawing = state.mode is Mode.DRAWING
+        self.drawing.set_state(state)
         self._show_hint(state)
         if state.mode is self._mode:
             return
-        entered = instrument and self._mode is not None
+        entered = (drawing or instrument) and self._mode is not None
         self._mode = state.mode
         self.mode_buttons[state.mode].setChecked(True)
         self.instrument_bar.setVisible(instrument)
-        self.details_button.setVisible(not instrument)
-        self.stack.setCurrentWidget(self.instrument if instrument else self.preview)
+        self.details_button.setVisible(not (drawing or instrument))
+        page = {Mode.DRAWING: self.drawing, Mode.INSTRUMENT: self.instrument}.get(state.mode, self.preview)
+        self.stack.setCurrentWidget(page)
         if entered:
             self.bring_up(focus=False)
 
     def _show_hint(self, state: UiState) -> None:
         tip = (f"{INSTRUMENT_HINTS_TR.get(self._layout, '')}  ·  {BACK_HINT_TR}"
                if state.mode is Mode.INSTRUMENT else CONTROL_HINT_TR)
+        if state.mode is Mode.DRAWING:
+            tip = DRAWING_HINT_TR
         self.hint.setText(state.error_text or tip)
 
     @Slot()

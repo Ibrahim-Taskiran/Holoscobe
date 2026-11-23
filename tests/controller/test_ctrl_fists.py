@@ -23,8 +23,8 @@ def hold(r, hid=RIGHT, frames=13):
         r.frame(fist(hid))
 
 
-# INSTRUMENT sends no OS input at all (fists included): covered by test_ctrl_instrument.py
-@pytest.mark.parametrize('mode', [m for m in Mode if m is not Mode.INSTRUMENT])
+# INSTRUMENT and DRAWING send no OS input at all (fists included): test_ctrl_instrument.py, test_drawing_app.py
+@pytest.mark.parametrize('mode', [m for m in Mode if m not in (Mode.INSTRUMENT, Mode.DRAWING)])
 def test_right_minimizes_once_and_left_restores_same_target(mode):
     r = Rig()
     r.ctl.set_mode(mode)

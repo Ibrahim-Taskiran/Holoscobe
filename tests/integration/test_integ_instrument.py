@@ -89,7 +89,7 @@ def test_mode_menu_leaves_instrument_and_profile_follows():
     rig = instrument_rig()
     rig.run(900, [right(2.6, POINT), string_hand(OPEN)])             # non-dominant open palm held still
     menu = rig.ctl.snapshot().menu
-    assert menu is not None and menu.items[-1].key == "instrument"
+    assert menu is not None and any(i.key == "instrument" and i.selected for i in menu.items)
     # move the right palm up: row 0 = pointer
     rig.run(200, lambda u: [right(2.6, POINT, lerp(300, 200, u)), string_hand(FIST)])
     menu = rig.ctl.snapshot().menu

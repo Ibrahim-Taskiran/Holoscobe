@@ -275,7 +275,7 @@ class Pipeline:
             mode = self._seen[1]
         setter = getattr(self.gestures, "set_instrument_profile", None)
         if setter is not None:
-            setter(mode is Mode.INSTRUMENT)
+            setter(mode in (Mode.INSTRUMENT, Mode.DRAWING))
 
     def _take_pending_reset(self) -> list[GestureEvent]:
         with self._flag_lock:
@@ -374,7 +374,8 @@ def run_camera_pipeline(
             kwargs["capture_factory"] = capture_factory
         camera = Camera(cfg, **kwargs)
     if tracker is None:
-        tracker = HandTracker(clock=clk, swap_handedness=swap_handedness)
+        tracker = HandTracker(clock=clk, swap_handedness=swap_handedness,
+                              pose_enabled=lambda: pipeline.controller.snapshot().mode is Mode.DRAWING)
 
     def on_loop_error(message: str) -> None:
         pipeline.set_camera_state(CameraState.ERROR)

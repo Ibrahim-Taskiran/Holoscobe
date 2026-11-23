@@ -384,6 +384,7 @@ _MODE_LABELS = {
     Mode.WINDOWS: "Pencereler",
     Mode.COMMANDS: "Komutlar",
     Mode.INSTRUMENT: "Enstrüman",
+    Mode.DRAWING: "Çizim",
 }
 _WINDOW_ACTIONS = {
     "minimize": ActionKind.WINDOW_MINIMIZE,
@@ -872,8 +873,8 @@ class Controller:
         self._dwell.cancel()
         if mode is Mode.COMMANDS:
             self._profile_active = self._command_profile()
-        if mode is Mode.INSTRUMENT:
-            # audio-only mode: free every app-owned input on entry, held or not
+        if mode in (Mode.INSTRUMENT, Mode.DRAWING):
+            # no-OS-input mode: free every app-owned input on entry, held or not
             self._index_tap.reset()
             self._reset_mouse_memory()
             self._reset_fists()
@@ -1124,8 +1125,8 @@ class Controller:
     def _dispatch(self, kind: ActionKind, capture_ms: float, *, x: Optional[int] = None, y: Optional[int] = None,
                   steps: int = 0, value: float = 0.0, target: Optional[WindowTarget] = None,
                   command: str = "") -> bool:
-        if self._mode is Mode.INSTRUMENT:
-            return False   # defence in depth: INSTRUMENT never sends OS input (RELEASE_ALL uses _release)
+        if self._mode in (Mode.INSTRUMENT, Mode.DRAWING):
+            return False   # defence in depth: these modes never send OS input (RELEASE_ALL uses _release)
         ok = self._guard.dispatch(Action(kind, self._epoch, capture_ms, x=x, y=y, steps=steps, value=value,
                                          target=target, command=command))
         if ok:
@@ -1208,14 +1209,18 @@ class Controller:
         if self._state is not ControlState.ACTIVE:
             return
         stale = now - frame.capture_ms > self._cfg.stale_ms
+        if not stale and self._mode is Mode.DRAWING and getattr(frame, "forearms_crossed", False):
+            self._hand_seen_ms = now
+            self.watchdog.feed(frame.capture_ms)
+            return
         if not stale and any(h.quality is Quality.USABLE for h in frame.hands):
             self._hand_seen_ms = now
         elif self._auto_pause_check(now):
             return
         self._expire_menu(now)
 
-        if self._mode is Mode.INSTRUMENT:   # explicit early branch: no other mode's code runs here
-            self._instrument_frame(frame, events, kinds, stale, now)
+        if self._mode in (Mode.INSTRUMENT, Mode.DRAWING):   # explicit early branch: no other mode's code runs here
+            self._canvas_frame(frame, events, kinds, stale, now)
             return
 
         certain = not stale and not frame.identity_ambiguous
@@ -1384,10 +1389,11 @@ class Controller:
             if not self._middle.pinched and self._middle.distance >= open_pu:
                 self._open_ptr["middle"] = (frame.capture_ms, self._pointer)
 
-    def _instrument_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], kinds: set[GestureKind],
-                          stale: bool, now: float) -> None:
-        """INSTRUMENT mode (ACTIVE): a separate engine turns the frames into sound. The controller only
-        keeps loss / neutral bookkeeping and the mode menu, so the user can leave the mode. Nothing
+    def _canvas_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], kinds: set[GestureKind],
+                      stale: bool, now: float) -> None:
+        """INSTRUMENT and DRAWING (ACTIVE): a separate engine turns the frames into sound or ink. The
+        controller only keeps loss / neutral bookkeeping and the INSTRUMENT mode menu (in DRAWING the
+        open left palm spins the scene, so the mode is left with the window buttons or tray). Nothing
         here dispatches OS input; only resets (RELEASE_ALL) reach the sink."""
         self._index_tap.reset()
         self._middle.reset()
@@ -1422,7 +1428,8 @@ class Controller:
         palm_uv = self._palm_uv(dom, frame) if dom is not None else None
         if self._menu is not None:
             self._menu_frame(frame, events, dom, palm_uv, now)
-        elif GestureKind.MENU_DWELL_COMPLETE in kinds and not self._need_neutral and not self._pinched:
+        elif (self._mode is Mode.INSTRUMENT and GestureKind.MENU_DWELL_COMPLETE in kinds
+              and not self._need_neutral and not self._pinched):
             # a pinching hand is drawing or moving a string: never interrupt it with the menu
             self._open_mode_menu(dom, palm_uv, now)
 
