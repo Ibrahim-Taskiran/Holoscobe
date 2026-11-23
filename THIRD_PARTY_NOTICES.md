@@ -16,6 +16,7 @@ The project's own source license is NOT chosen yet (spec §3: confirm before pub
 | Artifact | Version | License | Evidence | Ship? |
 |---|---|---|---|---|
 | hand_landmarker.task (HandLandmarker full, float16) | float16/1, GCS generation 1682480004222387 | Apache-2.0 | Official model card "MediaPipe Hands (Lite/Full)" p.2 "LICENSED UNDER Apache License, Version 2.0", linked from the official Hand Landmarker docs "Models" table. Details: `assets/model_manifest.json` | License permits redistribution. Release bundling HELD until the SHA-256 is independently reviewed; setup downloads it meanwhile. |
+| pose_landmarker_lite.task (MediaPipe Pose Landmarker Lite) | float16/1 | Apache-2.0 | [Publisher model card](https://huggingface.co/litert-community/MediaPipe-PoseLandmarker-Lite) | Bundle with the model notices. |
 
 ## Python packages (35, incl. transitive; updated 2026-11-22 for Enstrüman mode)
 

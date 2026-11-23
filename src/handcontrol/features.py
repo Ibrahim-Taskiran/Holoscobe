@@ -24,6 +24,7 @@ from handcontrol.contracts import (
     FingerName,
     FingerState,
     FrameFeatures,
+    PoseFrameFeatures,
     FrameSample,
     HandFeatures,
     HandSample,
@@ -219,7 +220,7 @@ class FeatureExtractor:
             valid = False
         if not valid:
             self.last_frame_reasons = ("invalid_sample",)
-            return self._tagged(FrameFeatures(sample.capture_ms, sample.inference_done_ms, w, h, (), False))
+            return self._frame(sample, (), False)
 
         self._tracks = [tr for tr in self._tracks if t - tr.last_seen_ms <= cfg.track_memory_ms]
 
@@ -292,8 +293,13 @@ class FeatureExtractor:
 
         out.sort(key=lambda f: f.hand_id)
         self.last_frame_reasons = tuple(dict.fromkeys(frame_reasons))
-        return self._tagged(FrameFeatures(sample.capture_ms, sample.inference_done_ms, w, h, tuple(out),
-                                          frame_ambiguous))
+        return self._frame(sample, tuple(out), frame_ambiguous)
+
+    def _frame(self, sample, hands, ambiguous):
+        args = (sample.capture_ms, sample.inference_done_ms, sample.width, sample.height, hands, ambiguous)
+        if sample.forearms_crossed is None:
+            return self._tagged(FrameFeatures(*args))
+        return self._tagged(PoseFrameFeatures(*args, sample.forearms_crossed))
 
     def _tagged(self, ff: FrameFeatures) -> FrameFeatures:
         """Attach the reason codes as a non-field attribute (ignored by ==, repr and the contract)."""

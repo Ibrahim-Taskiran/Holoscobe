@@ -107,6 +107,7 @@ class FrameSample:
     width: int
     height: int
     hands: tuple[HandSample, ...]           # 0..2, no stable identity yet
+    forearms_crossed: Optional[bool] = None  # None when pose tracking is unavailable or disabled
 
 
 # ---------- features output (features.py produces) ----------
@@ -139,6 +140,11 @@ class FrameFeatures:
     height: int
     hands: tuple[HandFeatures, ...]
     identity_ambiguous: bool                # True -> consumers reset continuous actions
+
+
+@dataclass(frozen=True)
+class PoseFrameFeatures(FrameFeatures):
+    forearms_crossed: bool
 
 
 # ---------- gesture output (gestures.py produces) ----------

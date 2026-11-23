@@ -27,6 +27,18 @@
       "intended_use_notes": "Model card lists 'Gesture recognition' and 'Hand control' as intended domains; surveillance/identity recognition out of scope.",
       "redistribution_status": "permitted by license evidence (Apache-2.0: ship LICENSE text + attribution); bundling in release builds approved 2026-11-18 by the project manager after re-verification; the build fails if the bundled file does not match sha256. Source setup still downloads from the official URL.",
       "retrieved": "2026-11-12"
+    },
+    {
+      "id": "pose_landmarker_lite",
+      "name": "MediaPipe Pose Landmarker Lite",
+      "local_path": "assets/models/pose_landmarker_lite.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      "version": "float16/1",
+      "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+      "license": "Apache-2.0",
+      "license_source": "https://huggingface.co/litert-community/MediaPipe-PoseLandmarker-Lite",
+      "sha256_status": "Computed from the versioned official download",
+      "redistribution_status": "See the model card and THIRD_PARTY_NOTICES.md"
     }
   ]
 }

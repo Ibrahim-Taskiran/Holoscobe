@@ -4,6 +4,7 @@ mediapipe / numpy / cv2 are imported lazily; tests inject ``landmarker_factory``
 """
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import time
@@ -99,6 +100,7 @@ class HandTracker:
         presence_confidence: Optional[float] = None,
         tracking_confidence: Optional[float] = None,
         swap_handedness: bool = False,
+        pose_enabled: Optional[Callable[[], bool]] = None,
     ) -> None:
         """``confidence`` sets all three thresholds; the specific arguments override it.
 
@@ -115,6 +117,9 @@ class HandTracker:
         self._presence = self._pick(presence_confidence, confidence, DEFAULT_PRESENCE_CONFIDENCE)
         self._tracking = self._pick(tracking_confidence, confidence, DEFAULT_TRACKING_CONFIDENCE)
         self._swap = swap_handedness
+        self._pose_enabled = pose_enabled
+        self._pose = None
+        self._pose_failed = False
         self._landmarker: Any = None
         self._last_ts = -1
 
@@ -145,6 +150,10 @@ class HandTracker:
             )
 
     def close(self) -> None:
+        if self._pose is not None:
+            self._pose.close()
+            self._pose = None
+        self._pose_failed = False
         lm, self._landmarker = self._landmarker, None
         if lm is not None:
             try:
@@ -167,13 +176,34 @@ class HandTracker:
         ts = self._next_timestamp(capture_ms)
         result = self._landmarker.detect_for_video(image, ts)
         hands = self._convert(result)
+        crossed = None
+        if self._pose_enabled and self._pose_enabled() and not self._pose_failed:
+            crossed = self._crossed(image, ts, width / max(1, height))
         return FrameSample(
             capture_ms=capture_ms,
             inference_done_ms=self._clock.now_ms(),
             width=width,
             height=height,
             hands=hands,
+            forearms_crossed=crossed,
         )
+
+    def _crossed(self, image, ts, aspect):
+        from .drawing_gestures import crossed_forearms
+        try:
+            if self._pose is None:
+                from mediapipe.tasks.python import BaseOptions, vision
+                path = project_root() / "assets/models/pose_landmarker_lite.task"
+                options = vision.PoseLandmarkerOptions(
+                    base_options=BaseOptions(model_asset_buffer=path.read_bytes()),
+                    running_mode=vision.RunningMode.VIDEO)
+                self._pose = vision.PoseLandmarker.create_from_options(options)
+            poses = self._pose.detect_for_video(image, ts).pose_landmarks
+            return bool(poses and crossed_forearms(poses[0], aspect))
+        except Exception:
+            logging.getLogger(__name__).exception("Drawing arm tracking unavailable")
+            self._pose_failed = True
+            return None
 
     def _convert(self, result: Any) -> tuple[HandSample, ...]:
         lms = getattr(result, "hand_landmarks", None) or []

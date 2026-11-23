@@ -15,14 +15,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.lock
       - run: python -m pip install --require-hashes -r requirements.lock
-      # The hand model is not in git: download it from the manifest URL and verify SHA-256.
-      - name: Fetch hand model
+      - name: Fetch verified tracking models
         shell: pwsh
         run: |
-          $m = (Get-Content assets/model_manifest.json -Raw | ConvertFrom-Json).models[0]
-          New-Item -ItemType Directory -Force (Split-Path $m.local_path) | Out-Null
-          Invoke-WebRequest -Uri $m.url -OutFile $m.local_path
-          if ((Get-FileHash $m.local_path -Algorithm SHA256).Hash -ine $m.sha256) { throw 'Model SHA-256 mismatch' }
+          ./scripts/setup.ps1 -SkipPackages
       - name: Build release
         shell: pwsh
         env:

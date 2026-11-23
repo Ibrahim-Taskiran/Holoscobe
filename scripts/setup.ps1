@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Holoscobe setup: Python 3.11 venv + locked packages + verified hand landmarker model.
+  Holoscobe setup: Python 3.11 venv + locked packages + verified hand and pose models.
 .DESCRIPTION
   1. Creates .venv with Python 3.11 x64 (uv if present, else the py launcher).
   2. Installs exact, hash-checked packages from requirements.lock.
-  3. Obtains assets/models/hand_landmarker.task from the official URL in assets/model_manifest.json
-     (or copies it from -ModelPath for an offline machine) and verifies SHA-256 against the manifest.
+  3. Obtains the hand and pose models from the official URL in assets/model_manifest.json
+     (or copies it from -ModelPath and -PoseModelPath for an offline machine) and verifies SHA-256 against the manifest.
      Any mismatch stops the script with an error; a mismatching file is never kept.
   Works from paths containing spaces and non-ASCII (e.g. Turkish) characters.
 .EXAMPLE
@@ -15,6 +15,7 @@
 [CmdletBinding()]
 param(
     [string]$ModelPath = "",   # offline: use this local copy instead of downloading
+    [string]$PoseModelPath = "",
     [switch]$SkipPackages,
     [switch]$SkipModel
 )
@@ -66,35 +67,37 @@ if (-not $SkipPackages) {
 
 # ---------- 3. model ----------
 if (-not $SkipModel) {
-    $m = (Get-Content -LiteralPath $Manifest -Raw -Encoding UTF8 | ConvertFrom-Json).models[0]
-    $dest = Join-Path $Root ($m.local_path -replace "/", "\")
-    $expected = $m.sha256.ToLowerInvariant()
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+    foreach ($m in (Get-Content -LiteralPath $Manifest -Raw -Encoding UTF8 | ConvertFrom-Json).models) {
+        $offlinePath = if ($m.id -eq "hand_landmarker") { $ModelPath } else { $PoseModelPath }
+        $dest = Join-Path $Root ($m.local_path -replace "/", "\")
+        $expected = $m.sha256.ToLowerInvariant()
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
 
-    function HashOf([string]$p) { return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
+        function HashOf([string]$p) { return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
 
-    if ((Test-Path -LiteralPath $dest) -and ((HashOf $dest) -eq $expected)) {
-        Step "Model already present and verified: $dest"
-    } else {
-        $tmp = "$dest.partial"
-        if ($ModelPath) {
-            Step "Copying model from $ModelPath (offline)"
-            Copy-Item -LiteralPath $ModelPath -Destination $tmp -Force
+        if ((Test-Path -LiteralPath $dest) -and ((HashOf $dest) -eq $expected)) {
+            Step "Model already present and verified: $dest"
         } else {
-            Step "Downloading model: $($m.url)"
-            try { Invoke-WebRequest -UseBasicParsing -Uri $m.url -OutFile $tmp }
-            catch { Fail "model download failed: $($_.Exception.Message). Offline? Use -ModelPath." }
+            $tmp = "$dest.partial"
+            if ($offlinePath) {
+                Step "Copying model from $offlinePath (offline)"
+                Copy-Item -LiteralPath $offlinePath -Destination $tmp -Force
+            } else {
+                Step "Downloading model: $($m.url)"
+                try { Invoke-WebRequest -UseBasicParsing -Uri $m.url -OutFile $tmp }
+                catch { Fail "model download failed: $($_.Exception.Message). Offline? Use -ModelPath." }
+            }
+            $actual = HashOf $tmp
+            if ($actual -ne $expected) {
+                Remove-Item -LiteralPath $tmp -Force
+                Fail "MODEL SHA-256 MISMATCH. expected $expected, got $actual. File deleted; do not use it."
+            }
+            Move-Item -LiteralPath $tmp -Destination $dest -Force
+            Step "Model verified (SHA-256 $expected)"
         }
-        $actual = HashOf $tmp
-        if ($actual -ne $expected) {
-            Remove-Item -LiteralPath $tmp -Force
-            Fail "MODEL SHA-256 MISMATCH. expected $expected, got $actual. File deleted; do not use it."
-        }
-        Move-Item -LiteralPath $tmp -Destination $dest -Force
-        Step "Model verified (SHA-256 $expected)"
+        Write-Host "    hash status: $($m.sha256_status)" -ForegroundColor Yellow
+        Write-Host "    license: $($m.license) | $($m.redistribution_status)"
     }
-    Write-Host "    hash status: $($m.sha256_status)" -ForegroundColor Yellow
-    Write-Host "    license: $($m.license) | $($m.redistribution_status)"
 }
 
 Step "Setup complete. Tests: scripts\run_tests.ps1   Launch: scripts\launch.ps1"
