@@ -249,6 +249,33 @@ def test_moving_scene_uses_the_fast_picture_and_sharpens_at_rest(view, clock, mo
     assert sum(dark(fast, *p) != dark(sharp, *p) for p in pts) < 0.02*len(pts)
 
 
+def test_colors_reach_both_painters_and_newer_ink_covers_older(view, clock):
+    s = view.controls.scene
+    for color in (2, 6):                                    # red, then blue over it on the same plane
+        s.color = color
+        s.lift()
+        s.paint(0.0, 0.1, 0)
+        s.paint(0.2, 0.1, 0)
+    sharp = shot(view).pixelColor(380, 304)
+    buf = InkRaster().render(s, 640, 480, 1000, 165)
+    fast = QColor(int(buf[304, 380]) & 0xffffff)
+    for c in (sharp, fast):
+        assert c.blue() > 150 and c.red() < 90
+    assert abs(sharp.blue() - fast.blue()) < 12
+
+
+def test_palette_is_drawn_and_named(view, clock):
+    ok = replace(hand(Handedness.RIGHT, [0, 1, 1, 1], 320, 240), pinch_distance=.1)
+    for _ in range(10):
+        clock.t += 33
+        view.pipe.send(frame(clock.t, ok))
+    assert view.controls.palette is not None
+    wheel = shot(view)
+    assert wheel.pixelColor(320 + 70, 240).saturation() > 100     # slice 2 of 8 = red on the +x side
+    view.controls.palette = None
+    assert shot(view).pixelColor(320 + 70, 240).saturation() < 20
+
+
 def test_clear_button_flows_the_ink_away(view, clock):
     strokes(view, clock, hand(Handedness.RIGHT, PEN, 400, 100))
     view.clear()

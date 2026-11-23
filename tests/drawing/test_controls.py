@@ -4,10 +4,12 @@ from types import SimpleNamespace
 
 from handcontrol.contracts import (FingerInfo, FingerName, FingerState, PoseFrameFeatures,
                                    HandFeatures, Handedness, Landmark, Quality)
+from handcontrol.drawing import PALETTE
 from handcontrol.drawing_gestures import DrawingControls, crossed_forearms
 
 
-def hand(side, pose, x=460, y=200, tilt=0.0, hand_id=None, quality=Quality.USABLE, curls=None):
+def hand(side, pose, x=460, y=200, tilt=0.0, hand_id=None, quality=Quality.USABLE, curls=None,
+         pinch=0.8):
     """tilt: degrees towards +x in the image. curls: raw finger curls while the states still lag behind."""
     fingers = tuple(FingerInfo(n, FingerState.EXTENDED if v else FingerState.BENT, float(not v))
                     for n, v in zip(FingerName, (False, *pose)))
@@ -17,7 +19,7 @@ def hand(side, pose, x=460, y=200, tilt=0.0, hand_id=None, quality=Quality.USABL
     marks = [Landmark(.5, .5)]*21
     marks[9] = Landmark(.5 + .1*math.sin(a)*480/640, .5 - .1*math.cos(a))
     return HandFeatures(side is Handedness.RIGHT if hand_id is None else hand_id, side, quality, (x, y), 40,
-                        fingers, 0.8, (x, y), tuple(marks))
+                        fingers, pinch, (x, y), tuple(marks))
 
 
 def frame(t, *hands, crossed=False):
@@ -146,3 +148,67 @@ def test_x_needs_visible_interior_intersection_near_chest():
     assert not crossed_forearms(joints, 4/3)
     joints[-2:] = [joint(.495, .4), joint(.505, .4)]     # praying hands
     assert not crossed_forearms(joints, 4/3)
+
+
+OK = [0, 1, 1, 1]
+PU = 40
+
+
+def slice_at(i, n=len(PALETTE), x=300, y=240):
+    a = math.tau*i/n
+    return x + 1.2*PU*math.sin(a), y - 1.2*PU*math.cos(a)
+
+
+def test_pinch_opens_the_palette_and_letting_go_picks_every_color():
+    for i in range(len(PALETTE)):
+        c = DrawingControls()
+        t = feed(c, 0, hand(RIGHT, OK, 300, 240, pinch=.1), frames=9)
+        assert c.palette is not None and c.palette.hovered is None and not c.scene.dabs
+        x, y = slice_at(i)
+        t = feed(c, t, hand(RIGHT, OK, x, y, pinch=.1))
+        assert c.palette.hovered == i
+        t = feed(c, t, hand(RIGHT, OPEN, x, y))
+        assert c.palette is None and c.scene.color == i
+        feed(c, t, hand(RIGHT, PEN, x, y))
+        assert c.scene.dabs and all(d.color == i for d in c.scene.dabs)
+
+
+def test_palette_cancels_in_the_middle_on_loss_and_on_x():
+    def opened():
+        c = DrawingControls()
+        c.scene.color = 3
+        return c, feed(c, 0, hand(RIGHT, OK, 300, 240, pinch=.1), frames=9)
+    c, t = opened()
+    feed(c, t, hand(RIGHT, OPEN, 300, 240))
+    assert c.palette is None and c.scene.color == 3
+    c, t = opened()
+    t = feed(c, t, hand(RIGHT, OK, *slice_at(5), pinch=.1))
+    t = feed(c, t, frames=6)                               # short loss keeps it open
+    assert c.palette is not None
+    t = feed(c, t, frames=9)
+    assert c.palette is None and c.scene.color == 3
+    c, t = opened()
+    feed(c, t, hand(RIGHT, OK, *slice_at(5), pinch=.1), crossed=True)
+    assert c.palette is None and c.scene.color == 3
+
+
+def test_fist_point_and_short_pinch_never_open_the_palette():
+    for pose in (FIST, PEN, [0, 1, 0, 0]):
+        c = DrawingControls()
+        feed(c, 0, hand(RIGHT, pose, pinch=.1), frames=20)
+        assert c.palette is None
+    c = DrawingControls()
+    t = feed(c, 0, hand(RIGHT, OK, pinch=.1), frames=5)
+    feed(c, t, hand(RIGHT, OPEN), frames=2)
+    assert c.palette is None
+    feed(c, t, hand(LEFT, OK, pinch=.1), frames=20)        # left hand only spins
+    assert c.palette is None
+
+
+def test_jitter_while_letting_go_does_not_change_the_pick():
+    c = DrawingControls()
+    t = feed(c, 0, hand(RIGHT, OK, 300, 240, pinch=.1), frames=9)
+    t = feed(c, t, hand(RIGHT, OK, *slice_at(2), pinch=.1))
+    t = feed(c, t, hand(RIGHT, OK, *slice_at(6), pinch=.6), frames=1)
+    feed(c, t, hand(RIGHT, OPEN, *slice_at(6)))
+    assert c.scene.color == 2

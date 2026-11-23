@@ -14,6 +14,23 @@ CLEAR_MS = 1750.0
 SPACING = 0.005
 MAX_DABS = 4000        # repaint budget: 18 camera widths of stroke, oldest ink goes first
 
+DEPTH_STEP = 0.004       # nearer than this counts as the same surface: newer ink is on top
+SHADES = 37              # 0 = nearest
+PALETTE = (("Siyah", (9, 9, 11)), ("Beyaz", (248, 248, 246)), ("Kırmızı", (226, 44, 48)), ("Turuncu", (248, 132, 22)),
+           ("Sarı", (250, 208, 40)), ("Yeşil", (38, 168, 84)), ("Mavi", (34, 108, 236)), ("Mor", (146, 66, 214)))
+
+
+def shade_rgb(color: int, level: int) -> tuple[int, int, int]:
+    """Depth cue: black fades to grey towards the back, every other color darkens."""
+    t = level / (SHADES - 1)
+    target = 45 if color == 0 else 0
+    k = t if color == 0 else 0.45*t
+    return tuple(round(v + (target - v)*k) for v in PALETTE[color][1])
+
+
+def depth_level(depth: float, grain: float) -> int:
+    return max(0, min(SHADES - 1, round(12 - depth*63 + grain*2)))
+
 
 def projected_y(y: float, depth: float) -> float:
     """A slightly elevated view reveals the rear arc of a level ring. The work plane maps 1:1."""
@@ -29,6 +46,7 @@ class Dab:
     stretch: float
     born: float
     grain: float
+    color: int = 0
 
 
 def turn(x: float, z: float, cosine: float, sine: float) -> tuple[float, float]:
@@ -39,6 +57,7 @@ class InkScene:
     def __init__(self, seed: int = 72):
         self.dabs: list[Dab] = []
         self.angle = 0.0
+        self.color = 0           # PALETTE index of new ink
         self.spin_target = 0.0   # rad/ms; the real speed eases towards it
         self.spin_speed = 0.0
         self._spin_t: float | None = None
@@ -75,7 +94,7 @@ class InkScene:
             self.clear_start = None
 
     def _stamp(self, x, y, z, radius, stretch, now):
-        self.dabs.append(Dab(x, y, z, radius, stretch, now, self._rng.random()))
+        self.dabs.append(Dab(x, y, z, radius, stretch, now, self._rng.random(), self.color))
         if len(self.dabs) > MAX_DABS:
             del self.dabs[:MAX_DABS // 20]
             self.revision += 1

@@ -5,7 +5,8 @@ import math
 from typing import Optional
 
 from .contracts import FingerName, FingerState, FrameFeatures, Handedness, Quality
-from .drawing import InkScene
+from .drawing import PALETTE, InkScene
+from .mode_wheel import RadialAim
 
 HOLD_MS = 420            # X evidence needed to clear
 CROSS_BLOCK_MS = 90      # this much evidence stops the pen and the spin
@@ -19,6 +20,8 @@ BENT_CURL, STRAIGHT_CURL = 0.40, 0.42    # raw curls: react before the 80 ms sta
 TILT_ON, TILT_OFF, TILT_FULL = (math.radians(a) for a in (16, 10, 42))
 SPIN_SLOW, SPIN_FAST = math.tau/9000, math.tau/2800
 MAX_STEP = 0.16
+PINCH_ON, PINCH_OFF = 0.33, 0.48          # thumb-index distance, palm units (as in gestures.py)
+PALETTE_HOLD_MS, PALETTE_PICK_MS, PALETTE_LOST_MS = 180, 60, 350
 
 
 def _arm_segments_cross(sl, sr, a, b, aw, bw) -> bool:
@@ -82,6 +85,13 @@ def hand_pose(hand) -> Optional[str]:
     return "open" if all(straight) else None
 
 
+def ok_pinch(hand) -> bool:
+    """Thumb and index together while at least two other fingers stay straight (a fist never matches)."""
+    rest = (FingerName.MIDDLE, FingerName.RING, FingerName.LITTLE)
+    return (hand.pinch_distance <= PINCH_ON and
+            sum(f.name in rest and f.state is FingerState.EXTENDED for f in hand.fingers) >= 2)
+
+
 def _tilt(hand, frame) -> float:
     """Roll of the hand in the image: 0 upright, positive towards +x."""
     if len(hand.landmarks) < 10:
@@ -93,6 +103,7 @@ def _tilt(hand, frame) -> float:
 class DrawingControls:
     def __init__(self):
         self.scene = InkScene()
+        self.frame_size = (4, 3)
         self.reset()
 
     def reset(self):
@@ -100,6 +111,7 @@ class DrawingControls:
         self.last_time = None
         self.cursor = None
         self._stop_spin()
+        self._close_palette()
         self.pen_up()
 
     @property
@@ -119,6 +131,11 @@ class DrawingControls:
         self._point = None
         self._right_id = None
 
+    def _close_palette(self):
+        self.palette: Optional[RadialAim] = None
+        self._pinch_since = self._release_since = None
+        self._palette_seen = 0.0
+
     def _stop_spin(self):
         self.scene.spin_target = 0.0
         self.spin_ready = False
@@ -133,6 +150,7 @@ class DrawingControls:
         dt = 0 if self.last_time is None else now - self.last_time
         self.last_time = now
         self.scene.advance(now)
+        self.frame_size = frame.width, frame.height
         self.cursor = None
         crossed = bool(getattr(frame, "forearms_crossed", False))
         self.cross = min(HOLD_MS, self.cross + dt) if crossed else max(0.0, self.cross - CROSS_DECAY*dt)
@@ -142,6 +160,7 @@ class DrawingControls:
                 or min(frame.width, frame.height) <= 0):
             self.pen_up()
             self._stop_spin()
+            self._close_palette()
             return
         hands = () if frame.identity_ambiguous else frame.hands
         self._left(frame, [h for h in hands if h.handedness is Handedness.LEFT and h.quality is Quality.USABLE], now)
@@ -171,9 +190,12 @@ class DrawingControls:
 
     def _right(self, frame, hands, now):
         if len(hands) != 1 or hands[0].quality is Quality.UNKNOWN:
+            self._pinch_since = None
             self._gap(now)
             return
         h = hands[0]
+        if self._palette_step(h, now):
+            return
         pose = hand_pose(h)
         fist = "erase" in (pose, self.tool)
         px, py = h.palm_center_px if fist else h.index_tip_px
@@ -196,9 +218,37 @@ class DrawingControls:
                 self.tool, self._candidate = pose, None
                 self._apply(now)
 
+    def _palette_step(self, h, now) -> bool:
+        """Hold an OK pinch: the color wheel opens around the hand. Move to a slice and let go to pick it."""
+        if self.palette is None:
+            if h.quality is not Quality.USABLE or not ok_pinch(h):
+                self._pinch_since = None
+                return False
+            if self._pinch_since is None:
+                self._pinch_since = now
+            if now - self._pinch_since < PALETTE_HOLD_MS:
+                return False
+            self.pen_up()
+            self.palette = RadialAim(len(PALETTE))
+        self._palette_seen = now
+        if h.pinch_distance <= PINCH_OFF:
+            self._release_since = None
+            if h.quality is Quality.USABLE:
+                self.palette.aim(h)
+            return True
+        if self._release_since is None:
+            self._release_since = now
+        if now - self._release_since >= PALETTE_PICK_MS:
+            if self.palette.hovered is not None:
+                self.scene.color = self.palette.hovered
+            self._close_palette()
+        return True
+
     def _gap(self, now):
         """Between poses or briefly lost: leave no mark, but keep the tool for a moment."""
         self._candidate = None
+        if self.palette is not None and now - self._palette_seen > PALETTE_LOST_MS:
+            self._close_palette()                   # a lost hand never picks
         if self.tool != "carry" and now - self._tool_seen > TOOL_GAP_MS:
             self.pen_up()
 

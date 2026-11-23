@@ -20,7 +20,7 @@ Beş adımın kodu ve otomatik doğrulaması tamam. İlk gerçek deneme yapıld�
 
 | Ölçüm | Sonuç |
 |---|---|
-| Otomatik takım | 1859 geçti, 7 manuel test seçilmedi |
+| Otomatik takım | 1865 geçti, 7 manuel test seçilmedi |
 | El + poz izleme (640×480, rastgele görüntü, medyan) | 23,6 ms/kare; yalnız el 11,9 ms |
 | Boyama, durağan sahne (1100×680, 5700 leke) | 1,7 ms |
 | Boyama, dönen sahne (3470 leke) | 11 ms (önce 22 ms) |
@@ -32,6 +32,7 @@ Beş adımın kodu ve otomatik doğrulaması tamam. İlk gerçek deneme yapıld�
 Kararlar:
 - Mürekkep 4000 lekeyle sınırlı; aşılınca en eskisi silinir. Dönerken boyama süresi bununla tutulur.
 - X kanıtı birikir (420 ms); kaçan poz kareleri yavaşça düşürür, alkış adayı sıfırlamaz.
+- Renk çarkı: sağ elle birleştirip 180 ms tut, dilime götür, ayır. En az iki öbür parmak açık olmalı; yumruk açmaz.
 - Mod çarkı (sol V) bu modda da açılır; sol avuç yalnız döndürür.
 - Duraklatma ve mod değişimi mürekkebi silmez, yalnız izi keser. Uygulama kapanınca çizim kaybolur.
 

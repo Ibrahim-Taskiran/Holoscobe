@@ -1,4 +1,5 @@
-"""Mode wheel driven by one hand: V pose aims, fist picks, open palm or a fist in the middle cancels. Qt-free."""
+"""Radial menus aimed with one hand. The mode wheel: V pose aims, fist picks, open palm or a fist in the middle
+cancels. Qt-free."""
 from __future__ import annotations
 
 import math
@@ -45,23 +46,53 @@ def is_open(hand: HandFeatures) -> bool:
     return None not in f and all(i.state is FingerState.EXTENDED for i in f)
 
 
-class ModeWheel:
+class RadialAim:
+    """Slice i of `n` is centred i/n of a turn clockwise from the top, around the point where aiming began."""
+
+    def __init__(self, n: int, mirror: bool = False):
+        self._sign = -1.0 if mirror else 1.0
+        self.restart(n)
+
+    def restart(self, n: int):
+        self.n = n
+        self.hovered: Optional[int] = None
+        self.pointer = (0.5, 0.5)                # 0..1 square around the wheel
+        self.anchor: Optional[tuple[float, float]] = None
+        self._scale = 1.0
+
+    def aim(self, hand: HandFeatures):
+        if self.anchor is None:
+            self.anchor, self._scale = hand.palm_center_px, max(1.0, hand.palm_scale_px)
+        dx = self._sign * (hand.palm_center_px[0] - self.anchor[0]) / self._scale
+        dy = (hand.palm_center_px[1] - self.anchor[1]) / self._scale
+        r = math.hypot(dx, dy)
+        k = min(1.0, AIM_FULL / r) / AIM_FULL / 2 if r else 0.0
+        self.pointer = (0.5 + dx*k, 0.5 + dy*k)
+        if r < (AIM_ON if self.hovered is None else AIM_OFF):
+            self.hovered = None
+            return
+        angle, step = math.atan2(dx, -dy), math.tau / self.n
+        if self.hovered is not None:
+            off = math.remainder(angle - self.hovered*step, math.tau)
+            if abs(off) < step/2 + STICKY:
+                return
+        self.hovered = round(angle / step) % self.n
+
+
+class ModeWheel(RadialAim):
     """update() returns a mode value to switch to, CANCEL, or None. Slices run clockwise from the top."""
 
     def __init__(self, hand: HandFeatures, now: float, mirror: bool):
         self.side = hand.handedness
         self.hand_id = hand.hand_id
-        self._sign = -1.0 if mirror else 1.0
+        super().__init__(len(MAIN_PAGE), mirror)
         self.seen_ms = now
         self._show(MAIN_PAGE)
-        self._anchor: Optional[tuple[float, float]] = hand.palm_center_px
-        self._scale = hand.palm_scale_px
+        self.aim(hand)
 
     def _show(self, keys):
         self.keys = keys
-        self.hovered: Optional[int] = None
-        self.pointer = (0.5, 0.5)                # 0..1 square around the wheel
-        self._anchor = None
+        self.restart(len(keys))
         self._pose, self._pose_since = "", 0.0
 
     def pick_hand(self, hands) -> Optional[HandFeatures]:
@@ -79,8 +110,8 @@ class ModeWheel:
         held = now - self._pose_since
         if pose == "v":
             if all(f.curl <= STRAIGHT_CURL for f in _states(hand)[:2]):
-                self._aim(hand)
-        elif self._anchor is None:
+                self.aim(hand)
+        elif self.anchor is None:
             return None                          # page just opened: the picking fist must open to a V first
         elif pose == "fist" and held >= FIST_MS:
             key = CANCEL if self.hovered is None else self.keys[self.hovered]
@@ -91,22 +122,3 @@ class ModeWheel:
         elif pose == "open" and held >= OPEN_MS:
             return CANCEL
         return None
-
-    def _aim(self, hand: HandFeatures):
-        if self._anchor is None:
-            self._anchor, self._scale = hand.palm_center_px, hand.palm_scale_px
-        dx = self._sign * (hand.palm_center_px[0] - self._anchor[0]) / self._scale
-        dy = (hand.palm_center_px[1] - self._anchor[1]) / self._scale
-        r = math.hypot(dx, dy)
-        k = min(1.0, AIM_FULL / r) / AIM_FULL / 2 if r else 0.0
-        self.pointer = (0.5 + dx*k, 0.5 + dy*k)
-        if r < (AIM_ON if self.hovered is None else AIM_OFF):
-            self.hovered = None
-            return
-        n = len(self.keys)
-        angle, step = math.atan2(dx, -dy), math.tau / n
-        if self.hovered is not None:
-            off = math.remainder(angle - self.hovered*step, math.tau)
-            if abs(off) < step/2 + STICKY:
-                return
-        self.hovered = round(angle / step) % n

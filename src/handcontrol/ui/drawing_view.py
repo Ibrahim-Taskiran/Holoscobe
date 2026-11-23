@@ -5,21 +5,22 @@ import math
 import time
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from handcontrol.contracts import CameraState, ControlState, Mode
-from handcontrol.drawing import CLEAR_MS, ERASER_RADIUS, projected_y, turn
+from handcontrol.drawing import (CLEAR_MS, DEPTH_STEP, ERASER_RADIUS, PALETTE, SHADES, depth_level, projected_y,
+                                 shade_rgb, turn)
 from handcontrol.drawing_gestures import DrawingControls, HOLD_MS
 from handcontrol.drawing_raster import InkRaster
 
 DRAWING_HINT_TR = ("Sağ işaretle çiz · Sağ avucu açıp taşı · Sağ yumrukla sil · "
-                   "Sol avucu sağa ya da sola yatırıp döndür · Temizlemek için ön kollarını X yapıp tut")
+                   "Sağ elle başparmak-işareti birleştirip tut: renk · Sol avucu sağa ya da sola yatırıp döndür · Temizlemek için ön kollarını X yapıp tut")
 GROW_MS = 165.0        # a fresh dab swells for this long
 FAST_DABS = 600         # above this a moving scene is painted by the fast rasterizer
 FAST_SCALE = 0.7
 FLOW_SCALE = 0.5
-INK = [QColor(v, v, v + 2) for v in range(9, 46)]
+INK = [[QColor(*shade_rgb(c, k)) for k in range(SHADES)] for c in range(len(PALETTE))]
 
 
 def now_ms():
@@ -132,6 +133,7 @@ class DrawingView(QWidget):
                 p.drawImage(QRectF(-w/2, -h/2, w, h), self._image)
             self._paint_ink(p, w, h, now_ms())
             self._paint_cursor(p, w)
+            self._paint_palette(p, w, h)
             p.restore()
             self._paint_status(p, rect)
         finally:
@@ -185,14 +187,13 @@ class DrawingView(QWidget):
         scene = self.controls.scene
         c, s = math.cos(scene.angle), math.sin(scene.angle)
         p.setPen(Qt.PenStyle.NoPen)
-        for dab in sorted(dabs, key=lambda d: d.z*c - d.x*s):
+        for dab in sorted(dabs, key=lambda d: round((d.z*c - d.x*s)/DEPTH_STEP)):
             x, depth = turn(dab.x, dab.z, c, s)
             y = projected_y(dab.y, depth) * w
             growth = max(0, min(1, (now - dab.born) / GROW_MS))
             radius = w*dab.radius*(1 - 0.55*(1-growth)**2)
             ry = radius*dab.stretch
-            shade = max(0, min(len(INK)-1, round(12 - depth*63 + dab.grain*2)))
-            p.setBrush(INK[shade])
+            p.setBrush(INK[dab.color][depth_level(depth, dab.grain)])
             p.drawEllipse(QPointF(x*w, y), max(0.45, radius), ry)
 
     def _paint_cursor(self, p, w):
@@ -202,13 +203,53 @@ class DrawingView(QWidget):
         at = QPointF(ctl.cursor[0]*w, ctl.cursor[1]*w)
         erase = ctl.tool == "erase"
         radius = ERASER_RADIUS*w if erase else 7
-        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setBrush(INK[ctl.scene.color][0] if ctl.tool == "brush" else Qt.BrushStyle.NoBrush)
         for color, width in ((QColor(20, 24, 30, 210), 4), (QColor("#ffcd81" if erase else "#ffffff"), 1.5)):
             pen = QPen(color, width)
             if ctl.tool == "carry":
                 pen.setStyle(Qt.PenStyle.DotLine)
             p.setPen(pen)
             p.drawEllipse(at, radius, radius)
+
+    def _paint_palette(self, p, w, h):
+        """Color wheel around the pinching hand, in (possibly mirrored) image coordinates."""
+        wheel, frame = self.controls.palette, self.controls.frame_size
+        if wheel is None or wheel.anchor is None or not self._active:
+            return
+        outer = 0.15*w
+        inner = 0.42*outer
+        fw, fh = frame
+        edge = outer*1.1
+        cx = max(-w/2 + edge, min(w/2 - edge, (wheel.anchor[0]/fw - 0.5)*w))
+        cy = max(-h/2 + edge, min(h/2 - edge, (wheel.anchor[1] - fh/2)/fw*w))
+        step = 360/wheel.n
+        for i in range(wheel.n):
+            hot = i == wheel.hovered
+            r = outer*(1.1 if hot else 1)
+            path = QPainterPath()
+            start, span = 90 - (i - 0.5)*step - 1.5, -(step - 3)
+            path.arcMoveTo(QRectF(cx - r, cy - r, 2*r, 2*r), start)
+            path.arcTo(QRectF(cx - r, cy - r, 2*r, 2*r), start, span)
+            path.arcTo(QRectF(cx - inner, cy - inner, 2*inner, 2*inner), start + span, -span)
+            path.closeSubpath()
+            p.setBrush(QColor(*PALETTE[i][1]))
+            p.setPen(QPen(QColor("#26c6da") if hot else QColor(240, 244, 248) if i == self.controls.scene.color
+                          else QColor(18, 22, 28, 220), 4 if hot else 2.5))
+            p.drawPath(path)
+        hub = inner - 5
+        p.setBrush(QColor(18, 22, 28, 235))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(cx, cy), hub, hub)
+        p.save()
+        p.translate(cx, cy)
+        p.scale(-1 if self._mirrored else 1, 1)            # upright text in the mirrored picture
+        p.setPen(QColor("#f3f5f8"))
+        p.drawText(QRectF(-hub, -hub, 2*hub, 2*hub), Qt.AlignmentFlag.AlignCenter,
+                   "Renk" if wheel.hovered is None else PALETTE[wheel.hovered][0])
+        p.restore()
+        p.setPen(QPen(QColor(12, 16, 22), 2))
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(QPointF(cx + (wheel.pointer[0] - 0.5)*2*outer, cy + (wheel.pointer[1] - 0.5)*2*outer), 6, 6)
 
     def _paint_status(self, p, rect):
         ctl = self.controls
@@ -221,7 +262,9 @@ class DrawingView(QWidget):
         elif ctl.blocked:
             text = f"X hareketini tut · %{min(100, int(100*ctl.cross/HOLD_MS))}"
         else:
-            text = {"carry": "Taşı", "erase": "Silgi", "brush": "Fırça"}[ctl.tool]
+            text = {"carry": "Taşı", "erase": "Silgi", "brush": f"Fırça · {PALETTE[ctl.scene.color][0]}"}[ctl.tool]
+            if ctl.palette is not None:
+                text = "Renk · Dilime götür, parmaklarını ayır"
             if ctl.tool == "erase" and ctl.scene.erase_front is not None:
                 text += " · Ön yüzey" if ctl.scene.erase_front else " · Arka yüzey"
             if ctl.spin:

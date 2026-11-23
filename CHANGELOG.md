@@ -7,6 +7,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 ## [Unreleased]
 
 ### Added
+- Çizim: sağ elle başparmak-işaret birleştirilip tutulunca renk çarkı (8 renk); ayırınca seçilir.
 - Mod çarkı: sol elle V yarım saniye tutulunca açılır, V ile yönelinir, yumrukla seçilir. Her modda çalışır. Açık avuçla açılan eski mod menüsünün yerini aldı.
 - Üst çubuk sadeleşti (İmleç, Kaydırma, Enstrüman, Çizim, Diğer); alttaki ipucu seçili moda göre değişir.
 - Çizim modu: kamera görüntüsünün üstünde dönen 3B mürekkep. Sağ işaret çizer, sağ avuç taşır, sağ yumruk siler, sağa ya da sola yatırılan sol avuç o yöne döndürür, X yapılan ön kollar hepsini akıtarak temizler. Windows'a komut göndermez. X için MediaPipe Pose Landmarker Lite modeli eklendi.
