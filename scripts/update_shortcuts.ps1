@@ -23,7 +23,13 @@ $shortcut.Arguments = '"' + $launcher + '" --live'
 $shortcut.WorkingDirectory = $root
 $shortcut.Description = 'Holoscobe'
 $shortcut.WindowStyle = 1
-$shortcut.IconLocation = (Join-Path $root 'assets\icon.ico') + ',0'
+# Windows caches icons by path, so every new icon gets its own file name.
+$icon = Join-Path $root 'assets\icon.ico'
+$iconDir = Join-Path $env:LOCALAPPDATA 'Holoscobe\icons'
+$copy = Join-Path $iconDir ('icon-' + (Get-FileHash -LiteralPath $icon).Hash.Substring(0, 8) + '.ico')
+New-Item -ItemType Directory -Force -Path $iconDir | Out-Null
+Copy-Item -LiteralPath $icon -Destination $copy -Force
+$shortcut.IconLocation = $copy + ',0'
 $shortcut.Save()
 $old = Join-Path $desktop 'Holoscobe - Canli.lnk'
 if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old }
