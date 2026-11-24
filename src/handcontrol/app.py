@@ -75,7 +75,7 @@ SETTINGS_V3_KEYS = ('swipe_profile', 'auto_pause_s', 'dwell_click', 'dwell_ms', 
 # schema 4 (Enstrüman mode); SettingsData uses the same field names
 SETTINGS_V4_KEYS = ('instrument_layout', 'instrument_scale', 'instrument_quantize', 'instrument_chords',
     'instrument_volume', 'instrument_tone', 'audio_device', 'audio_latency', 'instrument_particles',
-    'instrument_fixed_strings', 'instrument_free_snap')
+    'instrument_fixed_strings', 'instrument_free_snap', 'hide_on_control')
 
 
 def _dialog_keys(data) -> tuple[str, ...]:
@@ -220,6 +220,20 @@ class TapSink:
         return getattr(self._inner, name)
 
 
+def fan_out(taps):
+    """One image tap for several readers; a failing reader must not silence the others."""
+    if len(taps) < 2:
+        return taps[0] if taps else None
+
+    def tap(frame, capture_ms):
+        for t in taps:
+            try:
+                t(frame, capture_ms)
+            except Exception:
+                logging.getLogger(__name__).debug('image tap failed', exc_info=True)
+    return tap
+
+
 def make_process_names():
     """Read-only process name lookup; None when the windows layer does not provide it yet."""
     try:
@@ -309,6 +323,7 @@ class Runtime(QObject):
         self.camera = None
         self.hotkey = self.session = self.pipeline = self.sink = None
         self.instrument = None
+        self.image_taps: list[Callable[[Any, float], None]] = []   # extra camera image readers (the cat)
         self.closed = False
         self._auto_resume = False              # start the instrument as soon as the camera runs
         self.timer = QTimer(self)
@@ -398,6 +413,16 @@ class Runtime(QObject):
         self.settings_changed.emit(settings)
         return True
 
+    def set_mascot(self, on: bool) -> None:
+        """Cat button or tray: apply and save at once, without pausing control."""
+        settings = replace(self.settings, mascot_visible=bool(on))
+        try:
+            self.store.save(settings)
+        except Exception:
+            logging.getLogger(__name__).warning('could not save the mascot setting', exc_info=True)
+        self.settings = self.pipeline.settings = settings
+        self.settings_changed.emit(settings)
+
     def _emergency(self):
         self._auto_resume = False
         if self.pipeline:
@@ -450,8 +475,9 @@ class Runtime(QObject):
         try:
             self.camera = self.camera_factory(self.pipeline, start=False)
             loop = getattr(self.camera, 'loop', None)
-            if self.instrument is not None and loop is not None:
-                loop.on_image = self.instrument.tap_image   # camera image for the Enstrüman window
+            if loop is not None:
+                taps = [*([self.instrument.tap_image] if self.instrument is not None else []), *self.image_taps]
+                loop.on_image = fan_out(taps)       # camera image for the Enstrüman window and the cat
             self.camera.start()
         except Exception as exc:
             self.stop_camera()
@@ -677,6 +703,24 @@ def _make_instrument(runtime: 'Runtime'):
         persist=runtime.save_instrument_area, parent=runtime)
 
 
+class ControlHider(QObject):
+    """Minimizes the main window when live desktop control starts, so only the cat stays on the screen."""
+
+    def __init__(self, bridge, window, *, live: bool, enabled: Callable[[], bool], busy: Callable[[], bool] = lambda: False):
+        super().__init__(window)
+        self._window, self._live, self._enabled, self._busy = window, live, enabled, busy
+        self._controlling = False
+        bridge.state_changed.connect(self.apply_state)
+
+    @Slot(object)
+    def apply_state(self, state):
+        was, self._controlling = self._controlling, (
+            state.control_state is ControlState.ACTIVE and state.mode not in (Mode.INSTRUMENT, Mode.DRAWING))
+        if (self._live and self._controlling and not was and self._enabled() and not self._busy()
+                and self._window.isVisible()):
+            self._window.showMinimized()
+
+
 def show_or_reuse_dialog(ref: list, factory):
     """Raise the dialog held in `ref` if still open, else build one with `factory` and keep it there."""
     if ref and ref[0].isVisible():
@@ -823,6 +867,22 @@ def main(argv=None) -> int:
             bridge.select_mode(Mode.INSTRUMENT)
             window.bring_up()
         bridge.instrument_window_requested.connect(open_instrument)
+    mascot = None
+    try:
+        from handcontrol.mascot.window import Mascot
+        mascot = Mascot(bridge, enabled=runtime.settings.mascot_visible,
+            notify=lambda text: bridge.show_feedback(message=text))
+        runtime.image_taps.append(mascot.tap)
+        runtime.pipeline.add_frame_observer(mascot.on_features)
+        runtime.settings_changed.connect(lambda s: mascot.set_enabled(s.mascot_visible))
+        app.aboutToQuit.connect(mascot.close)
+    except Exception:
+        logging.getLogger(__name__).exception('mascot unavailable')      # the cat must never stop the app
+    bridge.set_mascot_visible(runtime.settings.mascot_visible)
+    runtime.settings_changed.connect(lambda s: bridge.set_mascot_visible(s.mascot_visible))
+    bridge.mascot_toggle_requested.connect(runtime.set_mascot)
+    ControlHider(bridge, window, live=args.live, enabled=lambda: runtime.settings.hide_on_control,
+        busy=lambda: bool(onboarding_ref) or app.activeModalWidget() is not None)
     def calibration_dialog():
         if runtime.pipeline.controller.begin_calibration():
             CalibrationWizard(bridge=bridge, parent=window).exec()

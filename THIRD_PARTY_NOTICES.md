@@ -16,7 +16,16 @@ The project's own source license is NOT chosen yet (spec §3: confirm before pub
 | Artifact | Version | License | Evidence | Ship? |
 |---|---|---|---|---|
 | hand_landmarker.task (HandLandmarker full, float16) | float16/1, GCS generation 1682480004222387 | Apache-2.0 | Official model card "MediaPipe Hands (Lite/Full)" p.2 "LICENSED UNDER Apache License, Version 2.0", linked from the official Hand Landmarker docs "Models" table. Details: `assets/model_manifest.json` | License permits redistribution. Release bundling HELD until the SHA-256 is independently reviewed; setup downloads it meanwhile. |
+| face_landmarker.task (MediaPipe Face Landmarker, blendshapes) | float16/1 | Apache-2.0 | [Official docs, Models table](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) | Bundle with the model notices. Used only by the cat mascot. |
 | pose_landmarker_lite.task (MediaPipe Pose Landmarker Lite) | float16/1 | Apache-2.0 | [Publisher model card](https://huggingface.co/litert-community/MediaPipe-PoseLandmarker-Lite) | Bundle with the model notices. |
+
+## Cat mascot model
+
+`assets/mascot/cat.npz` and `assets/mascot/cat_albedo.jpg` are made from "3d modelling my cat: Fripouille"
+(https://sketchfab.com/3d-models/3d-modelling-my-cat-fripouille-0ab14bf98e754f8d90fe1bf1c84ca66c) by guillaume bolis
+(https://sketchfab.com/guillaume.bolis.neko), licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+Changes: mesh and skeleton realigned, smoothed and partly removed; eyes and whiskers replaced; fur, jaw and ear data added
+(`scripts/build_mascot.py`). Keep this credit in every distribution.
 
 ## Python packages (35, incl. transitive; updated 2026-11-22 for Enstrüman mode)
 

@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Holoscobe setup: Python 3.11 venv + locked packages + verified hand and pose models.
+  Holoscobe setup: Python 3.11 venv + locked packages + verified hand, pose and face models.
 .DESCRIPTION
   1. Creates .venv with Python 3.11 x64 (uv if present, else the py launcher).
   2. Installs exact, hash-checked packages from requirements.lock.
-  3. Obtains the hand and pose models from the official URL in assets/model_manifest.json
-     (or copies it from -ModelPath and -PoseModelPath for an offline machine) and verifies SHA-256 against the manifest.
+  3. Obtains the hand, pose and face models from the official URL in assets/model_manifest.json
+     (or copies it from -ModelPath, -PoseModelPath and -FaceModelPath for an offline machine) and verifies SHA-256 against the manifest.
      Any mismatch stops the script with an error; a mismatching file is never kept.
   Works from paths containing spaces and non-ASCII (e.g. Turkish) characters.
 .EXAMPLE
@@ -16,6 +16,7 @@
 param(
     [string]$ModelPath = "",   # offline: use this local copy instead of downloading
     [string]$PoseModelPath = "",
+    [string]$FaceModelPath = "",
     [switch]$SkipPackages,
     [switch]$SkipModel
 )
@@ -68,7 +69,7 @@ if (-not $SkipPackages) {
 # ---------- 3. model ----------
 if (-not $SkipModel) {
     foreach ($m in (Get-Content -LiteralPath $Manifest -Raw -Encoding UTF8 | ConvertFrom-Json).models) {
-        $offlinePath = if ($m.id -eq "hand_landmarker") { $ModelPath } else { $PoseModelPath }
+        $offlinePath = @{ hand_landmarker = $ModelPath; pose_landmarker_lite = $PoseModelPath; face_landmarker = $FaceModelPath }[$m.id]
         $dest = Join-Path $Root ($m.local_path -replace "/", "\")
         $expected = $m.sha256.ToLowerInvariant()
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null

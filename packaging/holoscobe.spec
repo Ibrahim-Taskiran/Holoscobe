@@ -38,7 +38,7 @@ a = Analysis(
     datas=[(str(root / "assets"), "assets"),
            (str(root / "THIRD_PARTY_NOTICES.md"), "."), *mp_data],
     hiddenimports=["handcontrol.app", "handcontrol.windows.startup", "cv2",
-                   "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
+                   "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "PySide6.QtOpenGL", "handcontrol.mascot.window",
                    "sounddevice", "_cffi_backend",
                    "handcontrol.instrument.synth", "handcontrol.instrument.audio",
                    *mp_imports, *collect_submodules("pycaw"),

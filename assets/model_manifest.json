@@ -39,6 +39,18 @@
       "license_source": "https://huggingface.co/litert-community/MediaPipe-PoseLandmarker-Lite",
       "sha256_status": "Computed from the versioned official download",
       "redistribution_status": "See the model card and THIRD_PARTY_NOTICES.md"
+    },
+    {
+      "id": "face_landmarker",
+      "name": "MediaPipe FaceLandmarker with blendshapes, float16 model bundle",
+      "local_path": "assets/models/face_landmarker.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "version": "float16/1",
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "license": "Apache-2.0",
+      "license_source": "https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker (Models table, model cards: BlazeFace short range, Face Mesh V2, Blendshape V2)",
+      "sha256_status": "Computed from the versioned official download (2026-11-24)",
+      "redistribution_status": "See the model cards and THIRD_PARTY_NOTICES.md"
     }
   ]
 }
