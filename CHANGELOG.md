@@ -7,7 +7,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 ## [Unreleased]
 
 ### Added
-- 3B tüylü kedi maskot (`handcontrol/mascot/`): masaüstü modlarında ekranın sağ alt köşesinde tıklama geçiren, odak çalmayan şeffaf pencere. Yüz (baş dönüşü, bakış, göz kırpma, çene, gülümseme, kaş), kol ve patileri gerçek zamanlı taklit eder; kimse yokken fareyi izler, imleç üstüne gelince yarı saydamlaşır; Enstrüman ve Çizim modlarında gizlenir. OpenGL 3.3 ile çizilir. `face_landmarker.task` modeli, `assets/mascot/` varlıkları, `scripts/cat_model.py` ve `scripts/build_mascot.py` eklendi. Model kullanıcının kendi gri kedisidir (`Kedi_Maskot`).
+- 3B tüylü kedi maskot (`handcontrol/mascot/`): masaüstü modlarında ekranın sağ alt köşesinde tıklama geçiren, odak çalmayan şeffaf pencere. Yüz (baş dönüşü, bakış, göz kırpma, çene, gülümseme, kaş), kol ve patileri gerçek zamanlı taklit eder; kimse yokken fareyi izler, imleç üstüne gelince yarı saydamlaşır; Enstrüman ve Çizim modlarında gizlenir. OpenGL 3.3 ile çizilir. `face_landmarker.task` modeli, `assets/mascot/` varlıkları, `scripts/cat_model.py` ve `scripts/build_mascot.py` eklendi. Model proje sahibinin kendi gri kedisidir; üçüncü taraf atfı gerektirmez.
 - **Kontrol başlayınca ana pencereyi küçült** ayarı (`hide_on_control`, varsayılan açık): canlı masaüstü kontrolü başlayınca kamera penceresi küçülür, kedi sağ altta kalır.
 - Çizim: sağ elle başparmak-işaret birleştirilip tutulunca renk çarkı (8 renk); ayırınca seçilir.
 - Mod çarkı: sol elle V yarım saniye tutulunca açılır, V ile yönelinir, yumrukla seçilir. Her modda çalışır. Açık avuçla açılan eski mod menüsünün yerini aldı.
@@ -26,8 +26,11 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Ses cihazı hatası artık modu kapatmıyor: teller ekranda kalır, ses 3 saniyede bir yeniden denenir.
 - Kamera görüntüsü gerilmeden, kendi oranında çizilir.
 - Masaüstü kısayolu tek ve `--live`.
+- Maskot modeli değişti: Fripouille (CC BY 4.0) yerine proje sahibinin gri kedisi. Kabuk kürk yerine gerçek tüy geometrisi, göz küresi etrafında dönen kapaklar; uygulama simgesi (`assets/icon.ico`) ve arayüz kedisi aynı renklere geçti.
 
 ### Fixed
+- Maskot: kol kalkınca dirsek ve bilekte oluşan boğum giderildi; kol mesh'i yarı açık pozda üretiliyor.
+- Masaüstü kısayolu yeni simgeye geçmiyordu (Windows simge önbelleği); `update_shortcuts.ps1` her simgeye ayrı yol veriyor.
 - Kamera ilk açılışta ve ayar kaydında ~11 saniye bekletiyordu (MSMF donanım dönüşümleri); 0,6 saniyeye indi. Bu sürede teller görünmüyordu.
 - Kayıtlı teller ilk kamera karesini beklemeden çiziliyor.
 - Varsayılan mod Enstrüman iken ana pencereden önce ayrı bir pencere açılıyordu.

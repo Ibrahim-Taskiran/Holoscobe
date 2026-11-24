@@ -2,7 +2,7 @@
 
 ## Derleme
 `scripts\build.ps1` — manifestteki tüm modellerin (`hand_landmarker.task`, `pose_landmarker_lite.task`, `face_landmarker.task`) SHA-256 değeri doğrulanır, PyInstaller (6.22.3) ile pencereli onedir derleme üretilir: `dist\Holoscobe\Holoscobe.exe`.
-Spec (`packaging\holoscobe.spec`) `assets\` klasörünü (modeller, manifest, `icon.ico`, `mascot/` kedi varlıkları), `PySide6.QtOpenGL` modülünü (3B kedi maskot) ve Enstrüman modu için yalnız `_sounddevice_data/portaudio-binaries/libportaudio64bit.dll` dosyasını paketler; herhangi bir model hash'i uyuşmazsa derlemeyi durdurur.
+Spec (`packaging\holoscobe.spec`) `assets\` klasörünü (modeller, manifest, `icon.ico`, `mascot/cat.npz` kedi modeli), `PySide6.QtOpenGL` modülünü (3B kedi maskot) ve Enstrüman modu için yalnız `_sounddevice_data/portaudio-binaries/libportaudio64bit.dll` dosyasını paketler; herhangi bir model hash'i uyuşmazsa derlemeyi durdurur.
 CI için `HOLOSCOBE_PYTHON` ortam değişkeni .venv yerine başka Python'u seçer.
 
 ## Kendini sınama (pencere ve kamera yok)

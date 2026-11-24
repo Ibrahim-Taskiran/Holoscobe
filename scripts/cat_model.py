@@ -1,4 +1,4 @@
-"""The user's cat model (kedi_uret.py), built in an empty Blender scene; scripts/build_mascot.py exports it.
+"""The project owner's cat model, built in an empty Blender scene; scripts/build_mascot.py exports it.
 
 Differs from the original: the arms are separate meshes, because arms fused with the flank stretch like a bat's wing when they
 are raised; they are made half open, which keeps elbows and wrists smooth; no texture baking or rendering.

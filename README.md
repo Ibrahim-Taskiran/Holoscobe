@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0 (+ geliştirme dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1919 otomatik test, 7 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0 (+ `main` dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1921 otomatik test, 7 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -143,7 +143,7 @@ yalnız X ile temizleme kapalı kalır ve ekranda bildirilir. Çizim bellekte tu
 ## 3B Kedi Maskot
 
 Masaüstü kontrol modlarında (Enstrüman ve Çizim hariç) ekranın sağ alt köşesinde şeffaf, tıklama geçiren ve odak
-çalmayan 3B tüylü bir kedi penceresi gösterilir.
+çalmayan 3B tüylü bir kedi penceresi gösterilir. Gri, sarı gözlü ve tek dişli kedi proje sahibinin kendi modelidir.
 
 - **Gerçek zamanlı taklit:** Baş dönüşü, bakış yönü, göz kırpma, çene, gülümseme ve kaş hareketlerini (`face_landmarker.task`),
   kolları (`pose_landmarker_lite.task`) ve patileri (mevcut el takibi) ayna görüntüsü gibi kopyalar.
@@ -155,6 +155,13 @@ Masaüstü kontrol modlarında (Enstrüman ve Çizim hariç) ekranın sağ alt k
   anında açılıp kapatılabilir.
 - **Pencereyi küçültme:** **Kontrol başlayınca ana pencereyi küçült** ayarı (`hide_on_control`, varsayılan açık) etkinken
   canlı masaüstü kontrolü başlayınca ana kamera penceresi küçülür, kedi sağ altta kalır.
+- **Modeli yeniden üretme:** Blender 5.1 gerekir (uygulamayı çalıştırmak için gerekmez). `scripts/cat_model.py` modeli
+  kurar, `scripts/build_mascot.py` onu `assets/mascot/cat.npz` dosyasına aktarır. Kollar ayrı mesh'tir ve yarı açık
+  pozda üretilir; böylece dirsek ve bilek bükülürken boğum oluşmaz.
+
+  ```
+  blender -b --python scripts/cat_model.py --python scripts/build_mascot.py
+  ```
 - **Gereksinim:** Offscreen OpenGL 3.3 gerekir. Desteklenmeyen sistemlerde kedi devre dışı kalır, masaüstü kontrolü
   normal çalışmaya devam eder.
 
@@ -280,7 +287,9 @@ Alternatif: `powershell -ExecutionPolicy Bypass -File scripts\launch.ps1` (dry-r
 Uygulama Paused başlar. Kamera sağlıklı olduktan sonra tepsiden Sürdür ile veya el çırparak etkinleştirin. Ardından sağ işaret parmağıyla imleci taşıyın, kısa pinch ile tıklayın; diğer hareketler için tepsideki Hareket Rehberi'ne bakın. Tepsiden kamerayı kapatabilir, ayarları/kalibrasyonu açabilir ve çıkabilirsiniz. Kısayol çakışırsa canlı başlatma reddedilir; dry-run ayarlarından başka bir kısayol seçin. Kamera hatası ve kurtarma otomatik etkinleştirme yapmaz. Gerçek donanım kabulü tamamlanana kadar önce dry-run kullanın.
 
 Masaüstündeki tek `Holoscobe` kısayolunu güncel kaynak koduna bağlamak için
-`powershell -ExecutionPolicy Bypass -File scripts\update_shortcuts.ps1` çalıştırın.
+`powershell -ExecutionPolicy Bypass -File scripts\update_shortcuts.ps1` çalıştırın. Betik simgeyi
+`%LOCALAPPDATA%\Holoscobe\icons` altına içeriğine göre adlandırarak kopyalar; böylece Windows simge önbelleği eski
+simgeyi göstermez.
 Kısayol `scripts\holoscobe.pyw` dosyasını konsolsuz ve gerçek fare kontrolüyle (`--live`) açar; kod değişince yeniden derleme gerekmez.
 
 Uygulama koyu grafit ve kayısı temalı tek bir ana penceredir (`ui/main_window.py`): solda mod şeridi (`İmleç`, `Kaydırma`, `Enstrüman`, `Çizim`, `Diğer` ve `Ayarlar`), üstte durum/Kedi/Ayrıntı/Sürdür başlık çubuğu, ortada kamera sahnesi, altta (ya da geniş ekranda yanda) seçili moda göre değişen hareket ipuçları yer alır. Enstrüman ve Çizim seçilince aynı pencerede kendi sahne ve araç çubuklarıyla açılır.
