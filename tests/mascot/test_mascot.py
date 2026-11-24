@@ -16,9 +16,9 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 
 from handcontrol.app import ControlHider, fan_out
 from handcontrol.contracts import CameraState, ControlState, Mode
-from handcontrol.mascot.renderer import CatRenderer, RendererError, asset_dir
+from handcontrol.mascot.renderer import CatRenderer, RendererError, asset_dir, load_cat
 from handcontrol.mascot.retarget import BodyInfo, FaceInfo, HandInfo, Retargeter, body_info, face_info, hand_info
-from handcontrol.mascot.rig import ARMS, CHEST, HEAD, CatRig, MascotPose, PawTarget, PoseSmoother, apply, pack, unpack
+from handcontrol.mascot.rig import ARMS, BONES, EYE_CENTERS, HEAD, SPINE, CatRig, MascotPose, PawTarget, PoseSmoother, apply, pack, unpack
 from handcontrol.mascot.window import Mascot, MascotWindow
 
 FACE = FaceInfo((0.9, 0.35), 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, (0.0, 0.0), (0.0, 0.0))
@@ -32,8 +32,7 @@ def app():
 
 @pytest.fixture(scope="module")
 def rig():
-    data = np.load(asset_dir() / "cat.npz")
-    return CatRig(data["heads"], data["parents"])
+    return CatRig()
 
 
 def points(n, **at):
@@ -114,6 +113,22 @@ def test_the_usual_head_pitch_becomes_neutral():
 
 # ---------- rig ----------
 
+def test_bundled_cat_mesh_matches_the_rig():
+    v, triangles = load_cat(asset_dir() / "cat.npz")
+    assert np.isfinite(v["position"]).all() and triangles.shape[1] == 3 and triangles.max() < len(v)
+    assert np.array_equal(np.unique(v["joints"][v["weights"] > 0]), np.arange(BONES))
+    assert np.all(v["weights"].sum(axis=1) == 255)
+    lids = v[v["normal"][:, 3] != 0]                        # closing lids stay outside the eyeball
+    centers = EYE_CENTERS[(lids["position"][:, 0] > 0).astype(int)]
+    assert len(lids) and np.linalg.norm(lids["closed"] - centers, axis=1).min() > 0.305
+
+
+def test_resting_paws_keep_the_modelled_pose(rig):
+    skin = rig.solve(MascotPose(), 0.0)
+    for arm in ARMS:
+        assert np.allclose(skin[list(arm)], skin[SPINE], atol=1e-6)
+
+
 @pytest.mark.parametrize("pose", [
     MascotPose(), MascotPose(yaw=1, pitch=-.6, roll=.7, sway=-1, lean=1, shoulders=.5, jaw=1, smile=1, brow=-1),
     MascotPose(paws=(PawTarget(5, 5, 1, 1, 1, 1.3), PawTarget(-5, -5, 1, -1, 1))),
@@ -130,12 +145,12 @@ def test_paw_follows_the_wrist_and_limbs_stay_connected(rig):
     def paw(y):
         skin = rig.solve(MascotPose(paws=(PawTarget(), PawTarget(0.4, y, 0, 0, 1))), 0.0)
         arm, rest = ARMS[1], rig.arm_rest[1]
-        assert np.allclose(apply(skin[CHEST], rest[0]), apply(skin[arm[0]], rest[0]), atol=1e-6)
-        for i in range(3):
+        assert np.allclose(apply(skin[SPINE], rest[0]), apply(skin[arm[0]], rest[0]), atol=1e-6)
+        for i in range(2):
             assert np.allclose(apply(skin[arm[i]], rest[i + 1]), apply(skin[arm[i + 1]], rest[i + 1]), atol=1e-6)
-        return apply(skin[arm[3]], rest[3])
+        return apply(skin[arm[2]], rest[2])
     low, high = paw(-0.6), paw(0.9)
-    assert high[1] > low[1] + 1.5 and low[0] > 0 and high[0] > 0
+    assert high[1] > low[1] + 1.2 and low[0] > 0 and high[0] > 0
 
 
 def test_head_turns_to_the_same_side_as_the_mirror(rig):

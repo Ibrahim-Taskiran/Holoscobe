@@ -364,7 +364,7 @@ src/handcontrol/
   windows/             Win32 bağdaştırıcıları (giriş, pencere, ses, kısayol, oturum, tuş komutları, başlangıç)
   ui/                  PySide6 ana pencere, koyu tema, kart ayarlar, tepsi, önizleme, kalibrasyon, eğitim, katmanlar, Enstrüman/Çizim görünümleri
   tools/               Konsol kabul testi ve ölçüm araçları
-assets/                İkon, model manifesti, 3B kedi varlıkları (cat.npz, cat_albedo.jpg)
+assets/                İkon, model manifesti, 3B kedi varlıkları (cat.npz)
 tests/                 Her modülün kendi test klasörü
 scripts/               Kurulum, test, başlatma, kısayol, maskot üretimi, derleme, install/uninstall, release betikleri
 packaging/             PyInstaller spec ve giriş noktası

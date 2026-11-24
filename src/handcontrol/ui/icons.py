@@ -205,15 +205,14 @@ def paint_cat(p: QPainter, rect: QRectF, happy: bool = False) -> None:
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     p.translate(rect.topLeft())
     p.scale(rect.width() / GRID, rect.height() / GRID)
-    cream, dark, deep = QColor(theme.CREAM), QColor(theme.ON_ACCENT), QColor(theme.ACCENT_PRESSED)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(theme.ACCENT))
+    dark = QColor(theme.ON_ACCENT)
+    p.setPen(QPen(QColor(theme.CAT_EDGE), 0.5))
+    p.setBrush(QColor(theme.CAT_FUR))
     p.drawPath(_svg(CAT_HEAD))
-    p.setBrush(deep)                                              # inner ears and forehead stripes
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(theme.CAT_EAR))
     p.drawPath(_svg("M5.7 8.4 L5.6 5.3 L8.3 7.3 Z M18.3 8.4 L18.4 5.3 L15.7 7.3 Z"))
-    for x, h in ((12.0, 2.9), (10.1, 2.2), (13.9, 2.2)):
-        p.drawRoundedRect(QRectF(x - 0.42, 6.5, 0.84, h), 0.42, 0.42)
-    p.setBrush(cream)                                             # muzzle
+    p.setBrush(QColor(theme.CAT_EDGE))                            # muzzle
     p.drawEllipse(QPointF(10.5, 16.5), 2.3, 2.0)
     p.drawEllipse(QPointF(13.5, 16.5), 2.3, 2.0)
     pen = QPen(dark, 0.62)
@@ -224,20 +223,20 @@ def paint_cat(p: QPainter, rect: QRectF, happy: bool = False) -> None:
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(_svg("M6.6 13 C7.1 11.6 9.3 11.6 9.8 13 M14.2 13 C14.7 11.6 16.9 11.6 17.4 13"))
     else:
-        p.setBrush(dark)
-        for x in (8.3, 15.7):
-            p.drawEllipse(QPointF(x, 12.6), 1.25, 1.55)
-        p.setBrush(QColor(theme.WHITE))
-        for x in (8.75, 16.15):
-            p.drawEllipse(QPointF(x, 12.0), 0.42, 0.42)
+        for color, r, dx, dy in ((theme.CAT_IRIS, 2.3, 0.0, 0.0), (theme.ON_ACCENT, 1.4, 0.0, 0.0), (theme.WHITE, 0.5, -0.5, -0.6)):
+            p.setBrush(QColor(color))
+            for x in (8.1, 15.9):
+                p.drawEllipse(QPointF(x + dx, 12.4 + dy), r, r)
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(theme.DANGER))
+    p.setBrush(dark)
     p.drawPath(_svg("M11.2 14.9 L12.8 14.9 L12 15.9 Z"))
+    p.setBrush(QColor(theme.WHITE))                               # the fang
+    p.drawPath(_svg("M9.9 17.3 L10.7 17.4 L10.3 18.6 Z"))
     p.setPen(pen)
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.drawPath(_svg("M12 15.9 L12 16.6 M12 16.6 C11.6 17.6 10.4 17.6 10.1 16.9 M12 16.6 C12.4 17.6 13.6 17.6 13.9 16.9"))
     pen.setWidthF(0.34)
-    pen.setColor(theme.color(theme.ON_ACCENT, 0.65))
+    pen.setColor(theme.color(theme.WHITE, 0.8))
     p.setPen(pen)
     p.drawPath(_svg("M7 15.6 L3.6 14.9 M7 16.6 L3.8 17 M17 15.6 L20.4 14.9 M17 16.6 L20.2 17"))
     p.restore()

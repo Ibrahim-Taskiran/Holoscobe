@@ -21,11 +21,8 @@ The project's own source license is NOT chosen yet (spec §3: confirm before pub
 
 ## Cat mascot model
 
-`assets/mascot/cat.npz` and `assets/mascot/cat_albedo.jpg` are made from "3d modelling my cat: Fripouille"
-(https://sketchfab.com/3d-models/3d-modelling-my-cat-fripouille-0ab14bf98e754f8d90fe1bf1c84ca66c) by guillaume bolis
-(https://sketchfab.com/guillaume.bolis.neko), licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
-Changes: mesh and skeleton realigned, smoothed and partly removed; eyes and whiskers replaced; fur, jaw and ear data added
-(`scripts/build_mascot.py`). Keep this credit in every distribution.
+`assets/mascot/cat.npz` is the project owner's own model (`scripts/cat_model.py`, exported by `scripts/build_mascot.py`).
+It needs no third-party credit.
 
 ## Python packages (35, incl. transitive; updated 2026-11-22 for Enstrüman mode)
 
