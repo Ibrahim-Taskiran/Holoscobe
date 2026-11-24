@@ -11,19 +11,17 @@ from typing import Any, Mapping, Optional, Sequence
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QButtonGroup,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
+    QScrollArea,
     QSlider,
-    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -33,8 +31,15 @@ from handcontrol.contracts import Handedness, Mode
 from handcontrol.instrument.events import (
     CHORD_NAMES, DEFAULT_CHORDS, DEFAULT_FIXED_STRINGS, FIXED_STRINGS_RANGE, LATENCIES, LAYOUTS, SCALE_NAMES, TONES,
 )
+from handcontrol.ui import theme
 from handcontrol.ui.tray import create_mode_icon
 from handcontrol.ui.viewmodel import MODE_LABELS_TR, SWIPE_PROFILE_LABELS_TR, UiBridge
+from handcontrol.ui.widgets import (
+    Card, ComboBox, DoubleSpinBox, SettingRow, SideItem, SpinBox, ToggleSwitch, button, label,
+)
+
+CONTROL_WIDTH = 270              # every combo / field column on the right of a setting row
+NUMBER_WIDTH = 112
 
 
 POINTER_MODES: tuple[str, ...] = ("relative", "absolute")
@@ -137,7 +142,8 @@ class SettingsData:
     emergency_hotkey: str = "Ctrl+Alt+Shift+F12"
     show_overlay: bool = True
     show_feedback_osd: bool = True
-    show_mascot: bool = False
+    show_mascot: bool = True
+    hide_on_control: bool = True                # minimize the main window while the desktop is controlled
     show_dry_run_panel: bool = False
     monitor_mapping: str = "all"                # "all", "primary", "secondary"
     start_with_windows: bool = False            # Default False per spec
@@ -305,6 +311,7 @@ class SettingsData:
             show_overlay=bool(data.get("show_overlay", defaults.show_overlay)),
             show_feedback_osd=bool(data.get("show_feedback_osd", defaults.show_feedback_osd)),
             show_mascot=bool(data.get("show_mascot", defaults.show_mascot)),
+            hide_on_control=bool(data.get("hide_on_control", defaults.hide_on_control)),
             show_dry_run_panel=bool(data.get("show_dry_run_panel", defaults.show_dry_run_panel)),
             monitor_mapping=mon_map,
             start_with_windows=bool(data.get("start_with_windows", defaults.start_with_windows)),
@@ -336,7 +343,7 @@ def _format_auto_pause(seconds: int) -> str:
 
 
 class SettingsDialog(QDialog):
-    """Settings window with tabs: Genel, İmleç, Hareketler, Enstrüman, Gelişmiş."""
+    """Settings window with a category sidebar: Genel, İmleç, Hareketler, Enstrüman, Gelişmiş."""
 
     settings_applied = Signal(object)       # SettingsData
     settings_dict_applied = Signal(dict)    # dict[str, Any]
@@ -367,7 +374,9 @@ class SettingsDialog(QDialog):
         )
 
         self.setWindowTitle("Holoscobe — Ayarlar")
-        self.resize(560, 620)
+        theme.install()
+        self.resize(940, 720)
+        self.setMinimumSize(760, 520)
 
         self._build_ui()
 
@@ -379,23 +388,55 @@ class SettingsDialog(QDialog):
     # ---------- layout ----------
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(10)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        side = QFrame()
+        side.setProperty("role", "sidebar")
+        side.setFixedWidth(212)
+        side_column = QVBoxLayout(side)
+        side_column.setContentsMargins(12, 22, 12, 16)
+        side_column.setSpacing(4)
+        title = label("Ayarlar", "title")
+        title.setContentsMargins(12, 0, 0, 12)
+        side_column.addWidget(title)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        self.tabs.addTab(self._build_general_tab(), "Genel")
-        self.tabs.addTab(self._build_pointer_tab(), "İmleç")
-        self.tabs.addTab(self._build_gestures_tab(), "Hareketler")
-        self.tabs.addTab(self._build_instrument_tab(), "Enstrüman")
-        self.tabs.addTab(self._build_advanced_tab(), "Gelişmiş")
-        root.addWidget(self.tabs, 1)
+        self.tabs.tabBar().hide()
+        self.side_group = QButtonGroup(self)
+        for name, icon, build in (("Genel", "settings", self._build_general_tab),
+                                  ("İmleç", "pointer", self._build_pointer_tab),
+                                  ("Hareketler", "hand", self._build_gestures_tab),
+                                  ("Enstrüman", "instrument", self._build_instrument_tab),
+                                  ("Gelişmiş", "advanced", self._build_advanced_tab)):
+            index = self.tabs.addTab(self._scroll(build()), name)
+            item = SideItem(name, icon)
+            item.clicked.connect(lambda _=False, i=index: self.tabs.setCurrentIndex(i))
+            self.side_group.addButton(item, index)
+            side_column.addWidget(item)
+        self.tabs.currentChanged.connect(lambda i: self.side_group.button(i).setChecked(True))
+        self.side_group.button(0).setChecked(True)
+        side_column.addStretch(1)
+        root.addWidget(side)
 
-        btn_row = QHBoxLayout()
-        self.btn_defaults = QPushButton("Varsayılanlara Sıfırla")
-        self.btn_save = QPushButton("Kaydet")
-        self.btn_cancel = QPushButton("İptal")
+        content = QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0)
+        content.addWidget(self.tabs, 1)
+        footer = QFrame()
+        footer.setProperty("role", "footer")
+        btn_row = QHBoxLayout(footer)
+        btn_row.setContentsMargins(20, 12, 24, 12)
+        btn_row.setSpacing(8)
+        self.btn_defaults = button("Varsayılanlara Sıfırla", "ghost", "undo")
+        self.btn_save = button("Kaydet", "primary")
+        self.btn_cancel = button("İptal")
+        self.btn_save.setMinimumWidth(112)
+        self.btn_cancel.setMinimumWidth(96)
+        for b in (self.btn_defaults, self.btn_cancel):
+            b.setAutoDefault(False)
         self.btn_save.setDefault(True)
 
         self.btn_defaults.clicked.connect(self.reset_to_defaults)
@@ -404,277 +445,280 @@ class SettingsDialog(QDialog):
 
         btn_row.addWidget(self.btn_defaults)
         btn_row.addStretch(1)
-        btn_row.addWidget(self.btn_save)
         btn_row.addWidget(self.btn_cancel)
-        root.addLayout(btn_row)
+        btn_row.addWidget(self.btn_save)
+        content.addWidget(footer)
+        root.addLayout(content, 1)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        theme.dark_title_bar(self)
 
     @staticmethod
-    def _page() -> tuple[QWidget, QVBoxLayout]:
+    def _scroll(page: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setWidget(page)
+        area.viewport().setAutoFillBackground(False)
+        page.setAutoFillBackground(False)
+        return area
+
+    @staticmethod
+    def _page(title: str) -> tuple[QWidget, QVBoxLayout]:
         page = QWidget()
+        page.setProperty("role", "page")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 10, 4, 4)
+        layout.setContentsMargins(28, 22, 24, 28)
         layout.setSpacing(10)
+        layout.addWidget(label(title, "title"))
         return page, layout
 
     @staticmethod
+    def _section(layout: QVBoxLayout, title: str) -> Card:
+        """Section heading and its card."""
+        heading = label(title, "section")
+        heading.setContentsMargins(2, 12, 0, 0)
+        layout.addWidget(heading)
+        card = Card()
+        layout.addWidget(card)
+        return card
+
+    @staticmethod
     def _hint(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setWordWrap(True)
-        label.setStyleSheet("color: palette(mid);")
-        return label
+        hint = label(text, "caption", True)
+        hint.setContentsMargins(16, 11, 16, 12)
+        return hint
+
+    @staticmethod
+    def _row(card: Card, title: str, description: str, control: QWidget, width: int = 0) -> None:
+        if not width and isinstance(control, (QComboBox, QLineEdit)):
+            width = CONTROL_WIDTH
+        elif not width and isinstance(control, (SpinBox, DoubleSpinBox)):
+            width = NUMBER_WIDTH
+        card.add(SettingRow(title, description, control, width))
+
+    @staticmethod
+    def _slider_row(slider: QSlider, value: QLabel) -> QWidget:
+        value.setProperty("role", "value")
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        value.setFixedWidth(52)
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(slider, 1)
+        row.addWidget(value)
+        box.setFixedWidth(CONTROL_WIDTH)
+        return box
 
     def _build_general_tab(self) -> QWidget:
-        page, layout = self._page()
+        page, layout = self._page("Genel")
 
-        cam_group = QGroupBox("Kamera ve El")
-        cam_form = QFormLayout(cam_group)
-        self.combo_camera = QComboBox()
-        for idx, label in self._available_cameras:
-            self.combo_camera.addItem(label, idx)
-        cam_form.addRow("Kamera:", self.combo_camera)
-
-        self.chk_mirror = QCheckBox("Önizleme ve eşlemeyi aynala")
-        cam_form.addRow("Ayna görüntüsü:", self.chk_mirror)
-
-        self.combo_dominant_hand = QComboBox()
+        card = self._section(layout, "Kamera ve El")
+        self.combo_camera = ComboBox()
+        for idx, text in self._available_cameras:
+            self.combo_camera.addItem(text, idx)
+        self._row(card, "Kamera", "El hareketlerinin izlendiği kamera", self.combo_camera)
+        self.chk_mirror = ToggleSwitch("Önizleme ve eşlemeyi aynala")
+        self._row(card, "Ayna görüntüsü", "Önizleme ve eşlemeyi aynala", self.chk_mirror)
+        self.combo_dominant_hand = ComboBox()
         self.combo_dominant_hand.addItem("Sağ El", "right")
         self.combo_dominant_hand.addItem("Sol El", "left")
-        cam_form.addRow("Baskın el:", self.combo_dominant_hand)
-        layout.addWidget(cam_group)
+        self._row(card, "Baskın el", "İmleci yöneten elin", self.combo_dominant_hand)
 
-        control_group = QGroupBox("Kontrol")
-        control_form = QFormLayout(control_group)
-        self.combo_mode = QComboBox()
+        card = self._section(layout, "Kontrol")
+        self.combo_mode = ComboBox()
         for mode in Mode:
             self.combo_mode.addItem(create_mode_icon(mode, 16), MODE_LABELS_TR[mode], mode.value)
-        control_form.addRow("Varsayılan mod:", self.combo_mode)
-
-        self.combo_auto_pause = QComboBox()
-        for seconds, label in AUTO_PAUSE_CHOICES:
-            self.combo_auto_pause.addItem(label, seconds)
-        control_form.addRow("Otomatik duraklat:", self.combo_auto_pause)
-        control_form.addRow("", self._hint("El bu süre görünmezse kontrol kendiliğinden duraklar."))
-
+        self._row(card, "Varsayılan mod", "Uygulama açılınca seçili olan mod", self.combo_mode)
+        self.combo_auto_pause = ComboBox()
+        for seconds, text in AUTO_PAUSE_CHOICES:
+            self.combo_auto_pause.addItem(text, seconds)
+        self._row(card, "Otomatik duraklat", "El bu süre görünmezse kontrol kendiliğinden duraklar.",
+                  self.combo_auto_pause)
         self.edit_hotkey = QLineEdit("Ctrl+Alt+Shift+F12")
         self.edit_hotkey.setPlaceholderText("Örn: Ctrl+Alt+Shift+F12")
-        control_form.addRow("Acil durdurma kısayolu:", self.edit_hotkey)
-        layout.addWidget(control_group)
+        self._row(card, "Acil durdurma kısayolu", "Tüm girdileri bırakır ve kontrolü duraklatır", self.edit_hotkey)
 
-        view_group = QGroupBox("Görünüm ve Sistem")
-        view_form = QFormLayout(view_group)
-        self.combo_monitor = QComboBox()
+        card = self._section(layout, "Görünüm ve Sistem")
+        self.combo_monitor = ComboBox()
         self.combo_monitor.addItem("Tüm Ekranlar (Sanal Masaüstü)", "all")
         self.combo_monitor.addItem("Yalnız Birincil Ekran", "primary")
         self.combo_monitor.addItem("Yalnız İkincil Ekran", "secondary")
-        view_form.addRow("Monitör eşlemesi:", self.combo_monitor)
-
-        self.chk_overlay = QCheckBox("Mod ve pencere eylem katmanını göster")
-        view_form.addRow(self.chk_overlay)
-        self.chk_feedback = QCheckBox("Kısa durum bildirimlerini göster")
-        view_form.addRow(self.chk_feedback)
-        self.chk_mascot = QCheckBox("Sağ alt köşe maskotunu göster")
-        view_form.addRow(self.chk_mascot)
-        self.chk_startup = QCheckBox("Windows açılışında otomatik başlat")
-        view_form.addRow(self.chk_startup)
-        layout.addWidget(view_group)
+        self._row(card, "Monitör eşlemesi", "İmlecin gezebildiği ekranlar", self.combo_monitor)
+        self.chk_overlay = ToggleSwitch("Mod ve pencere eylem katmanını göster")
+        self._row(card, "Mod ve pencere eylem katmanını göster", "Mod çarkı, pencere menüsü ve durum göstergesi",
+                  self.chk_overlay)
+        self.chk_feedback = ToggleSwitch("Kısa durum bildirimlerini göster")
+        self._row(card, "Kısa durum bildirimlerini göster", "Mod değişince ya da kontrol açılınca kısa mesaj",
+                  self.chk_feedback)
+        self.chk_mascot = ToggleSwitch("Sağ alttaki kediyi göster")
+        self._row(card, "Sağ alttaki kediyi göster", "El hareketlerini taklit eden küçük kedi", self.chk_mascot)
+        self.chk_hide_on_control = ToggleSwitch("Kontrol başlayınca ana pencereyi küçült")
+        self._row(card, "Kontrol başlayınca ana pencereyi küçült",
+                  "Masaüstünü kullanırken kamera paneli gizlenir, kedi sağ altta kalır", self.chk_hide_on_control)
+        self.chk_startup = ToggleSwitch("Windows açılışında otomatik başlat")
+        self._row(card, "Windows açılışında otomatik başlat", "Oturum açınca Holoscobe hazır olur", self.chk_startup)
 
         layout.addStretch(1)
         return page
 
     def _build_pointer_tab(self) -> QWidget:
-        page, layout = self._page()
+        page, layout = self._page("İmleç")
 
-        motion_group = QGroupBox("Hareket")
-        motion_form = QFormLayout(motion_group)
-
-        self.combo_preset = QComboBox()
+        card = self._section(layout, "Hareket")
+        self.combo_preset = ComboBox()
         for key in (*SENSITIVITY_PRESETS, "custom"):
             self.combo_preset.addItem(SENSITIVITY_PRESET_LABELS_TR[key], key)
         self.combo_preset.currentIndexChanged.connect(self._on_preset_selected)
-        motion_form.addRow("Hassasiyet ön ayarı:", self.combo_preset)
+        self._row(card, "Hassasiyet ön ayarı", "Hız ve hassasiyeti birlikte değiştirir", self.combo_preset)
 
-        self.combo_pointer_mode = QComboBox()
+        self.combo_pointer_mode = ComboBox()
         for mode_key in POINTER_MODES:
             self.combo_pointer_mode.addItem(POINTER_MODE_LABELS_TR[mode_key], mode_key)
-        motion_form.addRow("İmleç türü:", self.combo_pointer_mode)
+        self._row(card, "İmleç türü", "El hareketinin imlece nasıl aktarıldığı", self.combo_pointer_mode)
 
-        speed_row = QWidget()
-        speed_layout = QHBoxLayout(speed_row)
-        speed_layout.setContentsMargins(0, 0, 0, 0)
         self.slider_pointer_speed = QSlider(Qt.Orientation.Horizontal)
         self.slider_pointer_speed.setRange(round(POINTER_SPEED_MIN * _SPEED_STEPS),
                                            round(POINTER_SPEED_MAX * _SPEED_STEPS))
         self.slider_pointer_speed.setSingleStep(1)
         self.slider_pointer_speed.setPageStep(1)
-        self.slider_pointer_speed.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slider_pointer_speed.setTickInterval(5)
         self.label_pointer_speed = QLabel()
-        self.label_pointer_speed.setMinimumWidth(40)
         self.slider_pointer_speed.valueChanged.connect(self._update_speed_label)
-        speed_layout.addWidget(self.slider_pointer_speed, 1)
-        speed_layout.addWidget(self.label_pointer_speed)
-        motion_form.addRow("İmleç hızı:", speed_row)
+        self._row(card, "İmleç hızı", "Yalnız göreli imleçte geçerli",
+                  self._slider_row(self.slider_pointer_speed, self.label_pointer_speed))
         self.set_pointer_speed(1.0)
 
         self.spin_sensitivity = self._make_double_spin(0.10, 3.00, 0.05, 1.00)
         self.spin_sensitivity.valueChanged.connect(self._sync_preset_from_values)
-        motion_form.addRow("İmleç hassasiyeti:", self.spin_sensitivity)
+        self._row(card, "İmleç hassasiyeti", "Büyük değer: küçük hareket daha uzağa gider", self.spin_sensitivity)
 
         self.spin_smoothing = self._make_double_spin(0.00, 1.00, 0.05, 0.50)
-        motion_form.addRow("Yumuşatma oranı:", self.spin_smoothing)
-        layout.addWidget(motion_group)
+        self._row(card, "Yumuşatma oranı", "Büyük değer: daha az titreme, biraz daha gecikme", self.spin_smoothing)
 
-        click_group = QGroupBox("Tıklama ve Geri Bildirim")
-        click_form = QFormLayout(click_group)
-        self.chk_dwell_click = QCheckBox("Bekleyerek tıkla (imleç sabit kalınca sol tık)")
+        card = self._section(layout, "Tıklama ve Geri Bildirim")
+        self.chk_dwell_click = ToggleSwitch("Bekleyerek tıkla (imleç sabit kalınca sol tık)")
         self.chk_dwell_click.toggled.connect(self._update_dwell_enabled)
-        click_form.addRow(self.chk_dwell_click)
+        self._row(card, "Bekleyerek tıkla", "İmleç sabit kalınca sol tık", self.chk_dwell_click)
 
-        dwell_row = QWidget()
-        dwell_layout = QHBoxLayout(dwell_row)
-        dwell_layout.setContentsMargins(0, 0, 0, 0)
         self.slider_dwell_ms = QSlider(Qt.Orientation.Horizontal)
         self.slider_dwell_ms.setRange(DWELL_MS_MIN // _DWELL_UNIT_MS, DWELL_MS_MAX // _DWELL_UNIT_MS)
         self.slider_dwell_ms.setSingleStep(2)
         self.slider_dwell_ms.setPageStep(4)
         self.label_dwell_ms = QLabel()
-        self.label_dwell_ms.setMinimumWidth(48)
         self.slider_dwell_ms.valueChanged.connect(self._update_dwell_label)
-        dwell_layout.addWidget(self.slider_dwell_ms, 1)
-        dwell_layout.addWidget(self.label_dwell_ms)
-        click_form.addRow("Bekleme süresi:", dwell_row)
+        self._row(card, "Bekleme süresi", "İmlecin sabit kalması gereken süre",
+                  self._slider_row(self.slider_dwell_ms, self.label_dwell_ms))
         self.set_dwell_ms(1000)
 
-        self.chk_click_sound = QCheckBox("Tık ve komutlarda kısa ses çal")
-        click_form.addRow("Tık sesi:", self.chk_click_sound)
-        self.chk_cursor_feedback = QCheckBox("Basılı tutma sırasında imlecin yanında ilerleme halkası göster")
-        click_form.addRow("İmleç halkası:", self.chk_cursor_feedback)
-        layout.addWidget(click_group)
+        self.chk_click_sound = ToggleSwitch("Tık ve komutlarda kısa ses çal")
+        self._row(card, "Tık sesi", "Tık ve komutlarda kısa ses çal", self.chk_click_sound)
+        self.chk_cursor_feedback = ToggleSwitch("Basılı tutma sırasında imlecin yanında ilerleme halkası göster")
+        self._row(card, "İmleç halkası", "Basılı tutma sırasında imlecin yanında ilerleme halkası göster",
+                  self.chk_cursor_feedback)
 
         layout.addStretch(1)
         return page
 
     def _build_gestures_tab(self) -> QWidget:
-        page, layout = self._page()
+        page, layout = self._page("Hareketler")
 
-        pinch_group = QGroupBox("Pinch")
-        pinch_form = QFormLayout(pinch_group)
+        card = self._section(layout, "Pinch")
         self.spin_pinch_on = self._make_double_spin(0.10, 0.60, 0.01, 0.33)
-        pinch_form.addRow("Başlatma eşiği (avuç birimi):", self.spin_pinch_on)
+        self._row(card, "Başlatma eşiği", "Parmaklar bu kadar yaklaşınca pinch başlar (avuç birimi)",
+                  self.spin_pinch_on)
         self.spin_pinch_off = self._make_double_spin(0.15, 0.85, 0.01, 0.48)
-        pinch_form.addRow("Bırakma eşiği (avuç birimi):", self.spin_pinch_off)
-        layout.addWidget(pinch_group)
+        self._row(card, "Bırakma eşiği", "Parmaklar bu kadar ayrılınca pinch biter (avuç birimi)",
+                  self.spin_pinch_off)
 
-        dir_group = QGroupBox("Yönler ve Komutlar")
-        dir_form = QFormLayout(dir_group)
-        self.combo_scroll_dir = QComboBox()
+        card = self._section(layout, "Yönler ve Komutlar")
+        self.combo_scroll_dir = ComboBox()
         self.combo_scroll_dir.addItem("Doğal (Yukarı = Yukarı)", "natural")
         self.combo_scroll_dir.addItem("Ters (Yukarı = Aşağı)", "reverse")
-        dir_form.addRow("Kaydırma yönü:", self.combo_scroll_dir)
+        self._row(card, "Kaydırma yönü", "Kaydırma modunda elin yönü", self.combo_scroll_dir)
 
-        self.combo_zoom_dir = QComboBox()
+        self.combo_zoom_dir = ComboBox()
         self.combo_zoom_dir.addItem("Doğal (Eller Açılınca Yakınlaş)", "natural")
         self.combo_zoom_dir.addItem("Ters (Eller Açılınca Uzaklaş)", "reverse")
-        dir_form.addRow("Yakınlaştırma yönü:", self.combo_zoom_dir)
+        self._row(card, "Yakınlaştırma yönü", "Yakınlaştırma modunda ellerin yönü", self.combo_zoom_dir)
 
-        self.combo_swipe_profile = QComboBox()
-        for key, label in SWIPE_PROFILE_LABELS_TR.items():
-            self.combo_swipe_profile.addItem(label, key)
-        dir_form.addRow("Kaydırma profili:", self.combo_swipe_profile)
-        dir_form.addRow("", self._hint(
-            "Komutlar modunda sola/sağa kaydırmanın anlamı. Otomatik: ön plandaki uygulamaya göre "
-            "seçilir (sunum, tarayıcı, medya ya da sanal masaüstleri)."))
-        layout.addWidget(dir_group)
+        self.combo_swipe_profile = ComboBox()
+        for key, text in SWIPE_PROFILE_LABELS_TR.items():
+            self.combo_swipe_profile.addItem(text, key)
+        self._row(card, "Kaydırma profili", "Komutlar modunda sola/sağa kaydırmanın anlamı. Otomatik: ön plandaki "
+                  "uygulamaya göre seçilir (sunum, tarayıcı, medya ya da sanal masaüstleri).", self.combo_swipe_profile)
 
         layout.addStretch(1)
         return page
 
     def _build_instrument_tab(self) -> QWidget:
-        page, layout = self._page()
+        page, layout = self._page("Enstrüman")
 
-        play_group = QGroupBox("Çalış")
-        play_form = QFormLayout(play_group)
-        self.combo_instrument_layout = QComboBox()
+        card = self._section(layout, "Çalış")
+        self.combo_instrument_layout = ComboBox()
         for key in LAYOUTS:
             self.combo_instrument_layout.addItem(INSTRUMENT_LAYOUT_LABELS_TR.get(key, key), key)
-        play_form.addRow("Düzen:", self.combo_instrument_layout)
-        play_form.addRow("", self._hint(
-            "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, tel eli yüksekliği akoru seçer. "
-            "Sabit teller: teller ekranda durur, iki elle de çalınır. "
-            "Serbest teller: telleri kendin çizersin, istediğin yere ve boyda."))
-        self.spin_instrument_fixed_strings = QSpinBox()
-        self.spin_instrument_fixed_strings.setRange(*FIXED_STRINGS_RANGE)
-        play_form.addRow("Tel sayısı (sabit):", self.spin_instrument_fixed_strings)
-        play_form.addRow("", self._hint(
-            "Telleri taşımak ya da boyutlandırmak için: Enstrüman penceresinde fareyle sürükle (köşeden "
-            "boyutlandır) ya da iki elinle çimdikle, yarım saniye tut, gerdir ve bırak."))
-        self.chk_instrument_free_snap = QCheckBox("Serbest tellerde hizalama yardımı")
-        play_form.addRow("", self.chk_instrument_free_snap)
-        play_form.addRow("", self._hint(
-            "Serbest teller: boş yerde çimdikle, yarım saniye tut, çekerek tel çiz. Telin ucunu tutup boyutlandır, ortasından tutup taşı. İki elle bir telin iki ucunu tutabilirsin. Teli çok kısaltıp bırakırsan silinir. Hizalama açıksa yakın getirdiğin tel düzleşir ve diğer telin üstüne hizalanır; kapalıysa tel tam bıraktığın yerde kalır."))
-
-        self.combo_instrument_scale = QComboBox()
+        self._row(card, "Düzen", "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, tel eli "
+                  "yüksekliği akoru seçer. Sabit teller: teller ekranda durur, iki elle de çalınır. "
+                  "Serbest teller: telleri kendin çizersin, istediğin yere ve boyda.", self.combo_instrument_layout)
+        self.combo_instrument_scale = ComboBox()
         for key in SCALE_NAMES:
             self.combo_instrument_scale.addItem(INSTRUMENT_SCALE_LABELS_TR.get(key, key), key)
-        play_form.addRow("Dizi:", self.combo_instrument_scale)
-        self.chk_instrument_quantize = QCheckBox("Diziye kilitle")
-        play_form.addRow("", self.chk_instrument_quantize)
-        layout.addWidget(play_group)
+        self._row(card, "Dizi", "Çalınabilecek notalar", self.combo_instrument_scale)
+        self.chk_instrument_quantize = ToggleSwitch("Diziye kilitle")
+        self._row(card, "Diziye kilitle", "Perdeler dizinin en yakın notasına oturur", self.chk_instrument_quantize)
 
-        chord_group = QGroupBox("Akorlar (Akor düzeni)")
-        chord_form = QFormLayout(chord_group)
+        card = self._section(layout, "Teller")
+        self.spin_instrument_fixed_strings = SpinBox()
+        self.spin_instrument_fixed_strings.setRange(*FIXED_STRINGS_RANGE)
+        self._row(card, "Tel sayısı (sabit)", "Sabit teller düzenindeki tel sayısı", self.spin_instrument_fixed_strings)
+        card.add(self._hint(
+            "Telleri taşımak ya da boyutlandırmak için: Enstrüman penceresinde fareyle sürükle (köşeden "
+            "boyutlandır) ya da iki elinle çimdikle, yarım saniye tut, gerdir ve bırak."))
+        self.chk_instrument_free_snap = ToggleSwitch("Serbest tellerde hizalama yardımı")
+        self._row(card, "Serbest tellerde hizalama yardımı", "Açıksa yakın getirdiğin tel düzleşir ve diğer telin "
+                  "üstüne hizalanır; kapalıysa tel tam bıraktığın yerde kalır.", self.chk_instrument_free_snap)
+        card.add(self._hint(
+            "Serbest teller: boş yerde çimdikle, yarım saniye tut, çekerek tel çiz. Telin ucunu tutup boyutlandır, "
+            "ortasından tutup taşı. İki elle bir telin iki ucunu tutabilirsin. Teli çok kısaltıp bırakırsan silinir."))
+
+        card = self._section(layout, "Akorlar (Akor düzeni)")
         self.combo_chords: list[QComboBox] = []
         for zone_label in CHORD_ZONE_LABELS_TR:
-            combo = QComboBox()
+            combo = ComboBox()
             for name in CHORD_NAMES:
                 combo.addItem(name, name)
-            chord_form.addRow(f"{zone_label}:", combo)
+            self._row(card, zone_label, "", combo, NUMBER_WIDTH)
             self.combo_chords.append(combo)
-        layout.addWidget(chord_group)
 
-        sound_group = QGroupBox("Ses")
-        sound_form = QFormLayout(sound_group)
-        vol_row = QWidget()
-        vol_layout = QHBoxLayout(vol_row)
-        vol_layout.setContentsMargins(0, 0, 0, 0)
+        card = self._section(layout, "Ses")
         self.slider_instrument_volume = QSlider(Qt.Orientation.Horizontal)
         self.slider_instrument_volume.setRange(0, 100)
         self.slider_instrument_volume.setSingleStep(5)
         self.slider_instrument_volume.setPageStep(10)
         self.label_instrument_volume = QLabel()
-        self.label_instrument_volume.setMinimumWidth(40)
         self.slider_instrument_volume.valueChanged.connect(self._update_volume_label)
-        vol_layout.addWidget(self.slider_instrument_volume, 1)
-        vol_layout.addWidget(self.label_instrument_volume)
-        sound_form.addRow("Ses düzeyi:", vol_row)
-
-        self.combo_instrument_tone = QComboBox()
+        self._row(card, "Ses düzeyi", "Enstrümanın sesi; sistem sesini değiştirmez",
+                  self._slider_row(self.slider_instrument_volume, self.label_instrument_volume))
+        self.combo_instrument_tone = ComboBox()
         for key in TONES:
             self.combo_instrument_tone.addItem(INSTRUMENT_TONE_LABELS_TR.get(key, key), key)
-        sound_form.addRow("Tını:", self.combo_instrument_tone)
-
-        device_row = QWidget()
-        device_layout = QHBoxLayout(device_row)
-        device_layout.setContentsMargins(0, 0, 0, 0)
-        self.combo_audio_device = QComboBox()
-        self.btn_test_sound = QPushButton("Test sesi çal")
+        self._row(card, "Tını", "Telin ses rengi", self.combo_instrument_tone)
+        self.combo_audio_device = ComboBox()
+        self._row(card, "Ses cihazı", "Enstrümanın çaldığı çıkış", self.combo_audio_device)
+        self.btn_test_sound = button("Test sesi çal", "", "sound_test")
         self.btn_test_sound.clicked.connect(self.request_test_sound)
-        device_layout.addWidget(self.combo_audio_device, 1)
-        device_layout.addWidget(self.btn_test_sound)
-        sound_form.addRow("Ses cihazı:", device_row)
-
-        self.combo_audio_latency = QComboBox()
+        self._row(card, "Cihazı dene", "Seçili cihazdan kısa bir nota çalar", self.btn_test_sound)
+        self.combo_audio_latency = ComboBox()
         for key in LATENCIES:
             self.combo_audio_latency.addItem(AUDIO_LATENCY_LABELS_TR.get(key, key), key)
-        sound_form.addRow("Gecikme:", self.combo_audio_latency)
-        sound_form.addRow("", self._hint("Ses kesik kesik gelirse gecikmeyi Normal yapın."))
-        layout.addWidget(sound_group)
+        self._row(card, "Gecikme", "Ses kesik kesik gelirse gecikmeyi Normal yapın.", self.combo_audio_latency)
 
-        view_group = QGroupBox("Görünüm")
-        view_form = QFormLayout(view_group)
-        self.chk_instrument_particles = QCheckBox("Kıvılcım efektleri")
-        view_form.addRow(self.chk_instrument_particles)
-        layout.addWidget(view_group)
+        card = self._section(layout, "Görünüm")
+        self.chk_instrument_particles = ToggleSwitch("Kıvılcım efektleri")
+        self._row(card, "Kıvılcım efektleri", "Tele vurunca kıvılcım saçar", self.chk_instrument_particles)
 
         layout.addStretch(1)
         return page
@@ -712,39 +756,35 @@ class SettingsDialog(QDialog):
         self.test_sound_requested.emit(self.selected_audio_device())
 
     def _build_advanced_tab(self) -> QWidget:
-        page, layout = self._page()
+        page, layout = self._page("Gelişmiş")
 
-        track_group = QGroupBox("Kamera ve Takip")
-        track_form = QFormLayout(track_group)
-        self.combo_backend = QComboBox()
+        card = self._section(layout, "Kamera ve Takip")
+        self.combo_backend = ComboBox()
         self.combo_backend.addItem("Media Foundation (Önerilen)", "media_foundation")
         self.combo_backend.addItem("DirectShow (Yedek)", "directshow")
-        track_form.addRow("Kamera altyapısı:", self.combo_backend)
+        self._row(card, "Kamera altyapısı", "Kamera açılmıyorsa diğerini dene", self.combo_backend)
         self.spin_detection = self._make_double_spin(0.10, 0.95, 0.05, 0.55)
-        track_form.addRow("Algılama güven eşiği:", self.spin_detection)
+        self._row(card, "Algılama güven eşiği", "Elin ilk bulunması için gereken güven", self.spin_detection)
         self.spin_tracking = self._make_double_spin(0.10, 0.95, 0.05, 0.55)
-        track_form.addRow("Takip güven eşiği:", self.spin_tracking)
-        self.chk_dry_run = QCheckBox("Dry-run komut panelini göster")
-        track_form.addRow(self.chk_dry_run)
-        layout.addWidget(track_group)
+        self._row(card, "Takip güven eşiği", "Elin izlenmeye devam etmesi için gereken güven", self.spin_tracking)
+        self.chk_dry_run = ToggleSwitch("Dry-run komut panelini göster")
+        self._row(card, "Dry-run komut panelini göster", "Komutsuz denemede üretilecek komutları listeler",
+                  self.chk_dry_run)
 
-        tools_group = QGroupBox("Araçlar")
-        tools_layout = QVBoxLayout(tools_group)
-        row1 = QHBoxLayout()
-        self.btn_export = QPushButton("Ayarları dışa aktar…")
-        self.btn_import = QPushButton("Ayarları içe aktar…")
-        row1.addWidget(self.btn_export)
-        row1.addWidget(self.btn_import)
-        row2 = QHBoxLayout()
-        self.btn_diagnostics = QPushButton("Tanılama raporu oluştur")
-        self.btn_tutorial = QPushButton("Eğitimi başlat")
-        row2.addWidget(self.btn_diagnostics)
-        row2.addWidget(self.btn_tutorial)
-        tools_layout.addLayout(row1)
-        tools_layout.addLayout(row2)
-        tools_layout.addWidget(self._hint(
-            "Tanılama raporu kamera, ekran ve ayar bilgilerini paylaşılabilir bir dosyaya yazar."))
-        layout.addWidget(tools_group)
+        card = self._section(layout, "Araçlar")
+        self.btn_export = button("Ayarları dışa aktar…", "", "export")
+        self.btn_import = button("Ayarları içe aktar…", "", "import")
+        self.btn_diagnostics = button("Tanılama raporu oluştur", "", "report")
+        self.btn_tutorial = button("Eğitimi başlat", "", "learn")
+        for title, description, b in (
+                ("Yedekle", "Bütün ayarları bir dosyaya yazar", self.btn_export),
+                ("Geri yükle", "Daha önce dışa aktarılan ayarları okur", self.btn_import),
+                ("Tanılama", "Tanılama raporu kamera, ekran ve ayar bilgilerini paylaşılabilir bir dosyaya yazar.",
+                 self.btn_diagnostics),
+                ("Eğitim", "Temel el hareketlerini adım adım gösterir", self.btn_tutorial)):
+            b.setAutoDefault(False)
+            self._row(card, title, description, b, CONTROL_WIDTH - 24)
+        self.btn_test_sound.setAutoDefault(False)
 
         self.btn_export.clicked.connect(self.request_export)
         self.btn_import.clicked.connect(self.request_import)
@@ -761,7 +801,7 @@ class SettingsDialog(QDialog):
         step: float,
         value: float,
     ) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+        spin = DoubleSpinBox()
         spin.setDecimals(2)
         spin.setRange(minimum, maximum)
         spin.setSingleStep(step)
@@ -908,6 +948,7 @@ class SettingsDialog(QDialog):
         self.chk_overlay.setChecked(cfg.show_overlay)
         self.chk_feedback.setChecked(cfg.show_feedback_osd)
         self.chk_mascot.setChecked(cfg.show_mascot)
+        self.chk_hide_on_control.setChecked(cfg.hide_on_control)
         self.chk_dry_run.setChecked(cfg.show_dry_run_panel)
         self._set_combo_by_data(self.combo_monitor, cfg.monitor_mapping)
         self.chk_startup.setChecked(cfg.start_with_windows)
@@ -957,6 +998,7 @@ class SettingsDialog(QDialog):
             show_overlay=bool(self.chk_overlay.isChecked()),
             show_feedback_osd=bool(self.chk_feedback.isChecked()),
             show_mascot=bool(self.chk_mascot.isChecked()),
+            hide_on_control=bool(self.chk_hide_on_control.isChecked()),
             show_dry_run_panel=bool(self.chk_dry_run.isChecked()),
             monitor_mapping=str(self.combo_monitor.currentData() or "all"),
             start_with_windows=bool(self.chk_startup.isChecked()),

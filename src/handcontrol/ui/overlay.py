@@ -13,12 +13,12 @@ from dataclasses import replace
 from typing import Callable, Optional
 
 from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from handcontrol.contracts import Mode
+from handcontrol.ui import icons, theme
 from handcontrol.ui.dpi import physical_to_logical
-from handcontrol.ui.tray import create_mode_pixmap
 from handcontrol.ui.viewmodel import (
     COMMAND_TOAST_MS,
     CursorFeedbackState,
@@ -117,19 +117,29 @@ def build_window_action_overlay_state(
 
 
 _INDICATOR_COLORS: dict[IndicatorKind, QColor] = {
-    IndicatorKind.PAUSED: QColor(241, 196, 15),
-    IndicatorKind.NO_TRACKING: QColor(231, 76, 60),
-    IndicatorKind.PENDING: QColor(52, 152, 219),
-    IndicatorKind.ENGAGED: QColor(46, 204, 113),
-    IndicatorKind.PARKED: QColor(149, 165, 166),
+    IndicatorKind.PAUSED: QColor(theme.WARNING),
+    IndicatorKind.NO_TRACKING: QColor(theme.DANGER),
+    IndicatorKind.PENDING: QColor(theme.ACCENT),
+    IndicatorKind.ENGAGED: QColor(theme.SUCCESS),
+    IndicatorKind.PARKED: QColor(theme.MUTED),
 }
-_INDICATOR_GLYPHS: dict[IndicatorKind, str] = {
-    IndicatorKind.PAUSED: "||",
-    IndicatorKind.NO_TRACKING: "X",
-    IndicatorKind.PENDING: "...",
-    IndicatorKind.ENGAGED: "+",
-    IndicatorKind.PARKED: "o",
+_INDICATOR_ICONS: dict[IndicatorKind, str] = {
+    IndicatorKind.PAUSED: "pause",
+    IndicatorKind.NO_TRACKING: "camera_off",
+    IndicatorKind.PENDING: "timer",
+    IndicatorKind.ENGAGED: "pointer",
+    IndicatorKind.PARKED: "hand",
 }
+_WINDOW_ICONS: dict[str, str] = {
+    WindowActionKind.MINIMIZE.value: "minimize",
+    WindowActionKind.MAXIMIZE_RESTORE.value: "maximize",
+    WindowActionKind.MOVE_OTHER_MONITOR.value: "move_monitor",
+    WindowActionKind.CLOSE.value: "close",
+}
+_LEFT = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+_CENTER = int(Qt.AlignmentFlag.AlignCenter)
+_WHEEL_ICONS: dict[str, str] = {**{m.value: name for m, name in icons.MODE_ICONS.items()}, "more": "more", "back": "back"}
+ANIM_TICK_MS = 16
 
 
 class StatusIndicator(QWidget):
@@ -198,27 +208,20 @@ class StatusIndicator(QWidget):
         painter.end()
 
     def _paint(self, painter: QPainter) -> None:
+        """Pill as wide as its text, flush with the right edge (the widget sits in the top right corner)."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         accent = self.color
-        box = QRectF(2.0, 2.0, self.width() - 4.0, self.height() - 4.0)
-        painter.setPen(QPen(accent, 2.0))
-        painter.setBrush(QColor(20, 26, 36, 220))
-        painter.drawRoundedRect(box, 16.0, 16.0)
-        font = QFont("Segoe UI", 10)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(accent)
-        painter.drawText(
-            QRectF(box.left() + 10.0, box.top(), 30.0, box.height()),
-            int(Qt.AlignmentFlag.AlignCenter),
-            _INDICATOR_GLYPHS[self._state.kind],
-        )
-        painter.setPen(QColor(240, 245, 250))
-        painter.drawText(
-            QRectF(box.left() + 44.0, box.top(), box.width() - 54.0, box.height()),
-            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            self._state.text,
-        )
+        painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
+        w = min(self.width() - 2.0, painter.fontMetrics().horizontalAdvance(self._state.text) + 54.0)
+        box = QRectF(self.width() - w - 1.0, 2.0, w, self.height() - 4.0)
+        theme.paint_glass(painter, box, box.height() / 2, alpha=0.90, blur=0)
+        tile = QRectF(box.left() + 4.0, box.top() + 4.0, box.height() - 8.0, box.height() - 8.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.color(accent.name(), 0.20))
+        painter.drawEllipse(tile)
+        icons.paint(painter, _INDICATOR_ICONS[self._state.kind], tile.adjusted(5, 5, -5, -5), accent, 2.2)
+        painter.setPen(QColor(theme.TEXT))
+        painter.drawText(box.adjusted(tile.width() + 12.0, 0, -8.0, 0), _LEFT, self._state.text)
 
 
 class OverlayWindow(QWidget):
@@ -248,6 +251,15 @@ class OverlayWindow(QWidget):
         self._overlay_state: OverlayState = build_mode_overlay_state()
         self._last_drawn_close_progress: float = 0.0
         self._last_drawn_cursor_visible: bool = False
+        self._hover: dict[str, float] = {}       # eased hover amount per item
+        self._appear = 1.0
+        self._still = False                      # render_to_image: no animation, final look
+        self._tick_ms = 0.0
+        self._clock = QElapsedTimer()
+        self._clock.start()
+        self._timer = QTimer(self)
+        self._timer.setInterval(ANIM_TICK_MS)
+        self._timer.timeout.connect(self._tick)
 
         if self._bridge is not None:
             self._bridge.overlay_updated.connect(self.apply_overlay_state)
@@ -295,8 +307,48 @@ class OverlayWindow(QWidget):
     @Slot(object)
     def apply_overlay_state(self, state: OverlayState) -> None:
         """Update the overlay state without stealing focus."""
+        opened = bool(state.items) and not self._overlay_state.items
         self._overlay_state = state
+        if self.isVisible():
+            self._animate(opened)
         self.update()
+
+    # ---------- transitions (painting only; the state itself changes at once) ----------
+
+    def _animate(self, appear: bool) -> None:
+        if appear:
+            self._appear = 0.0
+        if not self._timer.isActive() and self._moving():
+            self._tick_ms = float(self._clock.elapsed())
+            self._timer.start()
+
+    def _moving(self) -> bool:
+        return self._appear < 1.0 or any(abs(self._hover.get(i.item_id, 0.0) - float(i.hovered)) > 0.001
+                                         for i in self._overlay_state.items)
+
+    @Slot()
+    def _tick(self) -> None:
+        now = float(self._clock.elapsed())
+        dt, self._tick_ms = now - self._tick_ms, now
+        self._appear = min(1.0, self._appear + dt / theme.NORMAL_MS)
+        step = dt / theme.FAST_MS
+        for item in self._overlay_state.items:
+            at, goal = self._hover.get(item.item_id, 0.0), float(item.hovered)
+            self._hover[item.item_id] = min(goal, at + step) if goal > at else max(goal, at - step)
+        self.update()
+        if not self._moving() or not self.isVisible():
+            self._timer.stop()
+
+    def _hover_of(self, item: OverlayMenuItem) -> float:
+        if self._still or not self.isVisible():
+            return float(item.hovered)
+        t = self._hover.get(item.item_id, 0.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._hover = {i.item_id: float(i.hovered) for i in self._overlay_state.items}
+        self._animate(True)
 
     def configure_mode_menu(
         self,
@@ -420,7 +472,9 @@ class OverlayWindow(QWidget):
         image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(Qt.GlobalColor.transparent)
         painter = QPainter(image)
+        self._still = True
         self._paint_overlay(painter, QRectF(0.0, 0.0, float(width), float(height)))
+        self._still = False
         painter.end()
         return image
 
@@ -441,8 +495,9 @@ class OverlayWindow(QWidget):
         if opacity <= 0.001:
             return
 
-        painter.setOpacity(opacity)
-        scale = self.effective_scale
+        appear = 1.0 if self._still or not self.isVisible() else 1.0 - (1.0 - self._appear) ** 3
+        painter.setOpacity(opacity * appear)
+        scale = self.effective_scale * (0.94 + 0.06 * appear)
         if scale < 0.999:
             cx, cy = rect.center().x(), rect.center().y()
             painter.translate(cx, cy)
@@ -454,26 +509,21 @@ class OverlayWindow(QWidget):
             return
 
         panel_rect = rect.adjusted(16.0, 16.0, -16.0, -16.0)
-        painter.setPen(QPen(QColor(86, 152, 224, 210), 2.0))
-        painter.setBrush(QColor(18, 24, 34, 225))
-        painter.drawRoundedRect(panel_rect, 14.0, 14.0)
+        theme.paint_glass(painter, panel_rect, 18.0, alpha=0.93, blur=14)
 
         # Header
-        title_font = QFont("Segoe UI", 11)
-        title_font.setBold(True)
-        painter.setFont(title_font)
-        painter.setPen(QColor(235, 242, 250))
-
+        painter.setFont(theme.bold(15, True))
+        painter.setPen(QColor(theme.TEXT))
         title = self._overlay_state.title or "Menü Katmanı"
+        header_rect = QRectF(panel_rect.left() + 18.0, panel_rect.top() + 10.0, panel_rect.width() - 36.0, 26.0)
+        painter.drawText(header_rect, _LEFT, title)
         if self._overlay_state.target_window_title:
-            title = f"{title} — {self._overlay_state.target_window_title}"
-
-        header_rect = QRectF(panel_rect.left() + 14.0, panel_rect.top() + 10.0, panel_rect.width() - 28.0, 26.0)
-        painter.drawText(
-            header_rect,
-            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            title,
-        )
+            x = painter.fontMetrics().horizontalAdvance(title) + 10.0
+            painter.setFont(theme.font(theme.TEXT_PX["body"]))
+            painter.setPen(QColor(theme.MUTED))
+            room = int(header_rect.width() - x - 110.0)
+            painter.drawText(header_rect.adjusted(x, 1.0, 0, 0), _LEFT, painter.fontMetrics().elidedText(
+                self._overlay_state.target_window_title, Qt.TextElideMode.ElideRight, room))
 
         # Remaining time indicator (5-second timeout bar)
         rem_ratio = max(
@@ -484,9 +534,8 @@ class OverlayWindow(QWidget):
             ),
         )
         rem_sec = max(0.0, (self._overlay_state.timeout_ms - self._overlay_state.inactivity_ms) / 1000.0)
-        sub_font = QFont("Segoe UI", 8)
-        painter.setFont(sub_font)
-        painter.setPen(QColor(168, 184, 204))
+        painter.setFont(theme.font(11))
+        painter.setPen(QColor(theme.MUTED))
         painter.drawText(
             header_rect,
             int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
@@ -515,21 +564,12 @@ class OverlayWindow(QWidget):
         # Bottom timeout bar
         bar_rect = QRectF(
             panel_rect.left() + 16.0,
-            panel_rect.bottom() - 14.0,
+            panel_rect.bottom() - 15.0,
             panel_rect.width() - 32.0,
-            5.0,
+            4.0,
         )
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(42, 52, 68))
-        painter.drawRoundedRect(bar_rect, 2.5, 2.5)
-        if rem_ratio > 0.0:
-            bar_color = QColor(240, 148, 72) if self._overlay_state.closing_progress > 0.0 else QColor(72, 172, 242)
-            painter.setBrush(bar_color)
-            painter.drawRoundedRect(
-                QRectF(bar_rect.left(), bar_rect.top(), bar_rect.width() * rem_ratio, bar_rect.height()),
-                2.5,
-                2.5,
-            )
+        theme.paint_bar(painter, bar_rect, rem_ratio,
+                        theme.DANGER if self._overlay_state.closing_progress > 0.0 else theme.ACCENT)
 
         # Draw custom virtual cursor on top
         cursor = self._overlay_state.cursor
@@ -546,69 +586,90 @@ class OverlayWindow(QWidget):
         outer = min(rect.width(), rect.height()) / 2.0 - 18.0
         inner = outer * 0.36
         if not state.items:                              # V is being held: only the filling ring
-            box = QRectF(c.x() - 34.0, c.y() - 34.0, 68.0, 68.0)
-            painter.setBrush(QColor(18, 24, 34, 225))
-            painter.setPen(QPen(QColor(80, 92, 110), 6.0))
-            painter.drawEllipse(box)
-            painter.setPen(QPen(QColor(38, 198, 218), 6.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            painter.drawArc(box, 90 * 16, -int(max(0.0, min(1.0, state.cursor.hold_progress)) * 360 * 16))
-            painter.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-            painter.setPen(QColor(235, 242, 250))
-            painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), "V")
+            theme.paint_glass(painter, QRectF(c.x() - 42.0, c.y() - 42.0, 84.0, 84.0), 42.0, alpha=0.92, blur=12)
+            theme.paint_ring(painter, c, 32.0, state.cursor.hold_progress, theme.ACCENT, 5.0)
+            painter.setFont(theme.bold(24, True))
+            painter.setPen(QColor(theme.TEXT))
+            painter.drawText(QRectF(c.x() - 30.0, c.y() - 30.0, 60.0, 60.0), _CENTER, "V")
             return
+        disc = QRectF(c.x() - outer, c.y() - outer, 2 * outer, 2 * outer)
+        theme.paint_shadow(painter, disc, outer, 16, 0.5, 1.0)
+        ring = QPainterPath()
+        ring.addEllipse(c, outer, outer)
+        ring.addEllipse(c, inner, inner)                 # odd-even fill: a donut
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.color(theme.SURFACE, 0.93))
+        painter.drawPath(ring)
+        painter.setPen(QPen(theme.color(theme.WHITE, 0.14), 1.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(disc.adjusted(0.5, 0.5, -0.5, -0.5))
         step = 360.0 / len(state.items)
+        painter.setPen(QPen(theme.color(theme.WHITE, 0.10), 1.0))
+        for i in range(len(state.items)):
+            a = math.radians((i + 0.5) * step)
+            painter.drawLine(QPointF(c.x() + (inner + 10) * math.sin(a), c.y() - (inner + 10) * math.cos(a)),
+                             QPointF(c.x() + (outer - 12) * math.sin(a), c.y() - (outer - 12) * math.cos(a)))
         for i, item in enumerate(state.items):
-            r = outer + (10.0 if item.hovered else 0.0)
-            path = QPainterPath()
+            hot = self._hover_of(item)
+            r = outer + 10.0 * hot
             start = 90.0 - (i - 0.5) * step - 1.2        # Qt: degrees counter-clockwise from 3 o'clock
             span = -(step - 2.4)
-            path.arcMoveTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start)
-            path.arcTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start, span)
-            path.arcTo(QRectF(c.x() - inner, c.y() - inner, 2 * inner, 2 * inner), start + span, -span)
-            path.closeSubpath()
-            fill, edge = QColor(24, 31, 42, 238), QColor(64, 82, 106)
-            if item.hovered:
-                fill, edge = QColor(15, 85, 97, 248), QColor(38, 198, 218)
-            elif item.active:
-                fill, edge = QColor(28, 72, 58, 238), QColor(82, 214, 148)
-            painter.setPen(QPen(edge, 2.4 if item.hovered else 1.4))
-            painter.setBrush(fill)
-            painter.drawPath(path)
+            if hot > 0.0 or item.active:
+                path = QPainterPath()
+                path.arcMoveTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start)
+                path.arcTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start, span)
+                path.arcTo(QRectF(c.x() - inner, c.y() - inner, 2 * inner, 2 * inner), start + span, -span)
+                path.closeSubpath()
+                pen = QPen(theme.color(theme.ACCENT, hot), 4.0)     # rounds the slice corners
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen if hot > 0.0 else Qt.PenStyle.NoPen)
+                painter.setBrush(theme.mix(theme.color(theme.ACCENT, 0.14 if item.active else 0.0), theme.ACCENT, hot))
+                painter.drawPath(path)
+            if item.active:
+                rim = outer - 4.0
+                pen = QPen(theme.mix(theme.ACCENT, theme.ON_ACCENT, hot), 3.0)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                painter.drawArc(QRectF(c.x() - rim, c.y() - rim, 2 * rim, 2 * rim), int((start - step * 0.3) * 16),
+                                int((span + step * 0.6) * 16))
             a = math.radians(i * step)
             mid = (inner + r) / 2.0
             at = QPointF(c.x() + mid * math.sin(a), c.y() - mid * math.cos(a))
-            size = 38.0 if item.hovered else 32.0
+            size = 30.0 + 4.0 * hot
             icon = QRectF(at.x() - size / 2, at.y() - size / 2 - 11.0, size, size)
-            try:
-                painter.drawPixmap(icon, create_mode_pixmap(Mode(item.item_id), 64), QRectF(0, 0, 64, 64))
-            except ValueError:                           # "more" / "back" are not modes
-                painter.setFont(QFont("Segoe UI", 17, QFont.Weight.Bold))
-                painter.setPen(QColor(218, 228, 240))
-                painter.drawText(icon, int(Qt.AlignmentFlag.AlignCenter), "•••" if item.item_id == "more" else "←")
-            painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold if item.hovered else QFont.Weight.Normal))
-            painter.setPen(QColor(255, 255, 255) if item.hovered else QColor(218, 228, 240))
-            painter.drawText(QRectF(at.x() - 60.0, icon.bottom() + 2.0, 120.0, 20.0),
-                             int(Qt.AlignmentFlag.AlignCenter), item.label)
-        painter.setPen(QPen(QColor(64, 82, 106), 1.4))
-        painter.setBrush(QColor(18, 24, 34, 238))
+            base = theme.FAINT if not item.enabled else theme.ACCENT_TEXT if item.active else theme.TEXT
+            tone = theme.mix(base, theme.ON_ACCENT, hot)
+            icons.paint(painter, _WHEEL_ICONS.get(item.item_id, "info"), icon, tone)
+            painter.setFont(theme.bold(theme.TEXT_PX["body"]) if hot > 0.5 else theme.font(theme.TEXT_PX["body"]))
+            painter.setPen(tone)
+            painter.drawText(QRectF(at.x() - 60.0, icon.bottom() + 4.0, 120.0, 20.0), _CENTER, item.label)
         hub = inner - 6.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.color(theme.BG, 0.95))
         painter.drawEllipse(c, hub, hub)
         left = 1.0 - state.inactivity_ms / max(1.0, state.timeout_ms)
-        painter.setPen(QPen(QColor(72, 172, 242), 3.0))
-        painter.drawArc(QRectF(c.x() - hub, c.y() - hub, 2 * hub, 2 * hub), 90 * 16,
-                        -int(max(0.0, min(1.0, left)) * 360 * 16))
+        theme.paint_ring(painter, c, hub - 2.0, left, theme.ACCENT, 3.0)
         hovered = next((i.label for i in state.items if i.hovered), "")
-        painter.setFont(QFont("Segoe UI", 9))
-        painter.setPen(QColor(200, 210, 224))
-        painter.drawText(QRectF(c.x() - hub + 6, c.y() - hub, 2 * hub - 12, 2 * hub),
-                         int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap),
-                         "Yumruk: seç" if hovered else "Elini bir dilime götür")
+        if hovered:
+            painter.setFont(theme.bold(theme.TEXT_PX["body"]))
+            painter.setPen(QColor(theme.TEXT))
+            painter.drawText(QRectF(c.x() - hub, c.y() - hub, 2 * hub, 2 * hub), _CENTER, "Yumruk: seç")
+        else:                                            # around the resting cursor dot in the middle
+            icons.paint(painter, "hand", QRectF(c.x() - 12.0, c.y() - hub * 0.68, 24.0, 24.0), theme.ACCENT_TEXT)
+            painter.setFont(theme.font(theme.TEXT_PX["caption"]))
+            painter.setPen(QColor(theme.TEXT_SOFT))
+            painter.drawText(QRectF(c.x() - hub * 0.7, c.y() + 10.0, hub * 1.4, 40.0),
+                             int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
+                             "Elini bir dilime götür")
         cursor = state.cursor
         if cursor.visible:
             self._last_drawn_cursor_visible = True
             at = QPointF(c.x() + (cursor.x - 0.5) * 2 * outer, c.y() + (cursor.y - 0.5) * 2 * outer)
-            painter.setPen(QPen(QColor(12, 16, 22), 2.0))
-            painter.setBrush(QColor(255, 255, 255))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(theme.color(theme.INK, 0.45))
+            painter.drawEllipse(at, 11.0, 11.0)
+            painter.setPen(QPen(QColor(theme.INK), 2.0))
+            painter.setBrush(QColor(theme.WHITE))
             painter.drawEllipse(at, 7.0, 7.0)
 
     def _draw_menu_item(
@@ -618,73 +679,36 @@ class OverlayWindow(QWidget):
         item: OverlayMenuItem,
     ) -> None:
         is_close = item.item_id == WindowActionKind.CLOSE.value
-        if not item.enabled:
-            bg = QColor(30, 35, 44, 150)
-            border = QColor(65, 72, 84)
-            text_color = QColor(115, 125, 138)
-        elif is_close and (item.armed or item.hold_progress > 0.0):
-            bg = QColor(92, 28, 34, 230)
-            border = QColor(245, 98, 102)
-            text_color = QColor(255, 230, 230)
-        elif item.hovered:
-            bg = QColor(38, 78, 122, 235)
-            border = QColor(112, 198, 255)
-            text_color = QColor(255, 255, 255)
-        elif item.active:
-            bg = QColor(28, 72, 58, 220)
-            border = QColor(82, 214, 148)
-            text_color = QColor(230, 255, 240)
-        else:
-            bg = QColor(28, 36, 48, 210)
-            border = QColor(64, 82, 106)
-            text_color = QColor(218, 228, 240)
+        hot = self._hover_of(item) if item.enabled else 0.0
+        danger = is_close and (item.armed or item.hold_progress > 0.0)
+        tone = theme.DANGER if danger else theme.ACCENT
+        level = 1.0 if danger else hot
+        fill = theme.mix(theme.color(theme.WHITE, 0.05 if item.enabled else 0.02), theme.color(tone, 0.20), level)
+        edge = theme.mix(theme.color(theme.WHITE, 0.08), theme.color(tone, 0.85), level)
+        if item.active and not danger:
+            fill = theme.color(theme.ACCENT, 0.16)
+        painter.setPen(QPen(edge, 1.0 + 0.4 * level))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(item_rect, theme.RADIUS_L, theme.RADIUS_L)
 
-        painter.setPen(QPen(border, 1.6))
-        painter.setBrush(bg)
-        painter.drawRoundedRect(item_rect, 8.0, 8.0)
-
-        font = QFont("Segoe UI", 10)
-        font.setBold(item.hovered or item.active or item.armed)
-        painter.setFont(font)
+        text_color = QColor(theme.FAINT if not item.enabled else theme.TEXT)
+        mark = theme.mix(QColor(theme.FAINT if not item.enabled else theme.TEXT_SOFT), tone, level)
+        icons.paint(painter, _WINDOW_ICONS.get(item.item_id, "windows"),
+                    QRectF(item_rect.left() + 16.0, item_rect.center().y() - 11.0, 22.0, 22.0), mark)
+        strong = item.hovered or item.active or item.armed
+        painter.setFont(theme.bold(theme.TEXT_PX["section"]) if strong else theme.font(theme.TEXT_PX["section"]))
         painter.setPen(text_color)
-
-        label_text = item.label
-        if item.active and not is_close:
-            label_text = f"{label_text} (Etkin)"
-
-        painter.drawText(
-            item_rect.adjusted(14.0, 0.0, -54.0, 0.0),
-            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            label_text,
-        )
+        label_text = f"{item.label} (Etkin)" if item.active and not is_close else item.label
+        painter.drawText(item_rect.adjusted(52.0, 0.0, -54.0, 0.0), _LEFT, label_text)
 
         # 1-second visible progress ring for Close ("Kapat") or item hold progress
         if is_close or item.hold_progress > 0.0 or item.armed:
-            ring_r = min(14.0, item_rect.height() * 0.36)
-            ring_center = QPointF(item_rect.right() - 26.0, item_rect.center().y())
-            ring_box = QRectF(
-                ring_center.x() - ring_r,
-                ring_center.y() - ring_r,
-                ring_r * 2.0,
-                ring_r * 2.0,
-            )
-            # Track circle
-            painter.setPen(QPen(QColor(80, 92, 110), 3.0))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(ring_box)
-
             prog = max(0.0, min(1.0, item.hold_progress))
             if is_close:
                 self._last_drawn_close_progress = prog
-            if prog > 0.0:
-                arc_color = QColor(255, 92, 96) if is_close else QColor(92, 214, 255)
-                arc_pen = QPen(arc_color, 3.4)
-                arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                painter.setPen(arc_pen)
-                # Qt drawArc uses 1/16th of a degree; 90 deg is top (12 o'clock)
-                start_angle = 90 * 16
-                span_angle = -int(prog * 360 * 16)
-                painter.drawArc(ring_box, start_angle, span_angle)
+            ring_r = min(13.0, item_rect.height() * 0.34)
+            theme.paint_ring(painter, QPointF(item_rect.right() - 28.0, item_rect.center().y()), ring_r, prog,
+                             theme.DANGER if is_close else theme.ACCENT, 3.0)
 
     def _draw_virtual_cursor(
         self,
@@ -697,34 +721,33 @@ class OverlayWindow(QWidget):
         pt = QPointF(cx, cy)
 
         outer_r = 13.0 if cursor.pinching else 16.0
-        ring_color = QColor(88, 238, 168) if cursor.pinching else QColor(112, 206, 255)
-
+        ring_color = QColor(theme.ACCENT if cursor.pinching else theme.WHITE)
+        painter.setPen(QPen(theme.color(theme.INK, 0.5), 4.5))       # readable on light rows too
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(pt, outer_r, outer_r)
         painter.setPen(QPen(ring_color, 2.2))
-        painter.setBrush(QColor(ring_color.red(), ring_color.green(), ring_color.blue(), 55))
+        painter.setBrush(theme.color(ring_color.name(), 0.16))
         painter.drawEllipse(pt, outer_r, outer_r)
 
         # Center dot
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(255, 255, 255))
+        painter.setBrush(QColor(theme.WHITE))
         painter.drawEllipse(pt, 3.5, 3.5)
 
         # Optional hold progress arc around virtual cursor
         if cursor.hold_progress > 0.0:
-            arc_r = outer_r + 5.0
-            arc_box = QRectF(cx - arc_r, cy - arc_r, arc_r * 2.0, arc_r * 2.0)
-            painter.setPen(QPen(QColor(255, 198, 88), 2.8))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawArc(arc_box, 90 * 16, -int(max(0.0, min(1.0, cursor.hold_progress)) * 360 * 16))
+            theme.paint_ring(painter, pt, outer_r + 5.0, cursor.hold_progress, theme.WARNING, 2.8,
+                             theme.color(theme.WHITE, 0.0))
 
 
 HOLD_KIND_COLORS: dict[str, QColor] = {
-    "right_click": QColor(255, 159, 67),
-    "grab": QColor(72, 172, 242),
-    "fist": QColor(236, 94, 104),
-    "dwell": QColor(88, 238, 168),
-    "window_drag": QColor(178, 132, 255),
+    "right_click": QColor(theme.WARNING),
+    "grab": QColor(theme.ACCENT),
+    "fist": QColor(theme.DANGER),
+    "dwell": QColor(theme.SUCCESS),
+    "window_drag": QColor(theme.AREA),
 }
-_DEFAULT_HOLD_COLOR = QColor(255, 198, 88)
+_DEFAULT_HOLD_COLOR = QColor(theme.ACCENT)
 
 RING_TICK_MS = 16            # ~60 Hz animation between 20 FPS snapshots
 RING_SMOOTH_TAU_MS = 45.0    # display progress follows target with this time constant
@@ -957,31 +980,22 @@ class CursorFeedbackOverlay(QWidget):
         box = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
         painter.setOpacity(self._ring_opacity)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(0, 0, 0, 110), 6.0))       # contrast halo on light backgrounds
+        painter.setPen(QPen(theme.color(theme.INK, 0.55), 7.0))       # contrast halo on light backgrounds
         painter.drawEllipse(box)
-        painter.setPen(QPen(QColor(255, 255, 255, 70), 3.0))  # empty track
-        painter.drawEllipse(box)
-        pen = QPen(self.ring_color, 3.6)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.drawArc(box, 90 * 16, -int(max(0.0, min(1.0, self._display)) * 360 * 16))
+        theme.paint_ring(painter, c, r, self._display, self.ring_color, 3.2, theme.color(theme.WHITE, 0.28))
         painter.setOpacity(1.0)
 
     def _paint_toast(self, painter: QPainter) -> None:
         left = self._toast_ms - (self._now() - self._toast_start_ms)
         opacity = max(0.0, min(1.0, left / TOAST_FADE_MS))
-        font = QFont("Segoe UI", 11)
-        font.setBold(True)
-        painter.setFont(font)
+        painter.setFont(theme.bold(theme.TEXT_PX["section"]))
         text_w = painter.fontMetrics().horizontalAdvance(self._toast_text)
-        w = min(self.WIDTH - 8.0, text_w + 32.0)
+        w = min(self.WIDTH - 24.0, text_w + 36.0)
         box = QRectF(self.ANCHOR.x() - w / 2.0, self.ANCHOR.y() + 52.0, w, 34.0)
         painter.setOpacity(opacity)
-        painter.setPen(QPen(QColor(86, 152, 224, 210), 1.6))
-        painter.setBrush(QColor(18, 24, 34, 230))
-        painter.drawRoundedRect(box, 17.0, 17.0)
-        painter.setPen(QColor(240, 245, 250))
-        painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), self._toast_text)
+        theme.paint_glass(painter, box, 17.0, alpha=0.93, blur=10)
+        painter.setPen(QColor(theme.TEXT))
+        painter.drawText(box, _CENTER, self._toast_text)
         painter.setOpacity(1.0)
 
 

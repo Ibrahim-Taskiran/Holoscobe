@@ -14,7 +14,7 @@ import time
 from typing import Callable, Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from handcontrol.contracts import FrameFeatures
@@ -24,7 +24,8 @@ from handcontrol.instrument.freeform import (
     MAX_STRINGS, MIN_LENGTH, Seg, clamp_seg, ends, hit_test, seg_length, snap_segment,
 )
 from handcontrol.instrument.geometry import Rect, normalize_fixed_rect
-from handcontrol.ui.preview import CameraPreviewWidget
+from handcontrol.ui import theme
+from handcontrol.ui.preview import CameraPreviewWidget, paint_stage_card
 from handcontrol.ui.viewmodel import UiBridge
 
 INSTRUMENT_WINDOW_TITLE_TR = "Holoscobe — Enstrüman"
@@ -38,7 +39,7 @@ PAUSED_HINT_TR = ("Duraklatıldı", "Başlamak için Sürdür'e bas ya da el ç�
 NO_CAMERA_HINT_TR = ("Kamera bekleniyor", "Görüntü gelince teller çalınabilir")
 SNAPPED_TR = "hizalandı"
 HANDLE_PX = 14.0                  # grab distance of a corner handle (widget px)
-AREA_COLOR = QColor(150, 200, 255)
+AREA_COLOR = QColor(theme.AREA)
 
 FRAME_INTERVAL_MS = 33            # ~30 fps repaint while visible
 MAX_WAVE_PX = 14.0                # peak string displacement at amplitude 1
@@ -46,14 +47,9 @@ WAVE_HZ = 7.0                     # visual (slowed) vibration frequency
 WAVE_SEGMENTS = 24
 
 # String colors (enabled): thumb side to index side, warm to cool.
-STRING_COLORS: tuple[QColor, ...] = (
-    QColor(255, 196, 92),
-    QColor(255, 132, 102),
-    QColor(112, 214, 255),
-    QColor(150, 140, 255),
-)
-DISABLED_STRING_COLOR = QColor(130, 138, 150)
-SPARK_COLOR = QColor(255, 214, 120)
+STRING_COLORS: tuple[QColor, ...] = tuple(QColor(c) for c in theme.STRING_COLORS)
+DISABLED_STRING_COLOR = QColor(theme.STRING_DISABLED)
+SPARK_COLOR = QColor(theme.SPARK)
 # Glow passes: (width scale, alpha scale), wide/faint first, thin/bright core last.
 GLOW_PASSES: tuple[tuple[float, float], ...] = ((5.0, 0.10), (3.0, 0.22), (1.7, 0.50), (1.0, 1.0))
 
@@ -187,11 +183,9 @@ class InstrumentCanvas(CameraPreviewWidget):
         self._clock = clock
         self._view: Optional[InstrumentView] = None
         self._particles_enabled = True
-        self._hud_font = QFont("Segoe UI", 10)
-        self._hud_big_font = QFont("Segoe UI", 20)
-        self._hud_big_font.setBold(True)
-        self._label_font = QFont("Segoe UI", 8)
-        self._label_font.setBold(True)
+        self._hud_font = theme.font(theme.TEXT_PX["body"])
+        self._hud_big_font = theme.bold(24, True)
+        self._label_font = theme.bold(11)
         self.setMinimumSize(480, 360)
         self._drag: Optional[tuple[str, tuple[float, float], Rect]] = None   # (kind, anchor/start, rect0)
         self._draft: Optional[Rect] = None
@@ -449,8 +443,9 @@ class InstrumentCanvas(CameraPreviewWidget):
         if self._particles_enabled and len(self._sparks):
             self._draw_sparks(painter, canvas, now)
         painter.restore()
-        self._draw_hud(painter, canvas)
         hint = self.center_hint()
+        if hint is not NO_CAMERA_HINT_TR:
+            self._draw_hud(painter, canvas)
         if hint is not None and self._fdraft is None:
             self._draw_center_hint(painter, canvas, *hint)
 
@@ -469,18 +464,9 @@ class InstrumentCanvas(CameraPreviewWidget):
         return None
 
     def _draw_center_hint(self, painter: QPainter, canvas: QRectF, title: str, text: str) -> None:
-        w = min(560.0, canvas.width() - 24.0)
-        box = QRectF(canvas.center().x() - w / 2.0, canvas.bottom() - 120.0, w, 96.0)
-        painter.setPen(QPen(QColor(38, 198, 218, 170), 1.4))
-        painter.setBrush(QColor(14, 18, 26, 225))
-        painter.drawRoundedRect(box, 14.0, 14.0)
-        painter.setFont(self._hud_big_font)
-        painter.setPen(QColor(245, 248, 252))
-        painter.drawText(box.adjusted(12.0, 10.0, -12.0, -44.0), int(Qt.AlignmentFlag.AlignCenter), title)
-        painter.setFont(self._hud_font)
-        painter.setPen(QColor(178, 188, 202))
-        painter.drawText(box.adjusted(12.0, 50.0, -12.0, -8.0),
-                         int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap), text)
+        icon = {NO_CAMERA_HINT_TR[0]: "camera", PAUSED_HINT_TR[0]: "pause"}.get(title, "instrument")
+        paint_stage_card(painter, canvas, title, text, icon,
+                         theme.WARNING if icon == "pause" else theme.ACCENT, icon == "camera")
 
     def _draw_string(self, painter: QPainter, canvas: QRectF, s: StringView, now_ms: float) -> None:
         a, b = self.string_points(s, canvas)
@@ -528,7 +514,7 @@ class InstrumentCanvas(CameraPreviewWidget):
         painter.drawEllipse(b, 3.5, 3.5)
         if s.label:
             painter.setFont(self._label_font)
-            label_c = QColor(235, 240, 248) if s.enabled else QColor(150, 156, 166)
+            label_c = QColor(theme.TEXT if s.enabled else theme.MUTED)
             painter.setPen(label_c)
             # Put the label beyond the index-side end, away from the string.
             if b.x() >= a.x():
@@ -614,7 +600,7 @@ class InstrumentCanvas(CameraPreviewWidget):
                             -int(360 * 16 * max(0.0, min(1.0, progress))))
 
     def _draw_pick(self, painter: QPainter, pt: QPointF, playing: bool) -> None:
-        c = QColor(255, 255, 255) if playing else QColor(160, 166, 176)
+        c = QColor(theme.WHITE if playing else theme.MUTED)
         painter.setPen(Qt.PenStyle.NoPen)
         glow = QColor(c)
         glow.setAlphaF(0.25)
@@ -669,21 +655,20 @@ class InstrumentCanvas(CameraPreviewWidget):
         painter.setFont(self._hud_font)
         status_w = painter.fontMetrics().horizontalAdvance(status)
         box = QRectF(canvas.left() + 12.0, canvas.top() + 12.0,
-                     min(canvas.width() - 24.0, 46.0 + (note_w + 14.0 if note_w else 0.0) + status_w), 42.0)
+                     min(canvas.width() - 24.0, 50.0 + (note_w + 14.0 if note_w else 0.0) + status_w), 40.0)
+        theme.paint_glass(painter, box, 20.0, alpha=0.86, blur=0)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(14, 18, 26, 200))
-        painter.drawRoundedRect(box, 10.0, 10.0)
-        painter.setBrush(QColor(82, 214, 148) if playing else QColor(120, 128, 140))
+        painter.setBrush(QColor(theme.SUCCESS if playing else theme.CONTROL_STROKE))
         painter.drawEllipse(QPointF(box.left() + 18.0, box.center().y()), 5.0, 5.0)
         align = int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         x = box.left() + 32.0
         if note_w:
             painter.setFont(self._hud_big_font)
-            painter.setPen(QColor(245, 248, 252))
+            painter.setPen(QColor(theme.TEXT))
             painter.drawText(QRectF(x, box.top(), note_w + 4.0, box.height()), align, main)
             x += note_w + 14.0
         painter.setFont(self._hud_font)
-        painter.setPen(QColor(255, 206, 120) if not playing else QColor(160, 230, 190))
+        painter.setPen(QColor(theme.TEXT_SOFT if playing else theme.ACCENT_TEXT))
         painter.drawText(QRectF(x, box.top(), max(0.0, box.right() - x - 8.0), box.height()), align, status)
 
 

@@ -17,13 +17,13 @@ from enum import Enum
 from typing import Any, Mapping, Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
+    QFrame,
     QHBoxLayout,
-    QLabel,
     QProgressBar,
-    QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -34,8 +34,11 @@ from handcontrol.contracts import (
     Handedness,
     Quality,
 )
+from handcontrol.ui import icons, theme
+from handcontrol.ui.illustrations import Illustration
 from handcontrol.ui.preview import CameraPreviewWidget
-from handcontrol.ui.viewmodel import UiBridge
+from handcontrol.ui.viewmodel import HANDEDNESS_LABELS_TR, UiBridge
+from handcontrol.ui.widgets import Banner, Card, SettingRow, button, label
 
 
 class CalibrationStep(Enum):
@@ -62,6 +65,14 @@ STEP_TITLES_TR: dict[CalibrationStep, str] = {
     CalibrationStep.PINCH_REPEATS: "3. Adım: Rahat Kıstırma (Pinch) Tekrarları",
     CalibrationStep.CLAP_REPEATS: "4. Adım: El Çırpma Tekrarları",
     CalibrationStep.SUMMARY: "Kalibrasyon Özeti ve Tamamlama",
+}
+
+STEP_SHORT_TR: dict[CalibrationStep, str] = {
+    CalibrationStep.NEUTRAL_POSE: "Nötr duruş",
+    CalibrationStep.MOVEMENT_CORNERS: "Köşeler",
+    CalibrationStep.PINCH_REPEATS: "Pinch",
+    CalibrationStep.CLAP_REPEATS: "El çırpma",
+    CalibrationStep.SUMMARY: "Özet",
 }
 
 STEP_INSTRUCTIONS_TR: dict[CalibrationStep, str] = {
@@ -207,6 +218,7 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
         super().__init__(bridge=bridge, parent=parent)
         self._step: CalibrationStep = CalibrationStep.NEUTRAL_POSE
         self._corner_points: list[tuple[float, float]] = []
+        self._notice_top = True
 
     def set_calibration_step(
         self,
@@ -225,7 +237,7 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
 
     def _draw_guide_marks(self, painter: QPainter, canvas: QRectF) -> None:
         painter.save()
-        guide_pen = QPen(QColor(88, 188, 255, 200), 2.0, Qt.PenStyle.DashLine)
+        guide_pen = QPen(theme.color(theme.ACCENT, 0.9), 2.0, Qt.PenStyle.DashLine)
         painter.setPen(guide_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
@@ -239,12 +251,8 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
                 box_h,
             )
             painter.drawRoundedRect(target_rect, 12.0, 12.0)
-            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-            painter.drawText(
-                QRectF(target_rect.left(), target_rect.top() - 24.0, target_rect.width(), 20.0),
-                int(Qt.AlignmentFlag.AlignCenter),
-                "Nötr Duruş Alanı",
-            )
+            self._mark_label(painter, QPointF(target_rect.center().x(), target_rect.top() - 20.0), "Nötr Duruş Alanı",
+                             theme.ACCENT_TEXT)
 
         elif self._step == CalibrationStep.MOVEMENT_CORNERS:
             corners = [
@@ -253,21 +261,25 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
                 (0.82, 0.82, "Sağ-Alt"),
                 (0.18, 0.82, "Sol-Alt"),
             ]
-            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
             for idx, (nx, ny, name) in enumerate(corners):
                 pt = QPointF(
                     canvas.left() + nx * canvas.width(),
                     canvas.top() + ny * canvas.height(),
                 )
                 done = idx < len(self._corner_points)
-                color = QColor(72, 224, 138) if done else QColor(255, 196, 77)
-                painter.setPen(QPen(color, 2.2))
-                painter.drawEllipse(pt, 14.0, 14.0)
-                painter.drawText(QPointF(pt.x() - 22.0, pt.y() + 28.0), name)
+                now = idx == len(self._corner_points)
+                tone = theme.SUCCESS if done else theme.ACCENT if now else theme.TEXT_SOFT
+                painter.setPen(QPen(QColor(tone), 2.4))
+                painter.setBrush(theme.color(tone, 0.25) if done or now else Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(pt, 15.0, 15.0)
+                if done:
+                    icons.paint(painter, "check", QRectF(pt.x() - 9.0, pt.y() - 9.0, 18.0, 18.0), tone, 2.6)
+                self._mark_label(painter, QPointF(pt.x(), pt.y() + 32.0), name, tone)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
 
         elif self._step == CalibrationStep.PINCH_REPEATS:
             c = canvas.center()
-            painter.setPen(QPen(QColor(122, 214, 255), 2.2, Qt.PenStyle.DotLine))
+            painter.setPen(QPen(theme.color(theme.ACCENT, 0.9), 2.2, Qt.PenStyle.DotLine))
             painter.drawEllipse(c, 42.0, 42.0)
             painter.drawEllipse(c, 16.0, 16.0)
 
@@ -275,12 +287,65 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
             cy = canvas.center().y()
             left_pt = QPointF(canvas.left() + canvas.width() * 0.30, cy)
             right_pt = QPointF(canvas.left() + canvas.width() * 0.70, cy)
-            painter.setPen(QPen(QColor(135, 225, 165), 2.2, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(theme.color(theme.ACCENT, 0.9), 2.2, Qt.PenStyle.DashLine))
             painter.drawEllipse(left_pt, 28.0, 28.0)
             painter.drawEllipse(right_pt, 28.0, 28.0)
             painter.drawLine(left_pt, right_pt)
 
         painter.restore()
+
+    @staticmethod
+    def _mark_label(painter: QPainter, center: QPointF, text: str, tone: str) -> None:
+        painter.save()
+        painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
+        w = painter.fontMetrics().horizontalAdvance(text) + 20.0
+        box = QRectF(center.x() - w / 2, center.y() - 12.0, w, 24.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.color(theme.BG, 0.78))
+        painter.drawRoundedRect(box, 12.0, 12.0)
+        painter.setPen(QColor(tone))
+        painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), text)
+        painter.restore()
+
+
+class StepBar(QWidget):
+    """Numbered steps with their names; done steps show a check mark."""
+
+    def __init__(self, names: tuple[str, ...], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._names, self._current = names, 0
+        self.setFixedHeight(54)
+
+    def set_current(self, index: int) -> None:
+        if index != self._current:
+            self._current = index
+            self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        n = len(self._names)
+        cell = self.width() / n
+        for i in range(n - 1):
+            p.setPen(QPen(QColor(theme.SUCCESS if i < self._current else theme.HAIRLINE), 2))
+            p.drawLine(QPointF(cell * (i + 0.5) + 20, 16), QPointF(cell * (i + 1.5) - 20, 16))
+        for i, name in enumerate(self._names):
+            c = QPointF(cell * (i + 0.5), 16)
+            done, now = i < self._current, i == self._current
+            p.setPen(QPen(QColor(theme.ACCENT if now else theme.SUCCESS if done else theme.STROKE), 1.6))
+            p.setBrush(QColor(theme.ACCENT) if now else theme.color(theme.SUCCESS, 0.16) if done
+                       else QColor(theme.SURFACE))
+            p.drawEllipse(c, 13, 13)
+            if done:
+                icons.paint(p, "check", QRectF(c.x() - 8, c.y() - 8, 16, 16), theme.SUCCESS, 2.6)
+            else:
+                p.setFont(theme.bold(theme.TEXT_PX["caption"]))
+                p.setPen(QColor(theme.ON_ACCENT if now else theme.MUTED))
+                p.drawText(QRectF(c.x() - 13, c.y() - 13, 26, 26), int(Qt.AlignmentFlag.AlignCenter), str(i + 1))
+            p.setFont(theme.bold(theme.TEXT_PX["caption"]) if now else theme.font(theme.TEXT_PX["caption"]))
+            p.setPen(QColor(theme.TEXT if now else theme.MUTED))
+            p.drawText(QRectF(cell * i, 34, cell, 18), int(Qt.AlignmentFlag.AlignCenter), name)
+        p.end()
 
 
 class CalibrationWizard(QDialog):
@@ -322,7 +387,9 @@ class CalibrationWizard(QDialog):
         self._last_result: Optional[CalibrationResult] = None
 
         self.setWindowTitle("Holoscobe — El Hareketi Kalibrasyonu")
-        self.resize(720, 580)
+        theme.install()
+        self.resize(860, 720)
+        self.setMinimumSize(700, 560)
 
         self._build_ui()
         self._refresh_step_ui()
@@ -349,47 +416,58 @@ class CalibrationWizard(QDialog):
         return self._last_result
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        body = QVBoxLayout()
+        body.setContentsMargins(32, 22, 32, 18)
+        body.setSpacing(12)
+        root.addLayout(body, 1)
 
-        self.safety_banner = QLabel(
-            "Kalibrasyon Modu: İşletim sistemi fare/klavye komutları devre dışıdır."
-        )
-        self.safety_banner.setStyleSheet(
-            "background-color: #1f3347; color: #9ad1ff; padding: 6px 10px; "
-            "border-radius: 5px; font-weight: bold;"
-        )
-        layout.addWidget(self.safety_banner)
-
-        self.step_title_label = QLabel()
-        title_font = QFont("Segoe UI", 12)
-        title_font.setBold(True)
-        self.step_title_label.setFont(title_font)
-        layout.addWidget(self.step_title_label)
-
-        self.instruction_label = QLabel()
-        self.instruction_label.setWordWrap(True)
-        layout.addWidget(self.instruction_label)
+        self.step_bar = StepBar(tuple(STEP_SHORT_TR[step] for step in STEP_ORDER))
+        body.addWidget(self.step_bar)
+        self.step_title_label = label("", "title")
+        self.instruction_label = label("", "lead", True)
+        body.addWidget(self.step_title_label)
+        body.addWidget(self.instruction_label)
 
         self.preview = CalibrationPreviewCanvas(bridge=self._bridge, parent=self)
-        layout.addWidget(self.preview, stretch=1)
+        self.preview.set_show_details(False)
+        self.preview.setMinimumSize(360, 200)
+        self._stage = QStackedWidget()
+        self._stage.addWidget(self.preview)
+        self._stage.addWidget(self._build_summary())
+        body.addWidget(self._stage, 1)
 
         progress_row = QHBoxLayout()
-        self.step_status_label = QLabel()
+        progress_row.setSpacing(16)
+        self.step_status_label = label("", "value")
         self.step_progress_bar = QProgressBar()
         self.step_progress_bar.setRange(0, 100)
-        progress_row.addWidget(self.step_status_label, stretch=1)
-        progress_row.addWidget(self.step_progress_bar, stretch=1)
-        layout.addLayout(progress_row)
+        self.step_progress_bar.setTextVisible(False)
+        progress_row.addWidget(self.step_status_label)
+        progress_row.addWidget(self.step_progress_bar, 1)
+        body.addLayout(progress_row)
 
-        button_row = QHBoxLayout()
-        self.btn_reset = QPushButton("Baştan Başla")
-        self.btn_prev = QPushButton("Geri")
-        self.btn_sample = QPushButton("Örnek Kaydet")
-        self.btn_next = QPushButton("İleri")
-        self.btn_finish = QPushButton("Kalibrasyonu Tamamla")
-        self.btn_cancel = QPushButton("İptal")
+        self.safety_banner = Banner("Kalibrasyon Modu: İşletim sistemi fare/klavye komutları devre dışıdır.",
+                                    theme.SUCCESS, "shield")
+        body.addWidget(self.safety_banner)
+
+        footer = QFrame()
+        footer.setProperty("role", "footer")
+        button_row = QHBoxLayout(footer)
+        button_row.setContentsMargins(24, 12, 32, 12)
+        button_row.setSpacing(8)
+        self.btn_reset = button("Baştan Başla", "ghost", "undo")
+        self.btn_cancel = button("İptal", "ghost")
+        self.btn_prev = button("Geri")
+        self.btn_sample = button("Örnek Kaydet")
+        self.btn_next = button("İleri", "primary")
+        self.btn_finish = button("Kalibrasyonu Tamamla", "primary")
+        for b in (self.btn_reset, self.btn_cancel, self.btn_prev, self.btn_sample):
+            b.setAutoDefault(False)
+        self.btn_next.setMinimumWidth(112)
+        self.btn_prev.setMinimumWidth(92)
 
         self.btn_reset.clicked.connect(self.reset_calibration)
         self.btn_prev.clicked.connect(self.previous_step)
@@ -399,13 +477,36 @@ class CalibrationWizard(QDialog):
         self.btn_cancel.clicked.connect(self.cancel_calibration)
 
         button_row.addWidget(self.btn_reset)
-        button_row.addStretch(1)
-        button_row.addWidget(self.btn_prev)
-        button_row.addWidget(self.btn_sample)
-        button_row.addWidget(self.btn_next)
-        button_row.addWidget(self.btn_finish)
         button_row.addWidget(self.btn_cancel)
-        layout.addLayout(button_row)
+        button_row.addStretch(1)
+        for b in (self.btn_prev, self.btn_sample, self.btn_next, self.btn_finish):
+            button_row.addWidget(b)
+        root.addWidget(footer)
+
+    def _build_summary(self) -> QWidget:
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(20)
+        row.addWidget(Illustration("done"), 1)
+        self._metrics = {}
+        card = Card()
+        for key, title, text in (("area", "Hareket alanı", "Kamera görüntüsünün kullanılan kısmı"),
+                                 ("pinch", "Pinch aç / kapa", "Parmak uçları arası, avuç birimi"),
+                                 ("clap", "El çırpma", "Temas / ayrılma, avuç birimi"),
+                                 ("hand", "Baskın el", "Nötr duruşta görülen el")):
+            self._metrics[key] = label("", "counter")
+            card.add(SettingRow(title, text, self._metrics[key]))
+        column = QVBoxLayout()
+        column.addStretch(1)
+        column.addWidget(card)
+        column.addStretch(1)
+        row.addLayout(column, 1)
+        return page
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        theme.dark_title_bar(self)
 
     @Slot(object)
     def _on_bridge_frame(self, frame: Optional[FrameFeatures]) -> None:
@@ -668,6 +769,15 @@ class CalibrationWizard(QDialog):
         else:
             res = self.compute_result()
             pct = 100
+            numbers = {
+                "area": f"%{round((res.bounds.right - res.bounds.left) * 100)} × "
+                        f"%{round((res.bounds.bottom - res.bounds.top) * 100)}",
+                "pinch": f"{res.thresholds.pinch_on:.2f} / {res.thresholds.pinch_off:.2f}",
+                "clap": f"{res.thresholds.clap_contact_distance:.2f} / {res.thresholds.clap_separate_distance:.2f}",
+                "hand": HANDEDNESS_LABELS_TR.get(res.dominant_hand, "Belirsiz El"),
+            }
+            for key, text in numbers.items():
+                self._metrics[key].setText(text.replace(".", ","))
             status = (
                 f"Sınırlar: [{res.bounds.left:.2f}, {res.bounds.top:.2f}] - "
                 f"[{res.bounds.right:.2f}, {res.bounds.bottom:.2f}] | "
@@ -677,9 +787,17 @@ class CalibrationWizard(QDialog):
         self.step_status_label.setText(status)
         self.step_progress_bar.setValue(pct)
 
+        last = step == CalibrationStep.SUMMARY
+        self.step_bar.set_current(self._step_index)
+        self._stage.setCurrentIndex(1 if last else 0)
         self.btn_prev.setEnabled(self._step_index > 0)
-        self.btn_next.setEnabled(self._step_index < len(STEP_ORDER) - 1)
-        self.btn_sample.setVisible(step != CalibrationStep.SUMMARY)
+        self.btn_next.setEnabled(not last)
+        self.btn_next.setVisible(not last)
+        self.btn_finish.setVisible(last)
+        self.btn_sample.setVisible(not last)
+        for w in (self.step_status_label, self.step_progress_bar):
+            w.setVisible(not last)
+        (self.btn_finish if last else self.btn_next).setDefault(True)
 
 
 # Alias for convenience

@@ -13,6 +13,8 @@ from handcontrol.drawing import (CLEAR_MS, DEPTH_STEP, ERASER_RADIUS, PALETTE, S
                                  shade_rgb, turn)
 from handcontrol.drawing_gestures import DrawingControls, HOLD_MS
 from handcontrol.drawing_raster import InkRaster
+from handcontrol.ui import theme
+from handcontrol.ui.preview import PAUSED_CARD_TR, paint_empty_stage, paint_stage_card, paint_stage_corners, paint_stage_pill
 
 DRAWING_HINT_TR = ("Sağ işaretle çiz · Sağ avucu açıp taşı · Sağ yumrukla sil · "
                    "Sağ elle başparmak-işareti birleştirip tut: renk · Sol avucu sağa ya da sola yatırıp döndür · Temizlemek için ön kollarını X yapıp tut")
@@ -119,22 +121,27 @@ class DrawingView(QWidget):
         p = QPainter(self)
         try:
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            p.fillRect(self.rect(), QColor("#11151a"))
+            p.fillRect(self.rect(), QColor(theme.BG))
             w = min(self.width(), self.height()*self._aspect)
             if w <= 0:
                 return
             h = w/self._aspect
             rect = QRectF((self.width()-w)/2, (self.height()-h)/2, w, h)
+            if self._image is None:
+                paint_empty_stage(p, rect)
             p.save()
             p.setClipRect(rect)
             p.translate(rect.center())
             p.scale(-1 if self._mirrored else 1, 1)
             if self._image is not None:
+                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
                 p.drawImage(QRectF(-w/2, -h/2, w, h), self._image)
+                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
             self._paint_ink(p, w, h, now_ms())
             self._paint_cursor(p, w)
             self._paint_palette(p, w, h)
             p.restore()
+            paint_stage_corners(p, rect, QColor(theme.BG))
             self._paint_status(p, rect)
         finally:
             p.end()
@@ -204,7 +211,7 @@ class DrawingView(QWidget):
         erase = ctl.tool == "erase"
         radius = ERASER_RADIUS*w if erase else 7
         p.setBrush(INK[ctl.scene.color][0] if ctl.tool == "brush" else Qt.BrushStyle.NoBrush)
-        for color, width in ((QColor(20, 24, 30, 210), 4), (QColor("#ffcd81" if erase else "#ffffff"), 1.5)):
+        for color, width in ((theme.color(theme.INK, 0.8), 4), (QColor(theme.ACCENT_TEXT if erase else theme.WHITE), 1.5)):
             pen = QPen(color, width)
             if ctl.tool == "carry":
                 pen.setStyle(Qt.PenStyle.DotLine)
@@ -222,6 +229,8 @@ class DrawingView(QWidget):
         edge = outer*1.1
         cx = max(-w/2 + edge, min(w/2 - edge, (wheel.anchor[0]/fw - 0.5)*w))
         cy = max(-h/2 + edge, min(h/2 - edge, (wheel.anchor[1] - fh/2)/fw*w))
+        plate = outer*1.06
+        theme.paint_glass(p, QRectF(cx - plate, cy - plate, 2*plate, 2*plate), plate, alpha=0.9, blur=16)
         step = 360/wheel.n
         for i in range(wheel.n):
             hot = i == wheel.hovered
@@ -233,35 +242,44 @@ class DrawingView(QWidget):
             path.arcTo(QRectF(cx - inner, cy - inner, 2*inner, 2*inner), start + span, -span)
             path.closeSubpath()
             p.setBrush(QColor(*PALETTE[i][1]))
-            p.setPen(QPen(QColor("#26c6da") if hot else QColor(240, 244, 248) if i == self.controls.scene.color
-                          else QColor(18, 22, 28, 220), 4 if hot else 2.5))
+            p.setPen(QPen(QColor(theme.WHITE) if hot else QColor(theme.SURFACE), 4 if hot else 2.5))
             p.drawPath(path)
+            if i == self.controls.scene.color:             # the color in use now
+                a, mid = math.radians(i*step), (inner + r)/2
+                p.setPen(QPen(QColor(theme.INK), 2))
+                p.setBrush(QColor(theme.WHITE))
+                p.drawEllipse(QPointF(cx + mid*math.sin(a), cy - mid*math.cos(a)), 5, 5)
         hub = inner - 5
-        p.setBrush(QColor(18, 22, 28, 235))
-        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.color(theme.SURFACE, 0.94))
+        p.setPen(QPen(theme.color(theme.WHITE, 0.14), 1))
         p.drawEllipse(QPointF(cx, cy), hub, hub)
         p.save()
         p.translate(cx, cy)
         p.scale(-1 if self._mirrored else 1, 1)            # upright text in the mirrored picture
-        p.setPen(QColor("#f3f5f8"))
+        p.setFont(theme.bold(theme.TEXT_PX["body"]))
+        p.setPen(QColor(theme.TEXT))
         p.drawText(QRectF(-hub, -hub, 2*hub, 2*hub), Qt.AlignmentFlag.AlignCenter,
                    "Renk" if wheel.hovered is None else PALETTE[wheel.hovered][0])
         p.restore()
-        p.setPen(QPen(QColor(12, 16, 22), 2))
-        p.setBrush(QColor("#ffffff"))
+        p.setPen(QPen(QColor(theme.INK), 2))
+        p.setBrush(QColor(theme.WHITE))
         p.drawEllipse(QPointF(cx + (wheel.pointer[0] - 0.5)*2*outer, cy + (wheel.pointer[1] - 0.5)*2*outer), 6, 6)
 
     def _paint_status(self, p, rect):
         ctl = self.controls
+        icon = "drawing"
         if self._image is None:
-            text = "Kamera görüntüsü bekleniyor"
-        elif not self._active:
-            text = "Çizim duraklatıldı"
-        elif ctl.scene.clear_start is not None:
+            paint_stage_card(p, rect, "Kamera bekleniyor", "Kamera görüntüsü bekleniyor", "camera", center=True)
+            return
+        if not self._active:
+            paint_stage_card(p, rect, "Çizim duraklatıldı", PAUSED_CARD_TR[1], "pause", theme.WARNING)
+            return
+        if ctl.scene.clear_start is not None:
             text = "Mürekkep akıyor"
         elif ctl.blocked:
             text = f"X hareketini tut · %{min(100, int(100*ctl.cross/HOLD_MS))}"
         else:
+            icon = {"carry": "hand", "erase": "trash", "brush": "drawing"}[ctl.tool]
             text = {"carry": "Taşı", "erase": "Silgi", "brush": f"Fırça · {PALETTE[ctl.scene.color][0]}"}[ctl.tool]
             if ctl.palette is not None:
                 text = "Renk · Dilime götür, parmaklarını ayır"
@@ -274,9 +292,4 @@ class DrawingView(QWidget):
                 text += "  ·  Döndürmek için sol avucu yana yatır"
             if not self._pose_available:
                 text += "  ·  X için poz modelini kur"
-        bounds = QRectF(rect.left()+10, rect.top()+10, p.fontMetrics().horizontalAdvance(text)+24, 30)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(18, 22, 28, 230))
-        p.drawRoundedRect(bounds, 7, 7)
-        p.setPen(QColor("#f3f5f8"))
-        p.drawText(bounds, Qt.AlignmentFlag.AlignCenter, text)
+        paint_stage_pill(p, QPointF(rect.left()+12, rect.top()+12), text, icon, max_width=rect.width()-24)

@@ -15,7 +15,6 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -54,6 +53,7 @@ from handcontrol.ui.viewmodel import (
     VirtualCursorState,
     WindowActionKind,
 )
+from handcontrol.ui.widgets import ComboBox
 
 
 def build_synthetic_hand(
@@ -223,7 +223,7 @@ class DemoMainWindow(QMainWindow):
         self.status_label.setWordWrap(True)
         side_layout.addWidget(self.status_label)
 
-        self.combo_hands = QComboBox()
+        self.combo_hands = ComboBox()
         self.combo_hands.addItem("2 El Göster (42 Nokta)", 2)
         self.combo_hands.addItem("1 El Göster (21 Nokta)", 1)
         self.combo_hands.addItem("0 El Göster (El Yok)", 0)

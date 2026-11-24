@@ -548,6 +548,7 @@ class UiBridge(QObject):
     indicator_updated = Signal(object)          # IndicatorState
     cursor_feedback_updated = Signal(object)    # CursorFeedbackState (only on change)
     command_triggered = Signal(str)             # KeyCommand value, once per command_seq change
+    mascot_visible_changed = Signal(bool)       # the cat was shown or hidden (button and tray mirror it)
 
     # User request signals (controller / application coordinator subscribes to these)
     pause_resume_requested = Signal()
@@ -561,6 +562,7 @@ class UiBridge(QObject):
     tutorial_requested = Signal()
     exit_requested = Signal()
     instrument_window_requested = Signal()      # tray "Enstrüman penceresi"
+    mascot_toggle_requested = Signal(bool)      # user asked to show / hide the cat
     mode_selected = Signal(object)              # Mode
     window_action_selected = Signal(str)        # WindowActionKind.value
     settings_saved = Signal(object)             # SettingsData or dict
@@ -587,6 +589,7 @@ class UiBridge(QObject):
         self._last_cancel: str = ""
         self._cursor_feedback: CursorFeedbackState = CursorFeedbackState()
         self._command_seq: Optional[int] = None
+        self._mascot_visible: bool = True
 
         self._marshal_snapshot.connect(self._apply_snapshot_on_gui_thread)
         self._marshal_state.connect(self._apply_state_on_gui_thread)
@@ -747,6 +750,16 @@ class UiBridge(QObject):
     def cursor_feedback(self) -> CursorFeedbackState:
         return self._cursor_feedback
 
+    @property
+    def mascot_visible(self) -> bool:
+        return self._mascot_visible
+
+    @Slot(bool)
+    def set_mascot_visible(self, on: bool) -> None:
+        """Store whether the cat is shown and tell the controls that mirror it."""
+        self._mascot_visible = bool(on)
+        self.mascot_visible_changed.emit(self._mascot_visible)
+
     @Slot(object)
     def update_overlay(self, overlay: OverlayState) -> None:
         """Update overlay state (mode menu or window action menu) safely."""
@@ -873,6 +886,11 @@ class UiBridge(QObject):
     def request_instrument_window(self) -> None:
         """Emit the request to show the instrument (Enstrüman) window."""
         self.instrument_window_requested.emit()
+
+    @Slot(bool)
+    def request_mascot(self, on: bool) -> None:
+        """Emit the request to show or hide the cat."""
+        self.mascot_toggle_requested.emit(bool(on))
 
     @Slot()
     def request_exit(self) -> None:

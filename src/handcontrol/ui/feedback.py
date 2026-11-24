@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QRectF, Qt, QTimer, Slot
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
+from PySide6.QtCore import QRectF, Qt, QTimer, QVariantAnimation, Slot
+from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
 from handcontrol.contracts import Action, Mode
+from handcontrol.ui import icons, theme
 from handcontrol.ui.viewmodel import (
     MODE_LABELS_TR,
     FeedbackKind,
@@ -32,6 +33,19 @@ def _normalize_volume_percent(value: int | float) -> int:
     if isinstance(value, float) and 0.0 <= value <= 1.0:
         return max(0, min(100, round(value * 100)))
     return max(0, min(100, round(float(value))))
+
+
+TOAST_MARGIN = 14                # room for the soft shadow around the panel
+TOAST_LIFT = 44                  # distance from the bottom edge of the screen
+_LOOKS: dict[FeedbackKind, tuple[str, str]] = {
+    FeedbackKind.ACTIVATED: ("hand", theme.SUCCESS),
+    FeedbackKind.PAUSED: ("pause", theme.WARNING),
+    FeedbackKind.MODE_CHANGED: ("more", theme.ACCENT),
+    FeedbackKind.VOLUME: ("volume", theme.ACCENT),
+    FeedbackKind.CLOSE_CONFIRM: ("close", theme.DANGER),
+    FeedbackKind.INFO: ("info", theme.TEXT_SOFT),
+    FeedbackKind.WARNING: ("warning", theme.WARNING),
+}
 
 
 class FeedbackToast(QWidget):
@@ -61,6 +75,11 @@ class FeedbackToast(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.resize(340, 84)
+        self._fade = 1.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setEasingCurve(theme.EASE)
+        self._anim.valueChanged.connect(self._on_fade)
+        self._anim.finished.connect(self._on_fade_done)
 
         self._current_message: Optional[FeedbackMessage] = None
         self._remaining_ms: int = 0
@@ -97,9 +116,47 @@ class FeedbackToast(QWidget):
         self._remaining_ms = duration
         self._active = True
         self._hide_timer.start(duration)
+        self._fit(message)
         if self._auto_show_window:
+            self._place()
+            if not self.isVisible() or self._fade < 1.0:
+                self._run_fade(self._fade if self.isVisible() else 0.0, 1.0, theme.NORMAL_MS)
             self.show()
         self.update()
+
+    def _fit(self, message: FeedbackMessage) -> None:
+        """Size the toast to its text (one or two lines) and optional bar."""
+        metrics = QFontMetrics(theme.bold(theme.TEXT_PX["section"]))
+        text_w = metrics.horizontalAdvance(message.text)
+        w = max(230, min(430, text_w + 94)) + 2 * TOAST_MARGIN
+        lines = 1 if text_w + 94 <= 430 else 2
+        bar = message.volume_percent is not None or message.hold_progress is not None
+        self.resize(w, 2 * TOAST_MARGIN + 60 + (lines - 1) * 18 + (14 if bar else 0))
+
+    def _place(self) -> None:
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            self.move(area.center().x() - self.width() // 2, area.bottom() - self.height() - TOAST_LIFT)
+
+    def _run_fade(self, start: float, end: float, ms: int) -> None:
+        self._anim.stop()
+        self._anim.setDuration(ms)
+        self._anim.setStartValue(float(start))
+        self._anim.setEndValue(float(end))
+        self._fade = start
+        self._anim.start()
+
+    @Slot(object)
+    def _on_fade(self, value: object) -> None:
+        self._fade = float(value)  # type: ignore[arg-type]
+        self.update()
+
+    @Slot()
+    def _on_fade_done(self) -> None:
+        if not self._active:
+            self.hide()
+            self._fade = 1.0
 
     def notify_activated(self, duration_ms: Optional[int] = None) -> FeedbackMessage:
         """Show 'Activated' notification in Turkish."""
@@ -184,12 +241,12 @@ class FeedbackToast(QWidget):
 
     @Slot()
     def dismiss(self) -> None:
-        """Immediately dismiss and hide the notification."""
+        """Dismiss the notification; a visible window fades out and hides."""
         self._hide_timer.stop()
-        self._active = False
+        was_active, self._active = self._active, False
         self._remaining_ms = 0
-        if self.isVisible():
-            self.hide()
+        if self.isVisible() and was_active:
+            self._run_fade(self._fade, 0.0, theme.FAST_MS)
         self.update()
 
     def render_to_image(self, width: int = 340, height: int = 84) -> QImage:
@@ -211,59 +268,39 @@ class FeedbackToast(QWidget):
         painter.end()
 
     def _paint_toast(self, painter: QPainter, rect: QRectF) -> None:
-        if not self._active or self._current_message is None:
-            return
-
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         msg = self._current_message
+        fading = self._anim.state() == QVariantAnimation.State.Running
+        if msg is None or not (self._active or fading):
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setOpacity(self._fade)
+        icon, tone = _LOOKS.get(msg.kind, ("info", theme.ACCENT))
+        if msg.kind is FeedbackKind.MODE_CHANGED:
+            icon = next((icons.MODE_ICONS[m] for m, name in MODE_LABELS_TR.items() if msg.text.endswith(name)), icon)
+        m = float(TOAST_MARGIN)
+        box = rect.adjusted(m, m, -m, -m)
+        theme.paint_glass(painter, box, theme.RADIUS_XL, alpha=0.95, blur=TOAST_MARGIN - 2)
 
-        accent_colors = {
-            FeedbackKind.ACTIVATED: QColor(46, 204, 113),
-            FeedbackKind.PAUSED: QColor(241, 196, 15),
-            FeedbackKind.MODE_CHANGED: QColor(52, 152, 219),
-            FeedbackKind.VOLUME: QColor(155, 89, 182),
-            FeedbackKind.CLOSE_CONFIRM: QColor(231, 76, 60),
-            FeedbackKind.INFO: QColor(127, 140, 141),
-            FeedbackKind.WARNING: QColor(230, 126, 34),
-        }
-        accent = accent_colors.get(msg.kind, QColor(82, 168, 242))
-
-        box = rect.adjusted(6.0, 6.0, -6.0, -6.0)
-        painter.setPen(QPen(accent, 2.0))
-        painter.setBrush(QColor(20, 26, 36, 232))
-        painter.drawRoundedRect(box, 10.0, 10.0)
-
-        font = QFont("Segoe UI", 10)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(240, 245, 250))
-
-        text_rect = QRectF(box.left() + 14.0, box.top() + 10.0, box.width() - 28.0, 28.0)
-        painter.drawText(
-            text_rect,
-            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            msg.text,
-        )
-
-        # Draw progress bar for volume or close confirmation
         bar_ratio: Optional[float] = None
         if msg.volume_percent is not None:
             bar_ratio = max(0.0, min(1.0, msg.volume_percent / 100.0))
         elif msg.hold_progress is not None:
             bar_ratio = max(0.0, min(1.0, msg.hold_progress))
 
+        tile = QRectF(box.left() + 12.0, box.center().y() - 18.0, 36.0, 36.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.color(tone, 0.18))
+        painter.drawRoundedRect(tile, 10.0, 10.0)
+        icons.paint(painter, icon, tile.adjusted(8, 8, -8, -8), tone)
+
+        text_rect = QRectF(tile.right() + 14.0, box.top() + 6.0, box.right() - tile.right() - 30.0,
+                           box.height() - 12.0 - (16.0 if bar_ratio is not None else 0.0))
+        painter.setFont(theme.bold(theme.TEXT_PX["section"]))
+        painter.setPen(QColor(theme.TEXT))
+        painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                                        | Qt.TextFlag.TextWordWrap), msg.text)
         if bar_ratio is not None:
-            bar_rect = QRectF(box.left() + 14.0, box.bottom() - 20.0, box.width() - 28.0, 8.0)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(45, 54, 68))
-            painter.drawRoundedRect(bar_rect, 4.0, 4.0)
-            if bar_ratio > 0.0:
-                painter.setBrush(accent)
-                painter.drawRoundedRect(
-                    QRectF(bar_rect.left(), bar_rect.top(), bar_rect.width() * bar_ratio, bar_rect.height()),
-                    4.0,
-                    4.0,
-                )
+            theme.paint_bar(painter, QRectF(text_rect.left(), box.bottom() - 18.0, text_rect.width(), 5.0), bar_ratio, tone)
 
 
 class DryRunPanel(QWidget):
@@ -292,12 +329,21 @@ class DryRunPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.resize(400, 120)
+        self.resize(440, 140)
+        self._placed = False
 
         if self._bridge is not None:
             self._bridge.dry_run_updated.connect(self.set_command_text)
             if self._bridge.state.dry_run_command_text:
                 self.set_command_text(self._bridge.state.dry_run_command_text)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None and not self._placed:
+            self._placed = True
+            area = screen.availableGeometry()
+            self.move(area.left() + 16, area.bottom() - self.height() - 16)
 
     @property
     def current_command_text(self) -> str:
@@ -354,43 +400,28 @@ class DryRunPanel(QWidget):
 
     def _paint_panel(self, painter: QPainter, rect: QRectF) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        box = rect.adjusted(6.0, 6.0, -6.0, -6.0)
+        m = float(TOAST_MARGIN)
+        box = rect.adjusted(m, m, -m, -m)
+        theme.paint_glass(painter, box, theme.RADIUS_L, alpha=0.93, blur=TOAST_MARGIN - 2)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.WARNING))
+        painter.drawEllipse(QRectF(box.left() + 16.0, box.top() + 16.0, 8.0, 8.0))
+        align = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        left, width = box.left() + 16.0, box.width() - 32.0
 
-        painter.setPen(QPen(QColor(245, 176, 65, 220), 1.8))
-        painter.setBrush(QColor(20, 24, 32, 230))
-        painter.drawRoundedRect(box, 8.0, 8.0)
+        def line(text: str, y: float, font, color: str, indent: float = 0.0) -> None:
+            painter.setFont(font)
+            painter.setPen(QColor(color))
+            painter.drawText(QRectF(left + indent, y, width - indent, 20.0), align, painter.fontMetrics().elidedText(
+                text, Qt.TextElideMode.ElideRight, int(width - indent)))
 
-        header_font = QFont("Segoe UI", 9)
-        header_font.setBold(True)
-        painter.setFont(header_font)
-        painter.setPen(QColor(245, 176, 65))
-        painter.drawText(
-            QRectF(box.left() + 10.0, box.top() + 6.0, box.width() - 20.0, 18.0),
-            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            "DRY-RUN (Sınama Kipi) — Üretilecek Komut Paneli",
-        )
-
-        cmd_font = QFont("Segoe UI", 10)
-        cmd_font.setBold(True)
-        painter.setFont(cmd_font)
-        painter.setPen(QColor(235, 242, 250))
-        painter.drawText(
-            QRectF(box.left() + 10.0, box.top() + 28.0, box.width() - 20.0, 24.0),
-            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            self._current_command_text,
-        )
-
-        hist_font = QFont("Consolas", 8)
-        painter.setFont(hist_font)
-        painter.setPen(QColor(160, 175, 195))
-        y = box.top() + 56.0
+        line("DRY-RUN (Sınama Kipi) — Üretilecek Komut Paneli", box.top() + 10.0, theme.font(11), theme.MUTED, 16.0)
+        prefix = "Üretilecek komut: "
+        line(self._current_command_text.removeprefix(prefix), box.top() + 34.0, theme.bold(), theme.TEXT)
+        y = box.top() + 62.0
         for item in reversed(self._history[:-1][-2:]):
-            painter.drawText(
-                QRectF(box.left() + 10.0, y, box.width() - 20.0, 16.0),
-                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                item,
-            )
-            y += 16.0
+            line(item.removeprefix(prefix), y, theme.font(11), theme.MUTED)
+            y += 20.0
 
 
 # Alias for convenience

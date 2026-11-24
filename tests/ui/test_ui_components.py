@@ -260,6 +260,7 @@ def test_settings_dialog_dataclass_and_dict_roundtrip() -> None:
         "show_overlay": False,
         "show_feedback_osd": True,
         "show_mascot": True,
+        "hide_on_control": False,
         "show_dry_run_panel": True,
         "monitor_mapping": "secondary",
         "start_with_windows": True,

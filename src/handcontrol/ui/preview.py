@@ -13,14 +13,16 @@ from typing import Optional
 from PySide6.QtCore import QPointF, QRectF, Qt, Slot
 from PySide6.QtGui import (
     QColor,
-    QFont,
     QImage,
     QPainter,
+    QPainterPath,
     QPen,
 )
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from handcontrol.contracts import (
+    CameraState,
+    ControlState,
     FingerInfo,
     FingerName,
     FingerState,
@@ -30,6 +32,7 @@ from handcontrol.contracts import (
     Landmark,
     Quality,
 )
+from handcontrol.ui import icons, theme
 from handcontrol.ui.viewmodel import (
     FINGER_NAME_LABELS_TR,
     FINGER_STATE_LABELS_TR,
@@ -76,6 +79,89 @@ FINGER_ORDER: tuple[FingerName, ...] = (
 )
 
 
+STAGE_RADIUS = 14.0
+NO_HAND_TR = "El algılanmadı — Kameraya ellerinizi gösterin"
+PAUSED_CARD_TR = ("Duraklatıldı", "Başlamak için Sürdür'e bas ya da el çırp")
+CAMERA_CARDS_TR: dict[CameraState, tuple[str, str]] = {
+    CameraState.OFF: ("Kamera kapalı", "Tepsi menüsünden Kamerayı Başlat'ı seç"),
+    CameraState.STARTING: ("Kamera başlatılıyor", "Görüntü birazdan burada olacak"),
+    CameraState.ERROR: ("Kamera kullanılamıyor", "Bağlantıyı ve başka bir uygulamanın kamerayı kullanmadığını denetle"),
+}
+
+
+def paint_stage_card(p: QPainter, canvas: QRectF, title: str, text: str, icon: str = "", tone: str = theme.ACCENT,
+                     center: bool = False) -> None:
+    """Message card on the camera stage (bottom middle, or the middle of an empty stage)."""
+    flags = int(Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap)
+    side = 74.0 if icon else 20.0
+    room = canvas.width() - 32.0 - side - 22.0
+    p.setFont(theme.font(theme.TEXT_PX["caption"]))
+    need = p.fontMetrics().boundingRect(0, 0, int(max(120.0, min(room, 430.0))), 200, flags, text)
+    w = min(canvas.width() - 32.0, max(300.0, need.width() + side + 24.0))
+    h = 58.0 + need.height()
+    top = canvas.center().y() - h / 2 if center else canvas.bottom() - h - 20.0
+    box = QRectF(canvas.center().x() - w / 2, top, w, h)
+    theme.paint_glass(p, box, theme.RADIUS_XL, alpha=0.92)
+    left = box.left() + side
+    if icon:
+        tile = QRectF(box.left() + 16, box.center().y() - 21, 42, 42)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.color(tone, 0.16))
+        p.drawRoundedRect(tile, 12, 12)
+        icons.paint(p, icon, tile.adjusted(10, 10, -10, -10), tone)
+    p.setFont(theme.font(theme.TEXT_PX["caption"]))
+    p.setPen(QColor(theme.MUTED))
+    p.drawText(QRectF(left, box.top() + 40, box.right() - left - 16, need.height() + 4), flags, text)
+    p.setFont(theme.bold(theme.TEXT_PX["subtitle"], True))
+    p.setPen(QColor(theme.TEXT))
+    p.drawText(QRectF(left, box.top() + 13, box.right() - left - 14, 24), int(Qt.AlignmentFlag.AlignVCenter), title)
+
+
+def paint_empty_stage(p: QPainter, canvas: QRectF) -> None:
+    """Stage without a camera picture: quiet surface with viewfinder marks."""
+    p.setPen(QPen(QColor(theme.HAIRLINE), 1.0))
+    p.setBrush(QColor(theme.SURFACE))
+    p.drawRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), STAGE_RADIUS, STAGE_RADIUS)
+    pen = QPen(QColor(theme.STROKE), 2.0)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    box, arm = canvas.adjusted(28, 28, -28, -28), 26.0
+    for corner, sx, sy in ((box.topLeft(), 1, 1), (box.topRight(), -1, 1), (box.bottomLeft(), 1, -1),
+                           (box.bottomRight(), -1, -1)):
+        p.drawPolyline([QPointF(corner.x(), corner.y() + sy * arm), corner, QPointF(corner.x() + sx * arm, corner.y())])
+
+
+def paint_stage_pill(p: QPainter, at: QPointF, text: str, icon: str = "", tone: str = theme.ACCENT,
+                     max_width: float = 10_000.0) -> QRectF:
+    """Small glass label on the picture; returns its rectangle."""
+    p.setFont(theme.bold(theme.TEXT_PX["caption"]))
+    left = 38.0 if icon else 16.0
+    w = min(max_width, p.fontMetrics().horizontalAdvance(text) + left + 16.0)
+    box = QRectF(at.x(), at.y(), w, 34.0)
+    theme.paint_glass(p, box, 17.0, alpha=0.86, blur=0)
+    if icon:
+        icons.paint(p, icon, QRectF(box.left() + 13, box.top() + 8.5, 17, 17), tone)
+    p.setPen(QColor(theme.TEXT))
+    p.drawText(box.adjusted(left, 0, -10, 0), int(Qt.AlignmentFlag.AlignVCenter),
+               p.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, int(w - left - 12)))
+    return box
+
+
+def paint_stage_corners(p: QPainter, canvas: QRectF, backdrop: QColor, radius: float = STAGE_RADIUS) -> None:
+    """Round the live picture by covering its corners (far cheaper than clipping every frame)."""
+    frame = QPainterPath()
+    frame.addRect(canvas.adjusted(-1, -1, 1, 1))
+    hole = QPainterPath()
+    hole.addRoundedRect(canvas, radius, radius)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(backdrop)
+    p.drawPath(frame.subtracted(hole))
+    p.setPen(QPen(theme.color(theme.WHITE, 0.09), 1.0))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+
+
 class CameraPreviewWidget(QWidget):
     """Widget that visualizes FrameFeatures without opening any hardware camera."""
 
@@ -92,6 +178,10 @@ class CameraPreviewWidget(QWidget):
         self._fps: float = 0.0
         self._sample_age_ms: float = 0.0
         self._show_details: bool = True    # top FPS bar, per-finger cards, long hand tags
+        self._state_cards: bool = False    # "Duraklatıldı" / "Kamera kapalı" cards (main window only)
+        self._notice_top: bool = False     # where "El algılanmadı" goes (guide marks need the bottom)
+        self._control_state = ControlState.PAUSED
+        self._camera_state = CameraState.OFF
 
         # Diagnostic counters updated on paint for verification
         self._last_rendered_hand_count: int = 0
@@ -144,6 +234,11 @@ class CameraPreviewWidget(QWidget):
         self._show_details = bool(enabled)
         self.update()
 
+    def set_state_cards(self, enabled: bool) -> None:
+        """Explain on the picture why nothing happens (paused, camera off or broken)."""
+        self._state_cards = bool(enabled)
+        self.update()
+
     @Slot(bool)
     def set_mirrored(self, mirrored: bool) -> None:
         """Enable or disable horizontal display mirroring."""
@@ -177,6 +272,7 @@ class CameraPreviewWidget(QWidget):
         self._mirrored = state.mirrored
         self._fps = state.fps
         self._sample_age_ms = state.sample_age_ms
+        self._control_state, self._camera_state = state.control_state, state.camera_state
         if state.latest_frame is not None:
             self._frame = state.latest_frame
         self.update()
@@ -208,9 +304,9 @@ class CameraPreviewWidget(QWidget):
 
     def canvas_rect_for(self, full_rect: QRectF) -> QRectF:
         """Largest rect with the camera's aspect below the top bar: the picture is never stretched."""
-        top = 44.0 if self._show_details else 6.0
-        area = QRectF(full_rect.left() + 8.0, full_rect.top() + top, max(60.0, full_rect.width() - 16.0),
-                      max(60.0, full_rect.height() - top - 6.0))
+        top = 44.0 if self._show_details else 1.0
+        area = QRectF(full_rect.left() + 1.0, full_rect.top() + top, max(60.0, full_rect.width() - 2.0),
+                      max(60.0, full_rect.height() - top - 1.0))
         aspect = self._frame_aspect()
         w = min(area.width(), area.height() * aspect)
         h = w / aspect
@@ -224,7 +320,7 @@ class CameraPreviewWidget(QWidget):
         """Render the preview directly into an offscreen QImage (useful for tests)."""
         self.resize(width, height)
         image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(QColor(18, 22, 28))
+        image.fill(QColor(theme.BG))
         painter = QPainter(image)
         self._paint_contents(painter, QRectF(0.0, 0.0, float(width), float(height)))
         painter.end()
@@ -240,41 +336,51 @@ class CameraPreviewWidget(QWidget):
 
     def _paint_contents(self, painter: QPainter, full_rect: QRectF) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(full_rect, QColor(18, 22, 28))
+        painter.fillRect(full_rect, QColor(theme.BG))
 
         self._last_rendered_hand_count = 0
         self._last_rendered_landmark_count = 0
         self._last_had_uncertain_elements = False
 
-        top_bar = QRectF(full_rect.left() + 8.0, full_rect.top() + 6.0, full_rect.width() - 16.0, 32.0)
+        top_bar = QRectF(full_rect.left() + 1.0, full_rect.top() + 1.0, full_rect.width() - 2.0, 34.0)
         canvas = self.canvas_rect_for(full_rect)
 
         if self._show_details:
             self._draw_top_hud(painter, top_bar)
         self._draw_canvas_background(painter, canvas)
 
-        if self._frame is None or len(self._frame.hands) == 0:
-            self._draw_empty_notice(painter, canvas)
-            return
+        card = self._state_card()
+        if self._frame is None or len(self._frame.hands) == 0 or (card is not None and card[-1]):
+            if card is None:
+                self._draw_empty_notice(painter, canvas)
+        else:
+            if self._frame.identity_ambiguous:
+                self._last_had_uncertain_elements = True
+            for idx, hand in enumerate(self._frame.hands[:2]):
+                self._last_rendered_hand_count += 1
+                self._draw_hand_skeleton(painter, canvas, hand, self._frame.identity_ambiguous)
+                if self._show_details:
+                    self._draw_hand_info_card(painter, canvas, hand, idx, self._frame.identity_ambiguous)
+        if card is not None:
+            paint_stage_card(painter, canvas, *card)
 
-        if self._frame.identity_ambiguous:
-            self._last_had_uncertain_elements = True
-
-        hands = self._frame.hands[:2]
-        for idx, hand in enumerate(hands):
-            self._last_rendered_hand_count += 1
-            self._draw_hand_skeleton(painter, canvas, hand, self._frame.identity_ambiguous)
-            if self._show_details:
-                self._draw_hand_info_card(painter, canvas, hand, idx, self._frame.identity_ambiguous)
+    def _state_card(self) -> Optional[tuple[str, str, str, str, bool]]:
+        """(title, text, icon, tone, centered) of the card to show, None while everything works."""
+        if not self._state_cards:
+            return None
+        if self._camera_state is not CameraState.RUNNING:
+            starting = self._camera_state is CameraState.STARTING
+            return (*CAMERA_CARDS_TR[self._camera_state], "camera" if starting else "camera_off",
+                    theme.ACCENT if starting else theme.DANGER, True)
+        if self._control_state is not ControlState.ACTIVE:
+            return (*PAUSED_CARD_TR, "pause", theme.WARNING, False)
+        return None
 
     def _draw_top_hud(self, painter: QPainter, rect: QRectF) -> None:
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(28, 34, 44, 230))
-        painter.drawRoundedRect(rect, 6.0, 6.0)
-
-        font = QFont("Segoe UI", 9)
-        font.setBold(True)
-        painter.setFont(font)
+        painter.setPen(QPen(QColor(theme.HAIRLINE), 1.0))
+        painter.setBrush(QColor(theme.SURFACE))
+        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), theme.RADIUS_M, theme.RADIUS_M)
+        painter.setFont(theme.font(theme.TEXT_PX["caption"]))
 
         mirror_text = "Ayna: Açık" if self._mirrored else "Ayna: Kapalı"
         fps_text = f"FPS: {self._fps:.1f}"
@@ -288,8 +394,8 @@ class CameraPreviewWidget(QWidget):
             qualities = [QUALITY_LABELS_TR.get(h.quality, "Belirsiz") for h in self._frame.hands[:2]]
             quality_summary = "Kalite: " + " / ".join(qualities)
 
-        hud_line = f"{fps_text}   |   {age_text}   |   {quality_summary}   |   {mirror_text}"
-        painter.setPen(QColor(225, 232, 240))
+        hud_line = f"{fps_text}     {age_text}     {quality_summary}     {mirror_text}"
+        painter.setPen(QColor(theme.TEXT_SOFT))
         painter.drawText(
             rect.adjusted(12.0, 0.0, -12.0, 0.0),
             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
@@ -297,10 +403,8 @@ class CameraPreviewWidget(QWidget):
         )
 
         if self._frame is not None and self._frame.identity_ambiguous:
-            warn_font = QFont("Segoe UI", 9)
-            warn_font.setBold(True)
-            painter.setFont(warn_font)
-            painter.setPen(QColor(255, 184, 77))
+            painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
+            painter.setPen(QColor(theme.WARNING))
             painter.drawText(
                 rect.adjusted(12.0, 0.0, -12.0, 0.0),
                 int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight),
@@ -308,11 +412,8 @@ class CameraPreviewWidget(QWidget):
             )
 
     def _draw_canvas_background(self, painter: QPainter, canvas: QRectF) -> None:
-        painter.setPen(QPen(QColor(48, 56, 70), 1.2))
-        painter.setBrush(QColor(13, 17, 23))
-        painter.drawRoundedRect(canvas, 8.0, 8.0)
-
         if self._camera_image is not None and not self._camera_image.isNull():
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             if self._mirrored:
                 # Flip with the painter transform: no full-image copy per paint.
                 painter.save()
@@ -322,26 +423,20 @@ class CameraPreviewWidget(QWidget):
                 painter.restore()
             else:
                 painter.drawImage(canvas, self._camera_image)
+            paint_stage_corners(painter, canvas, QColor(theme.BG))
             return
 
-        # Subtle center guide lines
-        grid_pen = QPen(QColor(38, 45, 58), 1.0, Qt.PenStyle.DotLine)
-        painter.setPen(grid_pen)
-        painter.drawLine(
-            QPointF(canvas.center().x(), canvas.top()),
-            QPointF(canvas.center().x(), canvas.bottom()),
-        )
-        painter.drawLine(
-            QPointF(canvas.left(), canvas.center().y()),
-            QPointF(canvas.right(), canvas.center().y()),
-        )
+        paint_empty_stage(painter, canvas)
 
     def _draw_empty_notice(self, painter: QPainter, canvas: QRectF) -> None:
-        font = QFont("Segoe UI", 11)
-        painter.setFont(font)
-        painter.setPen(QColor(145, 155, 170))
-        msg = "El algılanmadı — Kameraya ellerinizi gösterin"
-        painter.drawText(canvas, int(Qt.AlignmentFlag.AlignCenter), msg)
+        painter.setFont(theme.font(theme.TEXT_PX["body"]))
+        w = painter.fontMetrics().horizontalAdvance(NO_HAND_TR) + 58.0
+        y = canvas.top() + 14.0 if self._notice_top else canvas.bottom() - 54.0
+        box = QRectF(canvas.center().x() - w / 2, y, w, 38.0)
+        theme.paint_glass(painter, box, 19.0, alpha=0.88)
+        icons.paint(painter, "hand", QRectF(box.left() + 14, box.top() + 10, 18, 18), theme.ACCENT)
+        painter.setPen(QColor(theme.TEXT_SOFT))
+        painter.drawText(box.adjusted(42, 0, 0, 0), int(Qt.AlignmentFlag.AlignVCenter), NO_HAND_TR)
 
     def _is_hand_uncertain(self, hand: HandFeatures, identity_ambiguous: bool) -> bool:
         return (
@@ -372,11 +467,11 @@ class CameraPreviewWidget(QWidget):
 
         # Base color per handedness (muted/amber when uncertain)
         if hand_uncertain:
-            base_color = QColor(240, 173, 78)
+            base_color = QColor(theme.HAND_UNCERTAIN)
         elif hand.handedness == Handedness.LEFT:
-            base_color = QColor(74, 187, 255)
+            base_color = QColor(theme.HAND_LEFT)
         else:
-            base_color = QColor(82, 224, 148)
+            base_color = QColor(theme.HAND_RIGHT)
 
         # Map FingerName -> FingerInfo
         finger_map: dict[FingerName, FingerInfo] = {f.name: f for f in hand.fingers}
@@ -402,7 +497,7 @@ class CameraPreviewWidget(QWidget):
             )
             if finger_uncertain:
                 self._last_had_uncertain_elements = True
-                chain_color = QColor(235, 168, 68)
+                chain_color = QColor(theme.HAND_UNCERTAIN)
                 pen_style = Qt.PenStyle.DashLine
             elif f_info is not None and f_info.state == FingerState.BENT:
                 chain_color = base_color.darker(125)
@@ -425,7 +520,7 @@ class CameraPreviewWidget(QWidget):
                         painter.setBrush(Qt.BrushStyle.NoBrush)
                         painter.drawEllipse(pt, 4.5, 4.5)
                     else:
-                        painter.setPen(QPen(QColor(20, 24, 30), 1.2))
+                        painter.setPen(QPen(QColor(theme.INK), 1.2))
                         painter.setBrush(chain_color)
                         painter.drawEllipse(pt, 4.0, 4.0)
 
@@ -446,11 +541,14 @@ class CameraPreviewWidget(QWidget):
             hand_label = HANDEDNESS_LABELS_TR.get(hand.handedness, "Belirsiz El")
             qual_label = QUALITY_LABELS_TR.get(hand.quality, "Belirsiz")
             tag_text = f"{hand_label} (#{hand.hand_id}) [{qual_label}]" if self._show_details else hand_label
-            font = QFont("Segoe UI", 9)
-            font.setBold(True)
-            painter.setFont(font)
+            painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
+            w = painter.fontMetrics().horizontalAdvance(tag_text) + 20.0
+            tag = QRectF(wrist_pt.x() - w / 2, wrist_pt.y() + 12.0, w, 24.0)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(theme.color(theme.BG, 0.78))
+            painter.drawRoundedRect(tag, 12.0, 12.0)
             painter.setPen(base_color)
-            painter.drawText(QPointF(wrist_pt.x() - 45.0, wrist_pt.y() + 18.0), tag_text)
+            painter.drawText(tag, int(Qt.AlignmentFlag.AlignCenter), tag_text)
 
     def _draw_hand_info_card(
         self,
@@ -461,8 +559,8 @@ class CameraPreviewWidget(QWidget):
         identity_ambiguous: bool,
     ) -> None:
         card_w = min(230.0, canvas.width() * 0.44)
-        card_h = 152.0
-        margin = 10.0
+        card_h = 156.0
+        margin = 14.0
         card_x = (
             canvas.left() + margin
             if slot_index == 0
@@ -473,34 +571,30 @@ class CameraPreviewWidget(QWidget):
 
         hand_uncertain = self._is_hand_uncertain(hand, identity_ambiguous)
         border_pen = QPen(
-            QColor(235, 168, 68) if hand_uncertain else QColor(72, 92, 118),
-            1.4,
+            QColor(theme.HAND_UNCERTAIN) if hand_uncertain else theme.color(theme.WHITE, 0.13),
+            1.2,
             Qt.PenStyle.DashLine if hand_uncertain else Qt.PenStyle.SolidLine,
         )
         painter.setPen(border_pen)
-        painter.setBrush(QColor(22, 28, 38, 215))
-        painter.drawRoundedRect(card_rect, 6.0, 6.0)
-
-        header_font = QFont("Segoe UI", 9)
-        header_font.setBold(True)
-        painter.setFont(header_font)
+        painter.setBrush(theme.color(theme.SURFACE, 0.88))
+        painter.drawRoundedRect(card_rect, theme.RADIUS_L, theme.RADIUS_L)
+        painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
 
         hand_label = HANDEDNESS_LABELS_TR.get(hand.handedness, "Belirsiz El")
         qual_label = QUALITY_LABELS_TR.get(hand.quality, "Belirsiz")
         header_text = f"{hand_label} — {qual_label}"
-        painter.setPen(QColor(240, 185, 90) if hand_uncertain else QColor(230, 238, 248))
+        painter.setPen(QColor(theme.HAND_UNCERTAIN if hand_uncertain else theme.TEXT))
         painter.drawText(
-            QRectF(card_x + 8.0, card_y + 5.0, card_w - 16.0, 18.0),
+            QRectF(card_x + 14.0, card_y + 10.0, card_w - 28.0, 18.0),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
             header_text,
         )
 
         # Finger rows: name + state (Açık / Bükülü / Belirsiz) + curl bar
-        row_font = QFont("Segoe UI", 8)
-        painter.setFont(row_font)
+        painter.setFont(theme.font(11))
         finger_map: dict[FingerName, FingerInfo] = {f.name: f for f in hand.fingers}
 
-        y_cursor = card_y + 28.0
+        y_cursor = card_y + 34.0
         row_h = 22.0
         for finger_name in FINGER_ORDER:
             f_info = finger_map.get(
@@ -514,20 +608,20 @@ class CameraPreviewWidget(QWidget):
 
             if is_unknown:
                 self._last_had_uncertain_elements = True
-                text_color = QColor(240, 178, 84)
-                bar_color = QColor(210, 145, 55, 160)
-                bar_pen = QPen(QColor(240, 178, 84), 1.0, Qt.PenStyle.DashLine)
+                text_color = QColor(theme.HAND_UNCERTAIN)
+                bar_color = theme.color(theme.HAND_UNCERTAIN, 0.6)
+                bar_pen = QPen(QColor(theme.HAND_UNCERTAIN), 1.0, Qt.PenStyle.DashLine)
             elif f_info.state == FingerState.EXTENDED:
-                text_color = QColor(215, 230, 242)
-                bar_color = QColor(58, 196, 125)
-                bar_pen = QPen(QColor(80, 110, 130), 1.0, Qt.PenStyle.SolidLine)
+                text_color = QColor(theme.TEXT)
+                bar_color = QColor(theme.SUCCESS)
+                bar_pen = QPen(Qt.PenStyle.NoPen)
             else:
-                text_color = QColor(200, 212, 226)
-                bar_color = QColor(72, 148, 224)
-                bar_pen = QPen(QColor(80, 110, 130), 1.0, Qt.PenStyle.SolidLine)
+                text_color = QColor(theme.TEXT_SOFT)
+                bar_color = QColor(theme.ACCENT)
+                bar_pen = QPen(Qt.PenStyle.NoPen)
 
             painter.setPen(text_color)
-            label_rect = QRectF(card_x + 8.0, y_cursor, card_w * 0.56, row_h)
+            label_rect = QRectF(card_x + 14.0, y_cursor, card_w * 0.56, row_h)
             painter.drawText(
                 label_rect,
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -535,14 +629,14 @@ class CameraPreviewWidget(QWidget):
             )
 
             # Curl bar
-            bar_x = card_x + card_w * 0.58
-            bar_w = card_w * 0.36
-            bar_h = 9.0
+            bar_x = card_x + card_w * 0.62
+            bar_w = card_w * 0.38 - 14.0
+            bar_h = 6.0
             bar_y = y_cursor + (row_h - bar_h) * 0.5
             bar_bg_rect = QRectF(bar_x, bar_y, bar_w, bar_h)
 
             painter.setPen(bar_pen)
-            painter.setBrush(QColor(35, 43, 56))
+            painter.setBrush(theme.color(theme.WHITE, 0.12))
             painter.drawRoundedRect(bar_bg_rect, 3.0, 3.0)
 
             fill_w = bar_w * curl_val

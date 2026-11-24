@@ -14,22 +14,21 @@ from enum import Enum
 from typing import Optional
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
-    QLabel,
-    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from handcontrol.ui import icons, theme
 from handcontrol.ui.dpi import physical_to_logical
+from handcontrol.ui.illustrations import Illustration
 from handcontrol.ui.viewmodel import COMMANDS_GUIDE_TR
+from handcontrol.ui.widgets import Banner, button, label
 
 
 class OnboardingStep(Enum):
@@ -71,36 +70,11 @@ DEDUPE_PX = 60.0
 CLICK_MOVE_PX = 12.0
 AUTO_ADVANCE_MS = 900
 
-ACCENT = QColor(72, 172, 242)
-SUCCESS = QColor(82, 214, 148)
-WARN = QColor(255, 159, 67)
-TEXT = QColor(235, 242, 250)
-MUTED = QColor(168, 184, 204)
-
-_STYLE = """
-QDialog#Onboarding { background: #121822; }
-QLabel { color: #ebf2fa; }
-QLabel#Title { font-size: 22px; font-weight: 600; }
-QLabel#Subtitle { color: #a8b8cc; font-size: 14px; }
-QLabel#StepCounter { color: #a8b8cc; font-size: 12px; }
-QLabel#Counter { color: #48acf2; font-size: 15px; font-weight: 600; }
-QLabel#Hint { background: #1b2a3c; border: 1px solid #2e4a68; border-radius: 10px;
-              padding: 10px 14px; color: #d6e6f7; font-size: 13px; }
-QLabel#Status { color: #52d694; font-size: 14px; font-weight: 600; }
-QFrame#Card { background: #1c2430; border: 1px solid #2e3a4c; border-radius: 12px; }
-QLabel#CardTitle { font-size: 14px; font-weight: 600; }
-QLabel#CardBody { color: #a8b8cc; font-size: 13px; }
-QLabel#Badge { background: #1f3a55; color: #7fc6ff; border-radius: 16px; font-weight: 700;
-               min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px; }
-QPushButton { background: #243041; color: #ebf2fa; border: 1px solid #34455c; border-radius: 8px;
-              padding: 8px 18px; font-size: 13px; }
-QPushButton:hover { background: #2c3b50; }
-QPushButton:disabled { color: #5d6b7d; border-color: #2a3442; }
-QPushButton#Primary { background: #2f8fd8; border-color: #48acf2; font-weight: 600; }
-QPushButton#Primary:hover { background: #3a9be4; }
-QPushButton#Skip { background: transparent; border: none; color: #a8b8cc; padding: 8px 6px; }
-QPushButton#Skip:hover { color: #ebf2fa; }
-"""
+ACCENT = QColor(theme.ACCENT)
+SUCCESS = QColor(theme.SUCCESS)
+WARN = QColor(theme.WARNING)
+TEXT = QColor(theme.TEXT)
+MUTED = QColor(theme.MUTED)
 
 _HAND_TR = {"right": "Sağ", "left": "Sol"}
 
@@ -138,7 +112,7 @@ def _step_texts(hand: str) -> dict[OnboardingStep, _StepText]:
             "Alternatif: açık elden başparmak + orta parmak."),
         OnboardingStep.DRAG: _StepText(
             "Kutuyu sürükle bırak",
-            "Mavi kutuyu yeşil alana taşı ve bırak.",
+            "Turuncu kutuyu yeşil alana taşı ve bırak.",
             "Başparmak, işaret ve orta parmak uçlarını birleştir, eli taşı, bırak. "
             "Alternatif: pinch'i kapalı tutup eli taşı."),
         OnboardingStep.MODES: _StepText(
@@ -152,33 +126,60 @@ def _step_texts(hand: str) -> dict[OnboardingStep, _StepText]:
     }
 
 
-def _card(title: str, body: str, badge: str = "") -> QFrame:
-    frame = QFrame()
-    frame.setObjectName("Card")
-    row = QHBoxLayout(frame)
-    row.setContentsMargins(14, 12, 14, 12)
-    row.setSpacing(12)
-    if badge:
-        b = QLabel(badge)
-        b.setObjectName("Badge")
-        b.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        row.addWidget(b, 0, Qt.AlignmentFlag.AlignTop)
+class _IconTile(QWidget):
+    """Small tinted square with an icon."""
+
+    def __init__(self, icon: str, tone: str = theme.ACCENT) -> None:
+        super().__init__()
+        self._icon, self._tone = icon, tone
+        self.setFixedSize(38, 38)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.color(self._tone, 0.15))
+        p.drawRoundedRect(QRectF(self.rect()), 11, 11)
+        icons.paint(p, self._icon, QRectF(9, 9, 20, 20), self._tone)
+        p.end()
+
+
+def _tip(icon: str, title: str, body: str, tone: str = theme.ACCENT) -> QWidget:
+    w = QWidget()
+    row = QHBoxLayout(w)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(14)
+    row.addWidget(_IconTile(icon, tone), 0, Qt.AlignmentFlag.AlignTop)
     col = QVBoxLayout()
-    col.setSpacing(3)
-    t = QLabel(title)
-    t.setObjectName("CardTitle")
-    t.setWordWrap(True)
-    d = QLabel(body)
-    d.setObjectName("CardBody")
-    d.setWordWrap(True)
-    col.addWidget(t)
-    col.addWidget(d)
+    col.setContentsMargins(0, 1, 0, 0)
+    col.setSpacing(2)
+    col.addWidget(label(title, "row", True))
+    col.addWidget(label(body, "caption", True))
     row.addLayout(col, 1)
-    return frame
+    return w
+
+
+def _scene_page(scene: str, tips: tuple[tuple[str, str, str], ...], spacing: int = 16) -> QWidget:
+    """Illustration on the left, explained points on the right."""
+    page = QWidget()
+    row = QHBoxLayout(page)
+    row.setContentsMargins(0, 4, 0, 0)
+    row.setSpacing(32)
+    art = Illustration(scene)
+    art.setFixedWidth(340)
+    row.addWidget(art)
+    col = QVBoxLayout()
+    col.setSpacing(spacing)
+    col.addStretch(1)
+    for icon, title, body in tips:
+        col.addWidget(_tip(icon, title, body))
+    col.addStretch(1)
+    row.addLayout(col, 1)
+    return page
 
 
 class ProgressDots(QWidget):
-    """One dot per step: done = green, current = accent pill, upcoming = grey."""
+    """One dot per step: done = mint, current = accent pill, upcoming = grey."""
 
     def __init__(self, count: int, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -199,17 +200,13 @@ class ProgressDots(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setPen(Qt.PenStyle.NoPen)
-        x = 0.0
-        h = float(self.height())
+        x, mid = 0.0, self.height() / 2.0
         for i in range(self._count):
-            if i == self._current:
-                p.setBrush(ACCENT)
-                p.drawRoundedRect(QRectF(x, 2, 26, h - 4), (h - 4) / 2, (h - 4) / 2)
-                x += 34
-            else:
-                p.setBrush(SUCCESS if i < self._current else QColor(52, 64, 82))
-                p.drawEllipse(QRectF(x, 3, h - 6, h - 6))
-                x += h - 6 + 10
+            w = 28.0 if i == self._current else 8.0
+            p.setBrush(QColor(theme.ACCENT) if i == self._current else QColor(theme.SUCCESS) if i < self._current
+                       else QColor(theme.STROKE))
+            p.drawRoundedRect(QRectF(x, mid - 4.0, w, 8.0), 4.0, 4.0)
+            x += w + 8.0
         p.end()
 
 
@@ -258,12 +255,12 @@ class PracticeArea(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        p.setPen(QPen(QColor(46, 58, 76), 1.2))
-        p.setBrush(QColor(22, 30, 42))
-        p.drawRoundedRect(r, 14, 14)
+        p.setPen(QPen(QColor(theme.HAIRLINE), 1.0))
+        p.setBrush(QColor(theme.SURFACE))
+        p.drawRoundedRect(r, theme.RADIUS_XL, theme.RADIUS_XL)
         # subtle dot grid
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(255, 255, 255, 14))
+        p.setBrush(theme.color(theme.WHITE, 0.06))
         for gx in range(24, int(r.width()), 32):
             for gy in range(24, int(r.height()), 32):
                 p.drawEllipse(QPointF(gx, gy), 1.2, 1.2)
@@ -284,27 +281,25 @@ class PracticeArea(QWidget):
             done = d.current_step == OnboardingStep.POINT and i < d.successes
             if i == active and not d.step_complete:
                 hover = d.cursor_inside_target
-                glow = QColor(ACCENT)
-                glow.setAlpha(60 if hover else 34)
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(glow)
+                p.setBrush(theme.color(theme.ACCENT, 0.22 if hover else 0.11))
                 p.drawEllipse(c, rad + 14, rad + 14)
                 p.setPen(QPen(ACCENT, 3))
-                p.setBrush(QColor(31, 58, 85) if not hover else QColor(38, 78, 122))
+                p.setBrush(theme.mix(theme.RAISED, ACCENT, 0.34 if hover else 0.12))
                 p.drawEllipse(c, rad, rad)
-                p.setPen(QPen(QColor(127, 198, 255), 2))
+                p.setPen(QPen(QColor(theme.ACCENT_TEXT), 2))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawEllipse(c, rad * 0.55, rad * 0.55)
-                p.setBrush(QColor(127, 198, 255))
+                p.setBrush(QColor(theme.ACCENT_TEXT))
                 p.setPen(Qt.PenStyle.NoPen)
                 p.drawEllipse(c, 6, 6)
             elif done or (d.step_complete and i == active):
                 p.setPen(QPen(SUCCESS, 3))
-                p.setBrush(QColor(28, 72, 58))
+                p.setBrush(theme.mix(theme.RAISED, SUCCESS, 0.22))
                 p.drawEllipse(c, rad * 0.7, rad * 0.7)
                 self._check(p, c, rad * 0.32)
             elif d.current_step == OnboardingStep.POINT:
-                p.setPen(QPen(QColor(64, 82, 106), 2, Qt.PenStyle.DashLine))
+                p.setPen(QPen(QColor(theme.STROKE), 2, Qt.PenStyle.DashLine))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawEllipse(c, rad * 0.7, rad * 0.7)
         if d.flash_miss_pos is not None:
@@ -322,22 +317,17 @@ class PracticeArea(QWidget):
         p.setBrush(fill)
         p.drawRoundedRect(zone, 18, 18)
         p.setPen(MUTED if not ok else SUCCESS)
-        f = QFont("Segoe UI", 11)
-        p.setFont(f)
+        p.setFont(theme.bold(theme.TEXT_PX["body"]))
         p.drawText(zone.adjusted(0, 0, 0, -10), int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom),
                    "Buraya bırak" if not ok else "Bırakıldı")
         box = d.box_rect()
-        p.setPen(QPen(QColor(127, 198, 255) if d.dragging else ACCENT, 3))
-        p.setBrush(QColor(38, 78, 122) if d.dragging else QColor(31, 58, 85))
+        p.setPen(QPen(QColor(theme.ACCENT_HOVER) if d.dragging else ACCENT, 3))
+        p.setBrush(theme.mix(theme.RAISED, ACCENT, 0.42 if d.dragging else 0.20))
         p.drawRoundedRect(box, 14, 14)
         if ok:
             self._check(p, box.center(), 18)
         else:
-            p.setPen(QPen(QColor(127, 198, 255), 3))
-            c = box.center()
-            for dx in (-12, 0, 12):
-                p.drawPoint(QPointF(c.x() + dx, c.y() - 8))
-                p.drawPoint(QPointF(c.x() + dx, c.y() + 8))
+            icons.paint(p, "hand", QRectF(box.center().x() - 18, box.center().y() - 18, 36, 36), theme.ACCENT_TEXT)
 
     @staticmethod
     def _check(p: QPainter, c: QPointF, s: float) -> None:
@@ -367,7 +357,7 @@ class OnboardingDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("Onboarding")
         self.setWindowTitle("Holoscobe — Eğitim")
-        self.setStyleSheet(_STYLE)
+        theme.install()
         self.resize(900, 600)
         self.hotkey = hotkey or "Ctrl+Alt+Shift+F12"
         self.dominant_hand = dominant_hand if dominant_hand in _HAND_TR else "right"
@@ -405,13 +395,12 @@ class OnboardingDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(28, 22, 28, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(32, 22, 32, 20)
+        root.setSpacing(14)
 
         top = QHBoxLayout()
         self.dots = ProgressDots(len(STEP_ORDER))
-        self.step_label = QLabel()
-        self.step_label.setObjectName("StepCounter")
+        self.step_label = label("", "caption")
         top.addWidget(self.dots, 0, Qt.AlignmentFlag.AlignVCenter)
         top.addStretch(1)
         top.addWidget(self.step_label)
@@ -420,16 +409,12 @@ class OnboardingDialog(QDialog):
         head = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(4)
-        self.title_label = QLabel()
-        self.title_label.setObjectName("Title")
-        self.subtitle_label = QLabel()
-        self.subtitle_label.setObjectName("Subtitle")
-        self.subtitle_label.setWordWrap(True)
+        self.title_label = label("", "display")
+        self.subtitle_label = label("", "lead", True)
         titles.addWidget(self.title_label)
         titles.addWidget(self.subtitle_label)
         head.addLayout(titles, 1)
-        self.counter_label = QLabel()
-        self.counter_label.setObjectName("Counter")
+        self.counter_label = label("", "counter")
         head.addWidget(self.counter_label, 0, Qt.AlignmentFlag.AlignBottom)
         root.addLayout(head)
 
@@ -442,20 +427,19 @@ class OnboardingDialog(QDialog):
             self.stack.addWidget(w)
         root.addWidget(self.stack, 1)
 
-        self.hint_label = QLabel()
-        self.hint_label.setObjectName("Hint")
-        self.hint_label.setWordWrap(True)
+        self.hint_label = Banner("", theme.ACCENT, "hand")
         root.addWidget(self.hint_label)
 
         foot = QHBoxLayout()
-        self.btn_skip = QPushButton("Atla")
-        self.btn_skip.setObjectName("Skip")
-        self.btn_skip.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.status_label = QLabel()
-        self.status_label.setObjectName("Status")
-        self.btn_back = QPushButton("Geri")
-        self.btn_next = QPushButton("İleri")
-        self.btn_next.setObjectName("Primary")
+        foot.setSpacing(8)
+        self.btn_skip = button("Atla", "ghost")
+        self.btn_skip.setAutoDefault(False)
+        self.status_label = label("", "success")
+        self.btn_back = button("Geri")
+        self.btn_back.setAutoDefault(False)
+        self.btn_back.setMinimumWidth(92)
+        self.btn_next = button("İleri", "primary")
+        self.btn_next.setMinimumWidth(112)
         self.btn_next.setDefault(True)
         foot.addWidget(self.btn_skip)
         foot.addStretch(1)
@@ -470,61 +454,39 @@ class OnboardingDialog(QDialog):
         self.btn_next.clicked.connect(self.go_next)
 
     def _build_welcome_page(self) -> QWidget:
-        page = QWidget()
-        grid = QGridLayout(page)
-        grid.setContentsMargins(0, 4, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
-        tips = (
-            ("Dirseğini masaya daya", "Kolun yorulmaz, imleç daha az titrer."),
-            ("Elini kameradan 40–70 cm uzakta tut", "Elin kadrajda tam görünsün."),
-            ("Yüzün önden aydınlık olsun", "Arkanda pencere ya da güçlü ışık olmasın."),
-            (f"Acil durdurma: {self.hotkey}", "Her an tüm girdileri bırakır ve kontrolü duraklatır."),
-            ("İki elle bir kez el çırp", "Kontrolü etkinleştirir; yeniden çırpınca duraklatır."),
-            ("Hazır olunca İleri'ye bas", "Her adımı istediğin zaman Atla ile geçebilirsin."),
-        )
-        for i, (title, body) in enumerate(tips):
-            grid.addWidget(_card(title, body, str(i + 1)), i // 2, i % 2)
-        grid.setRowStretch(3, 1)
-        return page
+        return _scene_page("welcome", (
+            ("elbow", "Dirseğini masaya daya", "Kolun yorulmaz, imleç daha az titrer."),
+            ("distance", "Elini kameradan 40–70 cm uzakta tut", "Elin kadrajda tam görünsün."),
+            ("light", "Yüzün önden aydınlık olsun", "Arkanda pencere ya da güçlü ışık olmasın."),
+            ("shield", f"Acil durdurma: {self.hotkey}", "Her an tüm girdileri bırakır ve kontrolü duraklatır."),
+            ("clap", "İki elle bir kez el çırp", "Kontrolü etkinleştirir; yeniden çırpınca duraklatır."),
+            ("play", "Hazır olunca Başla'ya bas", "Her adımı istediğin zaman Atla ile geçebilirsin."),
+        ))
 
     def _build_modes_page(self) -> QWidget:
-        page = QWidget()
-        col = QVBoxLayout(page)
-        col.setContentsMargins(0, 4, 0, 0)
-        col.setSpacing(12)
-        col.addWidget(_card(
-            "Mod çarkı",
-            "Sol elinle V yap ve yarım saniye tut; V ile dilime yönel, yumrukla seç.", "M"))
-        col.addWidget(_card(
-            "Kaydırma modu",
-            "Pinch yap ve eli yukarı ya da aşağı taşı: sayfa dikey kayar.", "K"))
-        col.addWidget(_card(
-            "Komutlar modu",
-            " · ".join(f"{g}: {r}" for g, r in COMMANDS_GUIDE_TR), "C"))
-        col.addWidget(_card(
-            "Bekleyerek tıkla",
-            "Ayarlar > İmleç'ten açarsan imleci sabit tutman sol tık yapar; halka dolunca tıklar.", "B"))
-        col.addStretch(1)
-        return page
+        return _scene_page("modes", (
+            ("more", "Mod çarkı", "Sol elinle V yap ve yarım saniye tut; V ile dilime yönel, yumrukla seç."),
+            ("scroll", "Kaydırma modu", "Pinch yap ve eli yukarı ya da aşağı taşı: sayfa dikey kayar."),
+            ("commands", "Komutlar modu", "\n".join(
+                ["Sola ya da sağa kaydır: önceki / sonraki (sunum, tarayıcı, medya, masaüstü)",
+                 *(f"{g}: {r}" for g, r in COMMANDS_GUIDE_TR[2:])])),
+            ("timer", "Bekleyerek tıkla",
+             "Ayarlar > İmleç'ten açarsan imleci sabit tutman sol tık yapar; halka dolunca tıklar."),
+        ))
 
     def _build_done_page(self) -> QWidget:
-        page = QWidget()
-        col = QVBoxLayout(page)
-        col.setContentsMargins(0, 4, 0, 0)
-        col.setSpacing(12)
-        col.addWidget(_card(
-            "Öğrendiklerin",
-            "İmleç · Tık · Çift tık · Sağ tık · Sürükle bırak · Kaydırma ve Komutlar modları.", "✓"))
-        col.addWidget(_card(
-            "Unutursan",
-            "Tepsi menüsündeki Hareket Rehberi tüm hareketleri listeler. Eğitimi \"Eğitimi başlat\" "
-            "ile yeniden açabilirsin.", "?"))
-        col.addWidget(_card(
-            "Güvenlik",
-            f"Bir şey ters giderse {self.hotkey} ile hemen durdur.", "!"))
-        col.addStretch(1)
-        return page
+        return _scene_page("done", (
+            ("check", "Öğrendiklerin",
+             "İmleç · Tık · Çift tık · Sağ tık · Sürükle bırak · Kaydırma ve Komutlar modları."),
+            ("guide", "Unutursan",
+             "Tepsi menüsündeki Hareket Rehberi tüm hareketleri listeler. Eğitimi \"Eğitimi başlat\" "
+             "ile yeniden açabilirsin."),
+            ("shield", "Güvenlik", f"Bir şey ters giderse {self.hotkey} ile hemen durdur."),
+        ), 28)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        theme.dark_title_bar(self)
 
     # ---------- public state ----------
 
@@ -650,6 +612,9 @@ class OnboardingDialog(QDialog):
             OnboardingStep.MODES: self.page_modes,
             OnboardingStep.DONE: self.page_done,
         }.get(step, self.practice)
+        policy = self.hint_label.sizePolicy()          # a vanishing hint must not move the targets
+        policy.setRetainSizeWhenHidden(step in REQUIRED_SUCCESSES)
+        self.hint_label.setSizePolicy(policy)
         self.stack.setCurrentWidget(page)
         self.btn_back.setEnabled(self._index > 0)
         self.btn_next.setText("Bitir" if step == OnboardingStep.DONE else

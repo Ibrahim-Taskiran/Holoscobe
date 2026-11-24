@@ -91,8 +91,8 @@ def test_area_and_hint_are_painted(qt):
         img = win.render_to_image(960, 620)
         c = win.canvas
         box = c.area_widget_rect(RECT, c.canvas_rect_for(QRectF(0, 0, 960, 620)))
-        corner = img.pixelColor(round(box.left()), round(box.top()))
-        assert corner.blue() - corner.red() > 15                              # bluish handle drawn
+        corner = img.pixelColor(round(box.left()) - 4, round(box.top()))       # handle rim, beside the string cap
+        assert corner.red() - corner.blue() > 15                              # warm handle drawn (theme.AREA)
         assert FIXED_HINT_TR not in status                                    # no hands: "Elinizi gösterin"
     finally:
         win.close()
