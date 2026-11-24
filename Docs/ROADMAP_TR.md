@@ -4,7 +4,9 @@ Tarih: 12 Kasım 2026 · Dayanak: [v1.1 teknik şartname](Windows_Hand_Gesture_C
 
 Hedef: Mevcut HP Victus ve kamerasıyla iki elin on parmağını ayrı takip eden, Windows 11 üzerinde iki monitörü kontrol edebilen, ek yazılım/hizmet ücreti gerektirmeyen ve kurulumdan sonra çevrimdışı çalışan uygulama.
 
-Bu belge uygulama planıdır; yazılımın yapıldığı veya kamera testlerinin geçtiği anlamına gelmez. Başlangıçta bütün aşamalar **bekliyor** durumundadır. Teknik davranış ve kabul ölçütleri için şartname esas alınır; bu plan uygulama sırasını ve teslimleri açıklar.
+Bu belge ilk uygulama planıdır; başlangıçta bütün aşamalar **bekliyor** olarak yazılmıştır. Teknik davranış ve kabul ölçütleri için şartname esas alınır; bu plan uygulama sırasını ve teslimleri açıklar.
+
+> **Güncel durum özeti (2026-11-24):** Aşama 0–7'nin tamamı (çekirdek masaüstü kontrolü, iki monitör, Komutlar modu, eğitim, çevrimdışı paketleme ve 3B tüylü kedi maskot) ile ek olarak **Enstrüman** ve **Çizim** modları kodlandı ve offscreen otomatik testlerle doğrulandı. Gerçek dahili kamera ve ellerle donanım kabulü tüm aşamalar için hâlâ **bekliyor**. Güncel özellikler ve değişiklikler için: [README.md](../README.md) ve [CHANGELOG.md](../CHANGELOG.md).
 
 ## Öncelikler ve kapsam
 

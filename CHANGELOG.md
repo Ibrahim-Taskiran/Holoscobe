@@ -7,6 +7,8 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 ## [Unreleased]
 
 ### Added
+- 3B tüylü kedi maskot (`handcontrol/mascot/`): masaüstü modlarında ekranın sağ alt köşesinde tıklama geçiren, odak çalmayan şeffaf pencere. Yüz (baş dönüşü, bakış, göz kırpma, çene, gülümseme, kaş), kol ve patileri gerçek zamanlı taklit eder; kimse yokken fareyi izler, imleç üstüne gelince yarı saydamlaşır; Enstrüman ve Çizim modlarında gizlenir. OpenGL 3.3 ile çizilir. `face_landmarker.task` modeli, `assets/mascot/` varlıkları ve `scripts/build_mascot.py` eklendi.
+- **Kontrol başlayınca ana pencereyi küçült** ayarı (`hide_on_control`, varsayılan açık): canlı masaüstü kontrolü başlayınca kamera penceresi küçülür, kedi sağ altta kalır.
 - Çizim: sağ elle başparmak-işaret birleştirilip tutulunca renk çarkı (8 renk); ayırınca seçilir.
 - Mod çarkı: sol elle V yarım saniye tutulunca açılır, V ile yönelinir, yumrukla seçilir. Her modda çalışır. Açık avuçla açılan eski mod menüsünün yerini aldı.
 - Üst çubuk sadeleşti (İmleç, Kaydırma, Enstrüman, Çizim, Diğer); alttaki ipucu seçili moda göre değişir.
@@ -18,6 +20,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - `scripts/holoscobe.pyw`: konsolsuz kaynak başlatıcı; masaüstü kısayolu artık eskimiyor.
 
 ### Changed
+- Modern koyu grafit ve kayısı arayüz yenilemesi (`ui/theme.py`, `ui/widgets.py`, `ui/icons.py`, `ui/illustrations.py`): solda mod şeridi (mode rail), üstte durum/Ayrıntı/Kedi/Sürdür başlık çubuğu, sol kenar çubuklu ve kart tabanlı 5 kategorili Ayarlar penceresi, yenilenen eğitim, kalibrasyon, tepsi ve katman tasarımı.
 - Enstrümanın varsayılan düzeni "Serbest teller" oldu.
 - Enstrüman modunu düğme ya da tepsiden seçmek onu hemen başlatır (kamera kapalıysa açar); bu mod Windows'a komut göndermez.
 - Ses cihazı hatası artık modu kapatmıyor: teller ekranda kalır, ses 3 saniyede bir yeniden denenir.

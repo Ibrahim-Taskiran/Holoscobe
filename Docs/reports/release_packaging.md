@@ -1,8 +1,8 @@
 # Sürüm ve paketleme
 
 ## Derleme
-`scripts\build.ps1` — model SHA-256 doğrulanır, PyInstaller (6.22.3) ile pencereli onedir derleme: `dist\Holoscobe\Holoscobe.exe`.
-Spec (`packaging\holoscobe.spec`) `assets\` klasörünü (el modeli, manifest, `icon.ico`) paketler ve model hash'i uyuşmazsa derlemeyi durdurur.
+`scripts\build.ps1` — manifestteki tüm modellerin (`hand_landmarker.task`, `pose_landmarker_lite.task`, `face_landmarker.task`) SHA-256 değeri doğrulanır, PyInstaller (6.22.3) ile pencereli onedir derleme üretilir: `dist\Holoscobe\Holoscobe.exe`.
+Spec (`packaging\holoscobe.spec`) `assets\` klasörünü (modeller, manifest, `icon.ico`, `mascot/` kedi varlıkları), `PySide6.QtOpenGL` modülünü (3B kedi maskot) ve Enstrüman modu için yalnız `_sounddevice_data/portaudio-binaries/libportaudio64bit.dll` dosyasını paketler; herhangi bir model hash'i uyuşmazsa derlemeyi durdurur.
 CI için `HOLOSCOBE_PYTHON` ortam değişkeni .venv yerine başka Python'u seçer.
 
 ## Kendini sınama (pencere ve kamera yok)
@@ -23,5 +23,5 @@ Sürüm `pyproject.toml` içindeki `version` alanından okunur.
 - `.github\workflows\release.yml` — `v*` etiketi: modeli manifest URL'sinden indirip SHA-256 doğrular, `release.ps1` çalıştırır, zip + sha256'yı `gh release create` ile (yerleşik `GITHUB_TOKEN`) yükler.
 
 ## Notlar
-- Manifest: model SHA-256'sı henüz bağımsız gözden geçirilmedi; sürümde paketlemek için `sha256_status` kapatılmalı (`assets\model_manifest.json`).
-- Paket yaklaşık 390 MB açık, 156 MB zip. İmzasız exe: SmartScreen uyarısı verebilir.
+- Manifest: `hand_landmarker.task` 2026-11-18'de yeniden doğrulandı ve sürümde paketlenmesine onay verildi; `pose_landmarker_lite.task` ve `face_landmarker.task` sürüm indirmelerinden hesaplanan SHA-256 ile denetlenir (`assets\model_manifest.json`).
+- İmzasız exe: SmartScreen uyarısı verebilir.

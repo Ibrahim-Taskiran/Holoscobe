@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0. Otomatik testler geçti, donanım kabulü bekliyor.** Son otomatik takım: **1865 geçti, 7 manuel test seçilmedi** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0 (+ geliştirme dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1919 otomatik test, 7 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -140,6 +140,24 @@ yalnız X ile temizleme kapalı kalır ve ekranda bildirilir. Çizim bellekte tu
 çizimlerde (yaklaşık 18 kamera genişliği iz) en eski mürekkep silinir. Yol haritası ve sonuçlar:
 [CIZIM_MODU_TR.md](Docs/CIZIM_MODU_TR.md).
 
+## 3B Kedi Maskot
+
+Masaüstü kontrol modlarında (Enstrüman ve Çizim hariç) ekranın sağ alt köşesinde şeffaf, tıklama geçiren ve odak
+çalmayan 3B tüylü bir kedi penceresi gösterilir.
+
+- **Gerçek zamanlı taklit:** Baş dönüşü, bakış yönü, göz kırpma, çene, gülümseme ve kaş hareketlerini (`face_landmarker.task`),
+  kolları (`pose_landmarker_lite.task`) ve patileri (mevcut el takibi) ayna görüntüsü gibi kopyalar.
+- **El takibine öncelik:** Yüz ve poz algılama ayrı bir arka plan iş parçacığında düşük hızda çalışır; kedi gizliyken
+  tamamen durur.
+- **Masaüstü dostu:** İmleç kedinin üstüne gelince yarı saydamlaşır, tıklamaları altındaki pencereye geçirir. Kimse
+  algılanmadığında göz kırpar ve fare imlecini takip eder.
+- **Açma / kapatma:** Ana pencere başlığındaki **Kedi** düğmesinden, tepsiden ya da **Ayarlar > Genel** altından
+  anında açılıp kapatılabilir.
+- **Pencereyi küçültme:** **Kontrol başlayınca ana pencereyi küçült** ayarı (`hide_on_control`, varsayılan açık) etkinken
+  canlı masaüstü kontrolü başlayınca ana kamera penceresi küçülür, kedi sağ altta kalır.
+- **Gereksinim:** Offscreen OpenGL 3.3 gerekir. Desteklenmeyen sistemlerde kedi devre dışı kalır, masaüstü kontrolü
+  normal çalışmaya devam eder.
+
 ## İlk açılış eğitimi
 
 Uygulama ilk açılışta bir eğitim penceresi gösterir. Büyük hedeflerle pratik yaptırır. Adımlar:
@@ -178,14 +196,15 @@ Yukarı kaydırma (Görev görünümü) ve aşağı kaydırma (Masaüstünü gö
 
 ## Ayarlar
 
-Tepsiden açılır. Dört sekme vardır:
+Ana penceredeki sol şeritten ya da tepsiden açılır. Sol kenar çubuğunda beş kategori vardır:
 
-| Sekme | İçerik |
+| Kategori | İçerik |
 |---|---|
-| Genel | Kamera, ayna görüntüsü, baskın el, varsayılan mod, otomatik duraklat, acil durdurma kısayolu, monitör eşlemesi, katman/bildirim/maskot, Windows ile başlat |
+| Genel | Kamera, ayna görüntüsü, baskın el, varsayılan mod, otomatik duraklat, acil durdurma kısayolu, monitör eşlemesi, katman/bildirim/kedi maskot, kontrol başlayınca pencereyi küçült, Windows ile başlat |
 | İmleç | Hassasiyet ön ayarı, imleç türü, hız, hassasiyet, yumuşatma, bekleyerek tıkla ve süresi, tık sesi, imleç halkası |
 | Hareketler | Pinch eşikleri, kaydırma ve yakınlaştırma yönü, kaydırma profili (Komutlar) |
-| Gelişmiş | Kamera altyapısı, algılama/takip eşikleri, dry-run paneli, ayarları içe/dışa aktar, tanılama raporu |
+| Enstrüman | Düzen (Serbest/Sabit/Solo/Akor), dizi, diziye kilitle, sabit tel sayısı, serbest tel hizalama yardımı, 4 akor bölgesi, ses düzeyi, tını (Temiz/Elektro), ses cihazı, gecikme, kıvılcım efektleri, Test sesi çal |
+| Gelişmiş | Kamera altyapısı, algılama/takip eşikleri, dry-run paneli, ayarları içe/dışa aktar, ilk açılış eğitimi, tanılama raporu |
 
 **Hassasiyet ön ayarları:** Hassas (hız 0,7), Normal (hız 1,0), Hızlı (hız 1,5). Değerleri elle değiştirirsen ön ayar **Özel** olur.
 
@@ -213,7 +232,7 @@ Tepsiden açılır. Dört sekme vardır:
 
 Yönetici yetkisi gerekmez.
 
-1. Sürüm zip'ini (`Holoscobe-1.0.0-win64.zip`) ve `.sha256` dosyasını indir. Hash'i karşılaştır: `Get-FileHash .\Holoscobe-1.0.0-win64.zip -Algorithm SHA256`.
+1. Sürüm zip'ini (`Holoscobe-<sürüm>-win64.zip`) ve `.sha256` dosyasını indir. Hash'i karşılaştır: `Get-FileHash .\Holoscobe-<sürüm>-win64.zip -Algorithm SHA256`.
 2. Zip'i bir klasöre aç.
 3. Açılan klasörde çalıştır:
 
@@ -242,7 +261,7 @@ Paket yaklaşık 390 MB açık, 156 MB zip. Sürümü kendin üretmek için: `sc
 .\scripts\setup.ps1
 ```
 
-Betik sanal ortamı kurar, sabitlenmiş paketleri yükler, el modelini indirir ve SHA-256 değerini `assets/model_manifest.json` ile karşılaştırır. Model dosyası depoya dahil değildir.
+Betik sanal ortamı kurar, sabitlenmiş paketleri yükler, el (`hand_landmarker.task`), poz (`pose_landmarker_lite.task`) ve yüz (`face_landmarker.task`) modellerini indirir ve SHA-256 değerlerini `assets/model_manifest.json` ile karşılaştırır. Model dosyaları depoya dahil değildir. Çevrimdışı kurulum için `-ModelPath`, `-PoseModelPath` ve `-FaceModelPath` parametreleri kullanılabilir.
 
 ## Çalıştırma
 
@@ -264,7 +283,7 @@ Masaüstündeki tek `Holoscobe` kısayolunu güncel kaynak koduna bağlamak içi
 `powershell -ExecutionPolicy Bypass -File scripts\update_shortcuts.ps1` çalıştırın.
 Kısayol `scripts\holoscobe.pyw` dosyasını konsolsuz ve gerçek fare kontrolüyle (`--live`) açar; kod değişince yeniden derleme gerekmez.
 
-Uygulama tek penceredir: üstte başlat/duraklat ve mod düğmeleri, altta kamera. Enstrüman seçilince aynı pencerede teller sayfası ve araç çubuğu (düzen, tel silme, tını, ses) açılır.
+Uygulama koyu grafit ve kayısı temalı tek bir ana penceredir (`ui/main_window.py`): solda mod şeridi (`İmleç`, `Kaydırma`, `Enstrüman`, `Çizim`, `Diğer` ve `Ayarlar`), üstte durum/Kedi/Ayrıntı/Sürdür başlık çubuğu, ortada kamera sahnesi, altta (ya da geniş ekranda yanda) seçili moda göre değişen hareket ipuçları yer alır. Enstrüman ve Çizim seçilince aynı pencerede kendi sahne ve araç çubuklarıyla açılır.
 
 ## Sorun giderme
 
@@ -314,30 +333,43 @@ Bunları bir insan, gerçek elleriyle çalıştırır. Sonuçlar `Docs/reports/h
 
 ```
 src/handcontrol/
-  contracts.py     Modüller arası ortak tipler
-  camera.py        Kamera yaşam döngüsü, en yeni kare tamponu
-  tracking.py      MediaPipe Hand Landmarker sarmalayıcısı
-  features.py      Parmak durumu, avuç ölçeği, el kimliği
-  filters.py       One Euro filtresi, histerezis
-  gestures.py      Pinch, el çırpma, menü bekleme tanıyıcıları
-  swipe.py         Açık avuç kaydırma tanıyıcısı, Komutlar profilleri
-  dwell.py         Bekleyerek tıkla
-  controller.py    Durum makinesi, modlar, eylem üretimi
-  mapping.py       Kamera alanını iki monitöre eşleme
-  safety.py        Eski örnek reddi, bağımsız zaman aşımı gözcüsü
-  dryrun.py        Windows'a dokunmayan sahte alıcı
-  config.py        Sürümlü ayar dosyası (şema 3)
-  diagnostics.py   Tanılama paketi (zip)
-  logsetup.py      Döner günlük dosyası, yakalanmamış hata kancaları
-  windows/         Win32 bağdaştırıcıları (giriş, pencere, ses, kısayol, oturum, tuş komutları)
-  ui/              PySide6 tepsi, önizleme, kalibrasyon, ayarlar, katmanlar
-  ui/onboarding.py İlk açılış eğitimi
-  tools/           Konsol kabul testi araçları
-tests/             Her modülün kendi klasörü
-scripts/           Kurulum, test, başlatma, derleme, install/uninstall, release betikleri
-packaging/         PyInstaller spec ve giriş noktası
-.github/workflows/ CI (ci.yml) ve sürüm (release.yml)
-Docs/              Şartname, yol haritası, raporlar
+  app.py               Masaüstü giriş noktası ve bileşen bağlama
+  contracts.py         Modüller arası ortak tipler
+  camera.py            Kamera yaşam döngüsü, en yeni kare tamponu
+  tracking.py          MediaPipe Hand Landmarker sarmalayıcısı
+  features.py          Parmak durumu, avuç ölçeği, el kimliği
+  filters.py           One Euro filtresi, histerezis
+  gestures.py          Pinch, el çırpma, yumruk tanıyıcıları
+  mode_wheel.py        Sol V mod çarkı ve çizim renk çarkı geometrisi
+  relative_pointer.py  Göreli imleç (debriyaj ve ivme)
+  middle_pinch.py      Başparmak + orta parmak sağ tık tanıyıcısı
+  index_tap.py         Eski ileri itme tıklaması (varsayılan kapalı)
+  swipe.py             Açık avuç kaydırma tanıyıcısı, Komutlar profilleri
+  dwell.py             Bekleyerek tıkla
+  controller.py        Durum makinesi, modlar, eylem üretimi
+  pipeline.py          Uçtan uca kare işleme boru hattı
+  mapping.py           Kamera alanını iki monitöre eşleme
+  safety.py            Eski örnek reddi, bağımsız zaman aşımı gözcüsü
+  dryrun.py            Windows'a dokunmayan sahte alıcı
+  config.py            Sürümlü ayar dosyası (şema 4)
+  diagnostics.py       Tanılama paketi (zip)
+  telemetry.py         İsteğe bağlı yerel oturum telemetrisi (CSV)
+  logsetup.py          Döner günlük dosyası, yakalanmamış hata kancaları
+  drawing.py           3B dönen mürekkep sahnesi ve derinlikli silme
+  drawing_gestures.py  Çizim modu el/poz hareketleri (X temizleme, renk çarkı)
+  drawing_raster.py    NumPy tabanlı hızlı mürekkep çizici
+  instrument/          Sanal gitar motoru (geometri, teller, müzik, Karplus-Strong sentez, WASAPI ses)
+  instrument_runtime.py Enstrüman oturumu, ses ve pencere yaşam döngüsü
+  mascot/              3B tüylü kedi maskot (OpenGL 3.3, yüz/poz takibi, retarget, şeffaf pencere)
+  windows/             Win32 bağdaştırıcıları (giriş, pencere, ses, kısayol, oturum, tuş komutları, başlangıç)
+  ui/                  PySide6 ana pencere, koyu tema, kart ayarlar, tepsi, önizleme, kalibrasyon, eğitim, katmanlar, Enstrüman/Çizim görünümleri
+  tools/               Konsol kabul testi ve ölçüm araçları
+assets/                İkon, model manifesti, 3B kedi varlıkları (cat.npz, cat_albedo.jpg)
+tests/                 Her modülün kendi test klasörü
+scripts/               Kurulum, test, başlatma, kısayol, maskot üretimi, derleme, install/uninstall, release betikleri
+packaging/             PyInstaller spec ve giriş noktası
+.github/workflows/     CI (ci.yml) ve sürüm (release.yml)
+Docs/                  Şartname, yol haritası, çizim modu planı, raporlar
 ```
 
 Akış: kamera → en yeni kare → takip → özellikler → jestler → denetleyici → eylem → Windows bağdaştırıcısı.
@@ -357,6 +389,7 @@ Camera Mouse, eViacam, Project Gameface ve Ultraleap TouchFree incelendi. Bu inc
 - [Aşama 0 raporu](Docs/reports/phase0_report.md)
 - [Üçüncü taraf lisans bildirimleri](THIRD_PARTY_NOTICES.md)
 - [Enstrüman modu: tasarım, ölçümler, elle test listesi](Docs/reports/instrument.md)
+- [Çizim modu: yol haritası ve sonuçlar](Docs/CIZIM_MODU_TR.md)
 
 ## Bilinen sınırlar
 
@@ -365,7 +398,8 @@ Camera Mouse, eViacam, Project Gameface ve Ultraleap TouchFree incelendi. Bu inc
 - Yakınlaştırma, hedef uygulamanın Ctrl + tekerlek desteğine bağlıdır.
 - Komutlar modundaki kısayollar (masaüstü değiştirme, medya tuşları) hedef uygulamanın ve Windows'un o kısayolu desteklemesine bağlıdır.
 - Enstrüman modunun eşikleri (vuruş hızı, histerezis bandı, el yakınlığı, menü sabitliği) yalnız sentetik verilerle ayarlandı; gerçek kamerada ayar bekliyor.
-- Çizim modunun eşikleri (X tutma süresi, silgi derinliği, dönme hızı) yalnız sentetik verilerle ayarlandı; gerçek kamerada ayar bekliyor.
+- Çizim modunun eşikleri (X tutma süresi, silgi derinliği, dönme hızı) yalnız sentetik verilerle ayarlandı; gerçek kamerada ikinci deneme bekliyor.
+- 3B kedi maskot için OpenGL 3.3 gerekir; desteklenmeyen sistemlerde kedi gizlenir, masaüstü kontrolü etkilenmez.
 - Gerçek kamera ve ellerle kabul testi bekliyor.
 
 ## Lisans

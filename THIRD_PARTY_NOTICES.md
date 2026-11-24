@@ -15,7 +15,7 @@ The project's own source license is NOT chosen yet (spec §3: confirm before pub
 
 | Artifact | Version | License | Evidence | Ship? |
 |---|---|---|---|---|
-| hand_landmarker.task (HandLandmarker full, float16) | float16/1, GCS generation 1682480004222387 | Apache-2.0 | Official model card "MediaPipe Hands (Lite/Full)" p.2 "LICENSED UNDER Apache License, Version 2.0", linked from the official Hand Landmarker docs "Models" table. Details: `assets/model_manifest.json` | License permits redistribution. Release bundling HELD until the SHA-256 is independently reviewed; setup downloads it meanwhile. |
+| hand_landmarker.task (HandLandmarker full, float16) | float16/1, GCS generation 1682480004222387 | Apache-2.0 | Official model card "MediaPipe Hands (Lite/Full)" p.2 "LICENSED UNDER Apache License, Version 2.0", linked from the official Hand Landmarker docs "Models" table. Details: `assets/model_manifest.json` | License permits redistribution. Re-verified 2026-11-18; release bundling approved (`assets/model_manifest.json`); setup downloads it from the official URL. |
 | face_landmarker.task (MediaPipe Face Landmarker, blendshapes) | float16/1 | Apache-2.0 | [Official docs, Models table](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) | Bundle with the model notices. Used only by the cat mascot. |
 | pose_landmarker_lite.task (MediaPipe Pose Landmarker Lite) | float16/1 | Apache-2.0 | [Publisher model card](https://huggingface.co/litert-community/MediaPipe-PoseLandmarker-Lite) | Bundle with the model notices. |
 
@@ -75,7 +75,7 @@ Plus the CPython 3.11 runtime embedded by PyInstaller: PSF License 2.0 (ship its
 ## LGPL items (copyleft obligations for the one-folder build)
 
 1. **Qt 6.12 via PySide6-Essentials + shiboken6 (LGPL-3.0)** — use only:
-   QtCore, QtGui, QtWidgets, QtSvg (if needed), and the required plugins (`platforms/qwindows.dll`, `styles`, `imageformats`, `iconengines`).
+   QtCore, QtGui, QtWidgets, QtOpenGL (3D cat mascot), QtSvg (if needed), and the required plugins (`platforms/qwindows.dll`, `styles`, `imageformats`, `iconengines`).
    Do NOT ship: Designer/Designer components, QtHelp, Qt Quick/QML stack unless the UI really needs it, **Qt Lottie**,
    Qt Labs modules, and tool executables (`designer.exe`, `assistant.exe`, `linguist.exe`, `qml*.exe`, `uic.exe`, `rcc.exe`...).
    Reason: not all Qt modules share one license (some add-ons are GPL-3/commercial only, e.g. Qt Lottie — verify per module
