@@ -1,7 +1,7 @@
 """The user's cat model (kedi_uret.py), built in an empty Blender scene; scripts/build_mascot.py exports it.
 
-Differs from the original in two ways: the arms are separate meshes, because arms fused with the flank stretch like a bat's
-wing when they are raised, and there is no texture baking or rendering.
+Differs from the original: the arms are separate meshes, because arms fused with the flank stretch like a bat's wing when they
+are raised; they are made half open, which keeps elbows and wrists smooth; no texture baking or rendering.
 """
 import bpy, math, numpy as np, openvdb as vdb
 from mathutils import Vector, Quaternion
@@ -71,10 +71,36 @@ def body(P):
     d = smin(d, rc(P, (0, .25, .9), (0, .10, 1.6), .62, .64), .25)
     d = smin(d, ell(P, (0, -.10, 1.02), (.52, .42, .50)), .22)
     return d
+# The arm mesh is made half open at the elbow and the wrist, so neither stretching nor folding it bends the skin far.
+# "Modelled" is the original pose (elbow folded 112 degrees); rig.py folds the arm back into it.
+_el, _wr = np.array(EL), np.array(WR)
+def unit(v): return v / np.linalg.norm(v)
+def turn(axis, deg):
+    k = unit(axis); K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]]); t = math.radians(deg)
+    return np.eye(3) + math.sin(t) * K + (1 - math.cos(t)) * K @ K
+D_UP, D_FORE, D_HAND = unit(_el - np.array(SH)), unit(_wr - _el), unit(np.array([0, -.25, .97]))
+R_FORE = turn(np.cross(D_UP, D_FORE), -56)
+R_HAND = R_FORE @ turn(np.cross(D_FORE, D_HAND), -25)
+WR_BIND = R_FORE @ (_wr - _el) + _el
+def move(P, R, frm, to):                                   # points as a tuple of coordinate arrays
+    q = [P[i] - frm[i] for i in range(3)]
+    return tuple(sum(R[i, j] * q[j] for j in range(3)) + to[i] for i in range(3))
+def fore_back(P): return move(P, R_FORE.T, _el, _el)
+def hand_back(P): return move(P, R_HAND.T, WR_BIND, _wr)
 def arms(P):
-    d = smin(rc(P, SH, EL, .33, .25), rc(P, EL, WR, .24, .19), .08)
-    d = smin(d, rc(P, WR, PW, .19, .20), .06)
-    return smin(d, paw(P), .05)
+    F, H = fore_back(P), hand_back(P)
+    d = smin(rc(P, SH, EL, .33, .25), rc(F, EL, WR, .25, .20), .05)
+    d = smin(d, rc(H, WR, PW, .20, .20), .05)
+    return smin(d, paw(H), .05)
+def arm_blend(P):                                          # weight of everything below the elbow, below the wrist
+    n1, n2 = unit(D_UP + R_FORE @ D_FORE), unit(R_FORE @ D_FORE + R_HAND @ D_HAND)
+    return ss(-.30, .30, sum((P[i] - EL[i]) * n1[i] for i in range(3))), ss(-.17, .17, sum((P[i] - WR_BIND[i]) * n2[i] for i in range(3)))
+def modelled(co, no):
+    sx = np.where(co[:, 0] < 0, -1., 1.); m = np.stack([sx, np.ones(len(sx)), np.ones(len(sx))], 1); q, nq = co * m, no * m
+    P = tuple(q.T); fo, ha = (w[:, None] for w in arm_blend(P)); ha = ha * fo
+    out = q * (1 - fo) + np.stack(fore_back(P), 1) * (fo - ha) + np.stack(hand_back(P), 1) * ha
+    nn = nq * (1 - fo) + nq @ R_FORE * (fo - ha) + nq @ R_HAND * ha
+    return out * m, nn * m
 def top(P):
     s = skull(P)
     eh = smax(ear(P), -ear(P, .17, .35, .035), .035)
@@ -123,7 +149,7 @@ def mat(n, c, r=.6):
 
 h = .022
 bd = mesh_from(top, (-1.4, -1.4, -1.3), (1.4, 1.15, 3.6), h, 'Govde_Bas', 70000)
-ar = mesh_from(lambda P: arms(P), (.2, -1.1, -.6), (1.5, .6, 1.2), .022, 'Kol', 18000)
+ar = mesh_from(lambda P: arms(P), (.2, -1.4, -1.3), (1.7, .6, 1.2), .022, 'Kol', 18000)
 jw = mesh_from(jaw, (-.5, -1.35, 1.05), (.5, -.1, 1.75), .014, 'Alt_Cene', 9000)
 
 # ---------- colour as a function of position ----------
@@ -161,7 +187,7 @@ def color(co, no):
     c = mix(c, MOUTH, ss(.022, .0, cavity(P)))
     return c
 def paint(ob):
-    co, no = arrs(ob); c = color(co, no); n = len(co)
+    co, no = arrs(ob); c = color(*(modelled(co, no) if ob.name == 'Kollar' else (co, no))); n = len(co)
     a = ob.data.color_attributes.new('Col', 'BYTE_COLOR', 'POINT')
     a.data.foreach_set('color', np.hstack([c, np.ones((n, 1))]).astype(np.float32).ravel()); return co, no
 # One arm is meshed; the other one is its mirror image.
@@ -177,7 +203,7 @@ sp = rest
 earw = hd * ss(2.62, 2.9, Z) * ss(.35, .5, ax)
 WT = {'head': hd - earw, 'neck': nk, 'spine': sp}
 for s, sg in (('L', X > 0), ('R', X <= 0)): WT['ear.' + s] = earw * sg
-PA = (np.abs(ca[:, 0]), ca[:, 1], ca[:, 2]); fo = ss(-.30, .30, rc(PA, SH, EL, .33, .25) - rc(PA, EL, WR, .24, .19)); fo = np.maximum(fo, ss(-.20, -.40, ca[:, 1])); ha = ss(-.46, -.62, ca[:, 1]); AW = {}
+fo, ha = arm_blend((np.abs(ca[:, 0]), ca[:, 1], ca[:, 2])); AW = {}
 for s, sg in (('L', ca[:, 0] > 0), ('R', ca[:, 0] <= 0)):
     AW['upper_arm.' + s] = sg * (1 - fo); AW['forearm.' + s] = sg * fo * (1 - ha); AW['hand.' + s] = sg * fo * ha
 def setw(ob, d):
@@ -192,28 +218,28 @@ def flow(co, limb):
     f = co - np.array([0, -1.18, 1.85]); f[:, 2] -= .15
     d = np.tile(np.array([0, .12, -1.0]), (len(co), 1))
     ef = np.stack([np.full(len(co), .25), np.full(len(co), .35), np.ones(len(co))], 1)
-    arm = np.array(PW) - np.array(EL)
     is_head = co[:, 2] > 1.3; is_ear = (co[:, 2] > 2.72) & (x > .4)
-    is_arm = limb & (co[:, 1] < -.12)
     d[is_head] = f[is_head]; d[is_ear] = ef[is_ear] * np.hstack([np.sign(co[is_ear][:, :1]), np.ones((is_ear.sum(), 2))])
-    d[is_arm] = arm * np.hstack([np.sign(co[is_arm][:, :1]), np.ones((is_arm.sum(), 2))])
+    if limb:
+        fo, ha = (w[:, None] for w in arm_blend((x, co[:, 1], co[:, 2]))); ha = ha * fo
+        d = (D_UP * (1 - fo) + R_FORE @ D_FORE * (fo - ha) + R_HAND @ D_HAND * ha) * np.hstack([sx, np.ones((len(co), 2))])
     return d / np.linalg.norm(d, axis=1, keepdims=True)
 def tufts(ob, WTD, N, name):
     me = ob.data; me.calc_loop_triangles(); T = np.empty(len(me.loop_triangles) * 3, np.int32); me.loop_triangles.foreach_get('vertices', T); T = T.reshape(-1, 3)
     co, no = arrs(ob); A = np.linalg.norm(np.cross(co[T[:, 1]] - co[T[:, 0]], co[T[:, 2]] - co[T[:, 0]]), axis=1)
     k = rng.choice(len(T), N, p=A / A.sum()); r = rng.random((N, 2)); m = r.sum(1) > 1; r[m] = 1 - r[m]; b = np.c_[1 - r.sum(1), r]
     p = (co[T[k]] * b[..., None]).sum(1); nn = (no[T[k]] * b[..., None]).sum(1); nn /= np.linalg.norm(nn, axis=1, keepdims=True)
-    x = np.abs(p[:, 0]); PP = (x, p[:, 1], p[:, 2]); y, z = p[:, 1], p[:, 2]
+    limb = ob is ar; q, nq = modelled(p, nn) if limb else (p, nn)
+    x = np.abs(q[:, 0]); PP = (x, q[:, 1], q[:, 2]); y, z = q[:, 1], q[:, 2]
     e = np.sqrt((x - EYE[0]) ** 2 + (y - EYE[1]) ** 2 + (z - EYE[2]) ** 2)
     nz = nose(PP)
-    pads = (paw(PP) < .03) & (nn[:, 1] < -.45)
+    pads = (paw(PP) < .03) & (nq[:, 1] < -.45)
     ok = (eyedist(PP) > .030) & (e > ER + .035) & (nz > .022) & (cavity(PP) > .03) & (z > -1.08) & ~pads
     ok &= ~((np.abs(z - mouth_z(x)) < .03) & (rc(PP, (0, -.66, 1.44), (0, -1.07, 1.50), .30, .25) < .05))
     ok &= ~((ear(PP, .17, .35, .035) < .025) & (z > 2.5) & (ear(PP) < .03))
-    limb = ob is ar
     if limb: ok &= body(PP) > -.12
-    p, nn, k, b = p[ok], nn[ok], k[ok], b[ok]; x, y, z = np.abs(p[:, 0]), p[:, 1], p[:, 2]; N = len(p)
-    d = flow(p, np.full(N, limb)); d -= nn * (d * nn).sum(1, keepdims=True); d /= np.linalg.norm(d, axis=1, keepdims=True) + 1e-6
+    p, nn, k, b, q, nq = p[ok], nn[ok], k[ok], b[ok], q[ok], nq[ok]; x, y, z = np.abs(q[:, 0]), q[:, 1], q[:, 2]; N = len(p)
+    d = flow(p, limb); d -= nn * (d * nn).sum(1, keepdims=True); d /= np.linalg.norm(d, axis=1, keepdims=True) + 1e-6
     L = .105 * np.ones(N); L = np.where(z > 1.3, .085, L); L *= np.where((z > 1.3) & (y < -.45), .45 + .55 * ss(-1.08, -.45, y), 1)
     L = np.where((z > 1.3) & (z < 2.1) & (x > .7), .13, L); L = np.where((z > 2.72) & (x > .4), .06, L)
     L = np.where((x < .5) & (y < 0) & (z < 1.25) & (z > .3), .14, L); L = np.where(limb & (y < -.3), .06, L)
@@ -222,7 +248,7 @@ def tufts(ob, WTD, N, name):
     q0 = p - nn * .005; q2 = p + d * L[:, None] + nn * (L * lift)[:, None]
     V = np.stack([q0 - s * W[:, None], q0 + s * W[:, None], q2], 1).reshape(-1, 3)
     F = np.arange(N * 3).reshape(-1, 3)
-    c = color(p, nn); br = (.86 + .28 * rng.random(N))[:, None]; C = np.repeat(c, 3, 0).reshape(N, 3, 3) * br[:, None]
+    c = color(q, nq); br = (.86 + .28 * rng.random(N))[:, None]; C = np.repeat(c, 3, 0).reshape(N, 3, 3) * br[:, None]
     C *= np.array([[.84, .82, .81], [.84, .82, .81], [1.24, 1.24, 1.25]])[None]; C = np.clip(C, 0, 1).reshape(-1, 3)
     me = bpy.data.meshes.new(name); me.from_pydata(V.tolist(), [], F.tolist())
     a = me.color_attributes.new('Col', 'BYTE_COLOR', 'POINT'); a.data.foreach_set('color', np.c_[C, np.ones(len(C))].astype(np.float32).ravel())
@@ -250,6 +276,7 @@ def sweep(path, w, t, up, nseg=10):
             k2 = (k + 1) % nseg; F.append((i * nseg + k, i * nseg + k2, (i + 1) * nseg + k2, (i + 1) * nseg + k))
     F += [tuple(range(nseg))[::-1], tuple((n - 1) * nseg + k for k in range(nseg))]
     return V, F
+def on_paw(vf): return [Vector(R_HAND @ (np.array(v) - _wr) + WR_BIND) for v in vf[0]], vf[1]
 def blob(c, r, n=14, m=10):
     V = [Vector((c[0] + r[0] * math.sin(math.pi * (i + .5) / m) * math.cos(2 * math.pi * k / n), c[1] + r[1] * math.cos(math.pi * (i + .5) / m), c[2] + r[2] * math.sin(math.pi * (i + .5) / m) * math.sin(2 * math.pi * k / n))) for i in range(m) for k in range(n)]
     F = [(i * n + k, i * n + (k + 1) % n, (i + 1) * n + (k + 1) % n, (i + 1) * n + k) for i in range(m - 1) for k in range(n)]
@@ -270,9 +297,9 @@ class Acc:
 M_pad, M_wh, M_to = mat('Pati', PAD, .55), mat('Biyik', hexc('eef0f2'), .4), mat('Dil', hexc('d9707c'), .35)
 M_nose = mat('Burun', NOSE, .32)
 D = Acc('Detay')
-D.add(blob((PW[0], PW[1] - .168, PW[2] - .045), (.105, .035, .078)), M_pad, 'hand.L')
+D.add(on_paw(blob((PW[0], PW[1] - .168, PW[2] - .045), (.105, .035, .078))), M_pad, 'hand.L')
 for dx, dz in ((-.15, .13), (-.055, .20), (.055, .20), (.15, .13)):
-    D.add(blob((PW[0] + dx, PW[1] - .14, PW[2] + dz), (.042, .03, .052)), M_pad, 'hand.L')
+    D.add(on_paw(blob((PW[0] + dx, PW[1] - .14, PW[2] + dz), (.042, .03, .052))), M_pad, 'hand.L')
 for i in range(6):
     a = math.radians(16 - 8 * i); b0 = Vector((.22 + .05 * (i % 2), -1.08 + .03 * (i % 2), 1.755 - .025 * i)); L = .85 + .12 * (i % 3)
     D.add(sweep([b0 + Vector((L * t * math.cos(a), -.10 * t + .30 * t * t, L * t * math.sin(a) - .12 * t * t)) for t in np.linspace(0, 1, 9)], [.0065 * (1 - .9 * t) for t in np.linspace(0, 1, 9)], [.0065 * (1 - .9 * t) for t in np.linspace(0, 1, 9)], (0, 1, .1), 5), M_wh, 'head')
@@ -353,3 +380,4 @@ for sfx, g in (('L', 1), ('R', -1)):
 bpy.ops.object.mode_set(mode='OBJECT')
 allm = [bd, ar, jw, fur, fura, furj, det, dil] + eyes + lids
 for o in allm: o.parent = rig; o.modifiers.new('Armature', 'ARMATURE').object = rig
+print('ARM', 'WR_BIND', WR_BIND.round(4).tolist(), 'R_FORE', R_FORE.round(5).tolist(), 'R_HAND', R_HAND.round(5).tolist())

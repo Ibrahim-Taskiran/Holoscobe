@@ -102,9 +102,15 @@ def partial(r: np.ndarray, k: float) -> np.ndarray:
 
 class CatRig:
     def __init__(self) -> None:
-        # Shoulder, elbow, wrist.
-        self.arm_rest = [np.array([(side * .66, .72, -.10), (side * 1.0, -.12, 0.0), (side * .86, .16, .58)])
+        # Shoulder, elbow, wrist: the resting pose, and the half open arm of the mesh (see cat_model.py).
+        self.arm_pose = [np.array([(side * .66, .72, -.10), (side * 1.0, -.12, 0.0), (side * .86, .16, .58)])
                          for side in (-1, 1)]
+        self.arm_rest, self.fore_bind, self.hand_bind = [], [], []
+        for shoulder, elbow, wrist in self.arm_pose:
+            fore = rot(np.cross(elbow - shoulder, wrist - elbow), math.radians(-56))
+            self.fore_bind.append(fore)
+            self.hand_bind.append(fore @ rot(np.cross(wrist - elbow, PALM_UP[0]), math.radians(-25)))
+            self.arm_rest.append(np.array([shoulder, elbow, elbow + fore @ (wrist - elbow)]))
 
     def solve(self, pose: MascotPose, t: float) -> np.ndarray:
         skin = np.tile(np.eye(4), (BONES, 1, 1))
@@ -130,7 +136,7 @@ class CatRig:
     def _arm(self, s: int, paw: PawTarget, skin: np.ndarray) -> None:
         side = -1.0 if s == 0 else 1.0
         spine, arm, rest = skin[SPINE], ARMS[s], self.arm_rest[s]
-        root, elbow, resting = (apply(spine, p) for p in rest)
+        root, elbow, resting = (apply(spine, p) for p in self.arm_pose[s])
         upper, lower = (float(n) for n in np.linalg.norm(np.diff(rest, axis=0), axis=1))
         reach = (upper + lower) * .97
         w = float(np.clip(paw.weight, 0, 1))
@@ -167,7 +173,7 @@ class CatRig:
         sole = PALM_UP[1] * up + np.array([0, -1.0, 0]) * (1 - up)
         shown = rot((0, 0, 1), -paw.lean * up * .8) @ frame(toes, sole) @ rx(55 * paw.curl)
         m = np.eye(4)
-        m[:3, :3] = partial(shown @ frame(*PALM_UP).T @ spine[:3, :3].T, w) @ spine[:3, :3]
+        m[:3, :3] = partial(shown @ frame(*PALM_UP).T @ spine[:3, :3].T, w) @ spine[:3, :3] @ self.hand_bind[s].T
         m[:3, 3] = apply(base, rest[2]) - m[:3, :3] @ rest[2]
         skin[arm[2]] = m
 

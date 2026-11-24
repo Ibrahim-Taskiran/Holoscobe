@@ -125,8 +125,11 @@ def test_bundled_cat_mesh_matches_the_rig():
 
 def test_resting_paws_keep_the_modelled_pose(rig):
     skin = rig.solve(MascotPose(), 0.0)
-    for arm in ARMS:
-        assert np.allclose(skin[list(arm)], skin[SPINE], atol=1e-6)
+    for s, (arm, pose) in enumerate(zip(ARMS, rig.arm_pose)):
+        bind, spine = rig.arm_rest[s], skin[SPINE]
+        for k, turned in enumerate((np.eye(3), rig.fore_bind[s], rig.hand_bind[s])):
+            assert np.allclose(skin[arm[k]][:3, :3] @ turned, spine[:3, :3], atol=1e-6)
+            assert np.allclose(apply(skin[arm[k]], bind[k]), apply(spine, pose[k]), atol=1e-6)
 
 
 @pytest.mark.parametrize("pose", [
