@@ -51,9 +51,25 @@ def _drag(win: InstrumentWindow, a: QPoint, b: QPoint) -> None:
 def test_drag_on_empty_space_draws_and_stacks_a_string(qt, mirrored):
     win, got = _window(mirrored)
     try:
-        _drag(win, _pt(win, 0.21, 0.42), _pt(win, 0.69, 0.43))
+        _drag(win, _pt(win, 0.21, 0.42), _pt(win, 0.6, 0.43))
         assert len(got) == 1 and len(got[0]) == 2
-        assert got[0][1] == pytest.approx((0.2, 0.425, 0.7, 0.425), abs=0.01)     # ends aligned under S
+        assert got[0][1] == pytest.approx((0.2, 0.425, 0.59, 0.425), abs=0.01)    # one end aligned under S
+    finally:
+        win.close()
+
+
+def test_the_note_is_written_on_the_string_while_it_is_stretched(qt):
+    win, _ = _window(True, strings=())
+    asked: list = []
+    win.set_free_note(lambda seg, aspect: asked.append((seg[2] - seg[0]) * aspect) or f"N{len(asked)}")
+    c = win.canvas
+    try:
+        shown = []
+        QTest.mousePress(c, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, _pt(win, 0.2, 0.5))
+        for x in (0.5, 0.8):
+            QTest.mouseMove(c, _pt(win, x, 0.5))
+            shown.append(win.render_to_image(960, 620))
+        assert [round(abs(v), 1) for v in asked] == [0.4, 0.8] and shown[0] != shown[1]
     finally:
         win.close()
 

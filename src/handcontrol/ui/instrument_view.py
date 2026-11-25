@@ -31,7 +31,7 @@ LAYOUT_LABELS_TR: dict[str, str] = {"solo": "Solo", "chord": "Akor", "fixed": "S
                                     "free": "Serbest teller"}
 WAITING_STATUS_TR = "Enstrüman modunu seçin ve iki elinizi gösterin"
 FIXED_HINT_TR = "Fareyle sürükle / köşeden boyutlandır · ya da iki elle çimdikle, tut, gerdir"
-FREE_HINT_TR = "Çimdikle, tut, çek: tel çiz · uçtan tut: boyutlandır · ortadan: taşı · sağ tık: sil"
+FREE_HINT_TR = "Çimdikle, tut, çek: tel çiz · uzun tel: kalın, kısa tel: ince · uçtan tut: boyutlandır · ortadan: taşı · sağ tık: sil"
 FREE_EMPTY_TR = ("İlk telini çiz", "Başparmak ve işaret parmağını birleştir · yarım saniye tut · çek · bırak")
 PAUSED_HINT_TR = ("Duraklatıldı", "Başlamak için Sürdür'e bas ya da el çırp")
 NO_CAMERA_HINT_TR = ("Kamera bekleniyor", "Görüntü gelince teller çalınabilir")
@@ -193,6 +193,7 @@ class InstrumentCanvas(CameraPreviewWidget):
         self._fdraft_index: Optional[int] = None
         self._fdraft_snapped = False
         self._free_snap = True
+        self._free_note: Callable[[Seg, float], str] = lambda seg, aspect: ""
         self._audio_error = ""
         self._show_details = False      # the instrument HUD replaces the technical read-outs
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -209,6 +210,10 @@ class InstrumentCanvas(CameraPreviewWidget):
 
     def set_free_snap(self, enabled: bool) -> None:
         self._free_snap = bool(enabled)
+
+    def set_free_note(self, note_of: Callable[[Seg, float], str]) -> None:
+        """(string, frame aspect) -> note name, for the mouse edit preview."""
+        self._free_note = note_of
 
     def set_audio_error(self, text: str) -> None:
         self._audio_error = str(text)
@@ -420,6 +425,10 @@ class InstrumentCanvas(CameraPreviewWidget):
                 self._draw_free_marks(painter, canvas, view)
             for s in view.strings:
                 self._draw_string(painter, canvas, s, now)
+            held = view.free_active
+            if held is not None and held < len(view.strings):        # on top of every string
+                s = view.strings[held]
+                self._draw_edit_label(painter, canvas, *self.string_points(s, canvas), s.label, view.free_snapped)
             if view.pick_tip is not None:
                 self._draw_pick(painter, self.map_camera_point(*view.pick_tip, canvas), view.playing)
         if self._particles_enabled and len(self._sparks):
@@ -543,13 +552,35 @@ class InstrumentCanvas(CameraPreviewWidget):
             painter.setBrush(c)
             painter.drawEllipse(a, 5.0, 5.0)
             painter.drawEllipse(b, 5.0, 5.0)
-            if edited and self._fdraft_snapped:
-                self._draw_snap_label(painter, a, b)
+            note = self._free_note(s, self._aspect())
+            if edited:
+                self._draw_edit_label(painter, canvas, a, b, note, self._fdraft_snapped)
+            else:
+                painter.setFont(self._label_font)
+                painter.setPen(QColor(theme.MUTED))
+                painter.drawText(QPointF(max(a.x(), b.x()) + 8.0, (a if a.x() > b.x() else b).y() + 4.0), note)
 
-    def _draw_snap_label(self, painter: QPainter, a: QPointF, b: QPointF) -> None:
-        painter.setFont(self._label_font)
-        painter.setPen(AREA_COLOR)
-        painter.drawText(QPointF((a.x() + b.x()) / 2.0 - 24.0, (a.y() + b.y()) / 2.0 - 12.0), SNAPPED_TR)
+    def _draw_edit_label(self, painter: QPainter, canvas: QRectF, a: QPointF, b: QPointF, note: str,
+                         snapped: bool) -> None:
+        """Big note name above the string that is being stretched or moved."""
+        painter.setFont(self._hud_big_font)
+        note_w = painter.fontMetrics().horizontalAdvance(note)
+        painter.setFont(self._hud_font)
+        more_w = painter.fontMetrics().horizontalAdvance(SNAPPED_TR) + 12.0 if snapped else 0.0
+        w = note_w + more_w + 32.0
+        x = min(canvas.right() - w - 6.0, max(canvas.left() + 6.0, (a.x() + b.x()) / 2.0 - w / 2.0))
+        y = min(a.y(), b.y()) - 58.0
+        if y < canvas.top() + 58.0:                      # no room above (and the status pill is there)
+            y = max(a.y(), b.y()) + 18.0
+        box = QRectF(x, min(canvas.bottom() - 46.0, y), w, 40.0)
+        theme.paint_glass(painter, box, 20.0, alpha=0.92, blur=0)
+        painter.setFont(self._hud_big_font)
+        painter.setPen(QColor(theme.ACCENT_TEXT))
+        painter.drawText(box.adjusted(16.0, 0.0, 0.0, 0.0), int(Qt.AlignmentFlag.AlignVCenter), note)
+        if snapped:
+            painter.setFont(self._hud_font)
+            painter.setPen(AREA_COLOR)
+            painter.drawText(box.adjusted(note_w + 28.0, 0.0, 0.0, 0.0), int(Qt.AlignmentFlag.AlignVCenter), SNAPPED_TR)
 
     def _draw_free_marks(self, painter: QPainter, canvas: QRectF, view: InstrumentView) -> None:
         """Hand editing: halo on the grabbed string, end handles, and a ring filling up while a pinch is held."""
@@ -562,8 +593,6 @@ class InstrumentCanvas(CameraPreviewWidget):
             c.setAlphaF(0.30)
             painter.setPen(theme.round_pen(c, 16.0))
             painter.drawLine(a, b)
-            if view.free_snapped:
-                self._draw_snap_label(painter, a, b)
         c.setAlphaF(0.55)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(c)
@@ -733,6 +762,9 @@ class InstrumentWindow(QWidget):
     @Slot(bool)
     def set_free_snap(self, enabled: bool) -> None:
         self.canvas.set_free_snap(enabled)
+
+    def set_free_note(self, note_of: Callable[[Seg, float], str]) -> None:
+        self.canvas.set_free_note(note_of)
 
     @Slot(str)
     def set_audio_error(self, text: str) -> None:

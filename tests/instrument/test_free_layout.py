@@ -8,10 +8,10 @@ import pytest
 from handcontrol.config import validate
 from handcontrol.contracts import FingerInfo, FingerName, FingerState, FrameFeatures, HandFeatures, Handedness, Landmark, Quality
 from handcontrol.instrument.engine import (
-    STATUS_EDITING, STATUS_FULL, STATUS_NO_STRINGS, STATUS_READY, InstrumentConfig, InstrumentEngine,
+    STATUS_EDITING, STATUS_FULL, STATUS_NO_STRINGS, STATUS_READY, InstrumentConfig, InstrumentEngine, free_note, free_pitch,
 )
 from handcontrol.instrument.events import NoteOn
-from handcontrol.instrument.freeform import MAX_STRINGS, normalize_free_strings, pitch_order, snap_segment
+from handcontrol.instrument.freeform import MAX_STRINGS, normalize_free_strings, seg_length, snap_segment
 
 W, H = 640, 480
 ASPECT = W / H
@@ -82,7 +82,7 @@ def test_pinch_hold_and_pull_draws_a_string_that_then_plays():
     for y in (150.0, 170.0, 190.0, 210.0, 230.0, 250.0):
         events += clock.step(eng, hand(2, Handedness.RIGHT, (300.0, y)))[0]
     notes = [e for e in events if isinstance(e, NoteOn)]
-    assert len(notes) == 1 and notes[0].midi == 52.0
+    assert len(notes) == 1 and notes[0].midi == free_pitch(eng.free_strings[0], ASPECT, eng.config) == 57.0
     assert clock.step(eng, hand(2, Handedness.RIGHT, (300.0, 260.0)))[1].status == STATUS_READY
 
 
@@ -164,18 +164,56 @@ def test_squeezing_a_string_deletes_it():
 def test_stacking_snaps_ends_and_gap_but_free_placement_elsewhere_stays():
     a = (0.2, 0.3, 0.7, 0.3)
     b, snapped = snap_segment((0.21, 0.4, 0.69, 0.41), [a], ASPECT)
-    assert snapped and b == pytest.approx((0.2, 0.405, 0.7, 0.405), abs=1e-3)     # ends aligned, gap kept
+    assert snapped and b == pytest.approx((0.2, 0.405, 0.68, 0.405), abs=1e-3)    # one end aligned, length kept
     c, snapped = snap_segment((0.2, 0.52, 0.7, 0.52), [a, b], ASPECT)       # gap 0.115 -> stack gap 0.105
     assert snapped and c == pytest.approx((0.2, 0.51, 0.7, 0.51), abs=1e-3)
+    short, snapped = snap_segment((0.33, 0.4, 0.69, 0.4), [a], ASPECT)      # only the right ends are close
+    assert snapped and short == pytest.approx((0.34, 0.4, 0.7, 0.4), abs=1e-3)
+    assert seg_length(short, ASPECT) == pytest.approx(0.36 * ASPECT, abs=1e-3)
     far = (0.05, 0.8, 0.3, 0.95)                                             # tilted, far: untouched
     assert snap_segment(far, [a, b], ASPECT) == (far, False)
 
 
-def test_stacked_strings_climb_the_scale_top_to_bottom():
-    strings = ((0.2, 0.6, 0.7, 0.6), (0.2, 0.3, 0.7, 0.3), (0.2, 0.45, 0.7, 0.45))
-    assert pitch_order(strings) == [1, 2, 0]
-    _, view = engine(strings).update(frame(0.0), True)
-    assert [s.label for s in view.strings] == ["A3", "E3", "G3"]
+def across(length: float, y: float = 0.5):
+    """Horizontal string of `length` frame heights around the middle."""
+    half = length / ASPECT / 2
+    return (0.5 - half, y, 0.5 + half, y)
+
+
+def test_the_length_decides_the_note_not_the_place_or_the_order():
+    strings = (across(1.1, 0.8), across(0.575, 0.2), across(0.1, 0.5))
+    for order in ((0, 1, 2), (2, 0, 1)):
+        _, view = engine([strings[i] for i in order]).update(frame(0.0), True)
+        assert [s.label for s in view.strings] == [("E3", "E4", "E5")[i] for i in order]
+    upright = (0.5, 0.2, 0.5, 0.775)                                         # 0.575 high: same note as 0.575 wide
+    assert free_note(upright, ASPECT, engine().config) == "E4"
+
+
+def test_every_scale_note_gets_the_same_stretch_of_length():
+    cfg = engine().config
+    notes = [free_note(across(0.15 + 0.085 * k), ASPECT, cfg) for k in range(11)]
+    assert notes == ["E5", "D5", "B4", "A4", "G4", "E4", "D4", "B3", "A3", "G3", "E3"]
+    semitones = {free_pitch(across(0.15 + i / 400), ASPECT, engine(quantize=False).config) for i in range(341)}
+    assert semitones == set(range(52, 77))
+
+
+def test_the_note_follows_the_string_while_it_is_stretched_and_stays_after_the_release():
+    eng, clock = engine(), Clock()
+    views = drag(eng, clock, line((100.0, 200.0), (500.0, 200.0), 24))
+    shown = [v.strings[v.free_active].label for v in views if v.free_active is not None]
+    assert len(dict.fromkeys(shown)) >= 6 and shown[-1] == "A3"
+    assert views[-1].free_active is None and views[-1].strings[0].label == "A3"
+
+
+def test_an_opening_pinch_does_not_change_the_string_any_more():
+    eng, clock = engine(free_snap=False), Clock()
+    for p in [(100.0, 200.0)] * 14 + line((100.0, 200.0), (400.0, 200.0)):
+        clock.step(eng, hand(2, Handedness.RIGHT, p, pinch=True))
+    held = clock.step(eng, hand(2, Handedness.RIGHT, (400.0, 200.0), pinch=True))[1].free_strings
+    loose = replace(hand(2, Handedness.RIGHT, (430.0, 200.0), pinch=True), pinch_distance=0.5)
+    assert clock.step(eng, loose)[1].free_strings == held
+    clock.step(eng, hand(2, Handedness.RIGHT, (440.0, 200.0)))
+    assert eng.free_strings == held
 
 
 def test_two_hands_draw_a_string_between_them_and_a_pinching_hand_never_strikes():

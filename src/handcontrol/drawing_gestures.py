@@ -4,13 +4,13 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from .contracts import FingerName, FingerState, FrameFeatures, Handedness, Quality
+from .contracts import FingerName, FingerState, FrameFeatures, Handedness, HandSample, Quality
 from .drawing import PALETTE, InkScene
 from .mode_wheel import RadialAim
 
-HOLD_MS = 420            # X evidence needed to clear
+HOLD_MS = 480            # X evidence needed to clear
 CROSS_BLOCK_MS = 90      # this much evidence stops the pen and the spin
-CROSS_DECAY = 0.6        # evidence lost per ms without X: single missed pose frames do not matter
+CROSS_DECAY = 0.25       # evidence lost per ms without X: the pose model misses many frames of crossed arms
 MAX_GAP_MS = 180
 # Recorded hands (4 sessions): false point/fist runs last up to 90 ms, real ones are broken by 50-150 ms gaps.
 CONFIRM_MS = 100
@@ -39,32 +39,66 @@ def _arm_segments_cross(sl, sr, a, b, aw, bw) -> bool:
             -0.8*span < a[1] + t*u[1] - (sl[1]+sr[1])/2 < 1.35*span)
 
 
-def _wrists_swapped(sl, sr, aw, bw) -> bool:
-    """Each wrist on the other side in front of the chest. Works when a laptop camera cuts the elbows off."""
+def _hands_swapped(sl, sr, a, b, elbows) -> bool:
+    """Each hand on the other side in front of the chest. Works when a laptop camera cuts the elbows off."""
     span = abs(sl[0] - sr[0])
     if span < 0.1:
         return False
     side = math.copysign(1, sl[0] - sr[0])
     cx, cy = (sl[0]+sr[0])/2, (sl[1]+sr[1])/2
-    return (0.12*span < (bw[0] - aw[0])*side < 1.3*span and
-            abs((aw[0]+bw[0])/2 - cx) < 0.5*span and abs(aw[1] - bw[1]) < 0.6*span and
-            all(-0.9*span < w[1] - cy < 0.75*span for w in (aw, bw)))
+    return (0.16*span < (b[0] - a[0])*side < 1.4*span and
+            abs((a[0]+b[0])/2 - cx) < 0.6*span and abs(a[1] - b[1]) < 0.7*span and
+            all(-1.2*span < h[1] - cy < 0.4*span for h in (a, b)) and
+            all(e[1] - h[1] > 0.25*span for h, e in zip((a, b), elbows) if e))       # forearms up, not folded
+
+
+def _seen(p, level) -> bool:
+    return (p.visibility or 0) >= level and (p.presence or 0) >= level
 
 
 def crossed_forearms(points, aspect: float) -> bool:
-    """X in front of the chest: crossing forearms, or swapped wrists when the elbows are not visible."""
+    """X in front of the chest: crossing forearms, or swapped hands when the elbows are not visible.
+    Crossed arms hide each other, so wrists and elbows count from a low visibility on."""
     if len(points) < 17:
         return False
     joints = points[11:17]
-
-    def seen(p, level):
-        return (p.visibility or 0) >= level and (p.presence or 0) >= level
-    if not all(seen(p, 0.45) for p in (*joints[:2], *joints[4:])):
+    if not all(_seen(p, 0.45) for p in joints[:2]) or not all(_seen(p, 0.3) for p in joints[4:]):
         return False
     xy = [(p.x * aspect, p.y) for p in joints]
-    if all(seen(p, 0.45) for p in joints[2:4]) and _arm_segments_cross(*xy):
+    if all(_seen(p, 0.3) for p in joints[2:4]) and _arm_segments_cross(*xy):
         return True
-    return _wrists_swapped(xy[0], xy[1], xy[4], xy[5])
+
+    def hand(wrist, *tips):
+        """Middle of wrist and knuckles: further out than the wrist, so also swapped when the wrists touch."""
+        seen = [points[wrist], *(points[i] for i in tips if i < len(points) and _seen(points[i], 0.3))]
+        return sum(p.x for p in seen) * aspect / len(seen), sum(p.y for p in seen) / len(seen)
+    elbows = [p if _seen(j, 0.3) else None for p, j in zip(xy[2:4], joints[2:4])]
+    return _hands_swapped(xy[0], xy[1], hand(15, 17, 19), hand(16, 18, 20), elbows)
+
+
+def arms_apart(points, aspect: float) -> bool:
+    """Both wrists clearly seen on their own sides: no X, whatever the hand model says."""
+    if len(points) < 17 or not all(_seen(points[i], 0.6) for i in (11, 12, 15, 16)):
+        return False
+    shoulders = points[11].x - points[12].x
+    return abs(shoulders) * aspect >= 0.1 and (points[15].x - points[16].x) / shoulders > 0.35
+
+
+def crossed_hands(hands: tuple[HandSample, ...], aspect: float) -> bool:
+    """X seen by the hand model alone: right hand on the left hand's side, close together, both leaning
+    outwards, so that the forearms below them cross. A drawing (pointing) hand never counts."""
+    by = {h.handedness: h for h in hands}
+    if len(hands) != 2 or set(by) != {Handedness.LEFT, Handedness.RIGHT}:
+        return False
+    points = [[(p.x * aspect, p.y) for p in by[side].landmarks] for side in (Handedness.RIGHT, Handedness.LEFT)]
+    size = sum(math.dist(p[0], p[9]) for p in points) / 2
+    if size <= 0 or any(math.dist(p[8], p[0]) > 1.25 * math.dist(p[12], p[0]) for p in points):
+        return False
+    right, left = points
+    lean = [math.degrees(math.atan2(p[9][0] - p[0][0], p[0][1] - p[9][1])) for p in points]
+    return (15 < lean[0] < 85 and -85 < lean[1] < -15 and
+            0.8 * size < right[9][0] - left[9][0] < 4.5 * size and right[0][0] - left[0][0] > 0.0 and
+            abs(right[9][1] - left[9][1]) < 1.6 * size)
 
 
 def hand_pose(hand) -> Optional[str]:
@@ -152,7 +186,10 @@ class DrawingControls:
         self.scene.advance(now)
         self.frame_size = frame.width, frame.height
         self.cursor = None
-        crossed = bool(getattr(frame, "forearms_crossed", False))
+        # a drawing hand may reach across the other arm: that is no X
+        crossed = bool(getattr(frame, "forearms_crossed", False)) and not any(
+            h.handedness is Handedness.RIGHT and h.quality is Quality.USABLE and hand_pose(h) == "brush"
+            for h in frame.hands)
         self.cross = min(HOLD_MS, self.cross + dt) if crossed else max(0.0, self.cross - CROSS_DECAY*dt)
         if crossed and self.cross >= HOLD_MS:
             self.scene.clear(now)

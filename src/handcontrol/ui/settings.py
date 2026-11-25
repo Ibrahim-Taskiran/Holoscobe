@@ -514,7 +514,7 @@ class SettingsDialog(DarkTitleBar, QDialog):
         self.combo_instrument_layout = self._combo(
             card, "instrument_layout", "Düzen", "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, "
             "tel eli yüksekliği akoru seçer. Sabit teller: teller ekranda durur, iki elle de çalınır. "
-            "Serbest teller: telleri kendin çizersin, istediğin yere ve boyda.",
+            "Serbest teller: telleri kendin çizersin; uzun tel kalın, kısa tel ince ses verir.",
             named(LAYOUTS, INSTRUMENT_LAYOUT_LABELS_TR))
         self.combo_instrument_scale = self._combo(card, "instrument_scale", "Dizi", "Çalınabilecek notalar",
                                                   named(SCALE_NAMES, INSTRUMENT_SCALE_LABELS_TR))

@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0 (+ `main` dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1961 otomatik test, 6 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0 (+ `main` dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1969 otomatik test, 6 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -100,7 +100,7 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 | Sabit teller: herhangi bir elin işaret parmağıyla tellerin üstünden geç | Teller ekranda durur (3-8 tel, üstteki en kalın). İki el de çalar |
 | Sabit teller: iki elle çimdikle, 0,4 sn tut, ellerini aç/kapat, bırak | Tel alanı iki çimdik noktası arasına taşınır ve boyutlanır; kaydedilir |
 | Sabit teller: pencerede fareyle sürükle (köşeden boyutlandır) | Aynı ayar fareyle |
-| Serbest teller: boş yerde çimdikle, 0,4 sn tut, çekerek bırak | Yeni tel çizilir (en çok 10). Üstteki tel en kalın sesi çalar |
+| Serbest teller: boş yerde çimdikle, 0,4 sn tut, çekerek bırak | Yeni tel çizilir (en çok 10). Notayı telin boyu belirler: uzun kalın, kısa ince; çekerken nota telin üstünde yazar |
 | Serbest teller: telin ucunu / ortasını çimdikle, tut, sürükle | Uç: boyutlandır ve döndür. Orta: taşı. Çok kısaltıp bırakınca silinir |
 | Serbest teller: iki elle bir telin iki ucunu tut (ya da boş yerde iki elle gerdir) | Tel iki çimdik arasında yeniden kurulur |
 | Serbest teller: pencerede fareyle çiz / uçtan ya da ortadan sürükle, sağ tık sil, Delete hepsini sil | Aynı düzenleme fareyle |

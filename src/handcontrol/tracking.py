@@ -188,7 +188,7 @@ class HandTracker:
         hands = self._convert(result)
         crossed = None
         if self._pose_enabled and self._pose_enabled() and not self._pose_failed:
-            crossed = self._crossed(image, ts, width / max(1, height))
+            crossed = self._crossed(image, ts, width / max(1, height), hands)
         return FrameSample(
             capture_ms=capture_ms,
             inference_done_ms=self._clock.now_ms(),
@@ -198,8 +198,8 @@ class HandTracker:
             forearms_crossed=crossed,
         )
 
-    def _crossed(self, image, ts, aspect):
-        from .drawing_gestures import crossed_forearms
+    def _crossed(self, image, ts, aspect, hands):
+        from .drawing_gestures import arms_apart, crossed_forearms, crossed_hands
         try:
             if self._pose is None:
                 from mediapipe.tasks.python import BaseOptions, vision
@@ -209,7 +209,8 @@ class HandTracker:
                     running_mode=vision.RunningMode.VIDEO)
                 self._pose = vision.PoseLandmarker.create_from_options(options)
             poses = self._pose.detect_for_video(image, ts).pose_landmarks
-            return bool(poses and crossed_forearms(poses[0], aspect))
+            points = poses[0] if poses else ()
+            return crossed_forearms(points, aspect) or crossed_hands(hands, aspect) and not arms_apart(points, aspect)
         except Exception:
             logging.getLogger(__name__).exception("Drawing arm tracking unavailable")
             self._pose_failed = True

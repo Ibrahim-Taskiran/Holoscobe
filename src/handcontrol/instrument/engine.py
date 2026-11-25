@@ -22,7 +22,8 @@ Design constants (InstrumentConfig defaults, documented here):
   hands (pinch < 0.35 pu, released above 0.55 pu) and hold 400 ms; the area then follows the two pinch
   points as opposite corners until a pinch is released. No strikes while adjusting.
 - Free layout ("Serbest teller"): up to 10 strings the user draws, moves and resizes with pinch gestures
-  (see instrument/freeform.py); playing works like the fixed layout, top string = lowest note. A pinching
+  (see instrument/freeform.py). The length of a string decides its note: 0.15..1.0 frame heights are divided
+  evenly among the scale notes E5..E3 (longer = lower; all semitones when quantize is off). A pinching
   hand never strikes; nothing strikes while a string is being edited.
 """
 from __future__ import annotations
@@ -39,7 +40,7 @@ from handcontrol.instrument.events import (
     LAYOUTS, SCALE_NAMES, AllOff, Bend, HitView, InstrumentEvent, InstrumentView, NoteOn, StringView,
 )
 from handcontrol.instrument.geometry import Rect, Vec, dist, is_finite, lerp, normalize_fixed_rect
-from handcontrol.instrument.freeform import FreeEditor, HandPinch, Seg, normalize_free_strings, pitch_order
+from handcontrol.instrument.freeform import FreeEditor, HandPinch, Seg, normalize_free_strings, seg_length
 from handcontrol.instrument.strings import CrossingDetector, Layout, Strike, StringLayout
 
 THUMB_TIP = 4
@@ -106,6 +107,8 @@ class InstrumentConfig:
     # --- free layout ---
     free_strings: tuple[Seg, ...] = ()
     free_snap: bool = True
+    free_min_length: float = 0.15           # frame heights: highest note
+    free_max_length: float = 1.0            # ... lowest note
 
 
 def normalize_config(cfg: InstrumentConfig) -> InstrumentConfig:
@@ -134,6 +137,17 @@ def fixed_pitches(scale: str, low: float, count: int) -> tuple[float, ...]:
     """`count` consecutive degrees of `scale` from `low` upward (top string first)."""
     notes = music.scale_pitches(scale, low, low + 60.0)
     return tuple(float(n) for n in notes[:count])
+
+
+def free_pitch(seg: Seg, aspect: float, cfg: InstrumentConfig) -> float:
+    """Note of a free string: its length picks one of the scale notes, longer = lower."""
+    notes = music.scale_pitches(cfg.scale if cfg.quantize else "chromatic", cfg.low_midi, cfg.high_midi)
+    short = (cfg.free_max_length - seg_length(seg, aspect)) / (cfg.free_max_length - cfg.free_min_length)
+    return float(notes[round(min(1.0, max(0.0, short)) * (len(notes) - 1))])
+
+
+def free_note(seg: Seg, aspect: float, cfg: InstrumentConfig) -> str:
+    return music.midi_to_name(free_pitch(seg, aspect, cfg))
 
 
 def fixed_lines(rect: Rect, count: int, w: int, h: int) -> tuple[tuple[Vec, Vec], ...]:
@@ -481,9 +495,7 @@ class InstrumentEngine:
         edit = self._edit
         shown = edit.strings if edit is not None else self._free
         editing = edit is not None and edit.editing
-        order = pitch_order(shown)
-        pitches = fixed_pitches(cfg.scale, cfg.fixed_low_midi, len(shown))
-        pitch_of = {i: pitches[rank] for rank, i in enumerate(order) if rank < len(pitches)}
+        pitch_of = {i: free_pitch(s, aspect, cfg) for i, s in enumerate(shown)}
         lines = tuple(((s[0] * w, s[1] * h), (s[2] * w, s[3] * h)) for s in shown)
         safe = not ambiguous and not gap and not editing
         playing = bool(active and safe and usable and lines)
@@ -511,8 +523,7 @@ class InstrumentEngine:
             status = STATUS_READY
         active_idx = edit.active if edit is not None else None
         strings = tuple(
-            StringView(k, a, b, self._amplitude(k, t), music.midi_to_name(pitch_of[k]) if k in pitch_of else "",
-                       playing or k == active_idx)
+            StringView(k, a, b, self._amplitude(k, t), music.midi_to_name(pitch_of[k]), playing or k == active_idx)
             for k, (a, b) in enumerate(lines))
         tip, pick_id = self._shown_tip(free_hands, w, h)
         view = InstrumentView(
@@ -654,5 +665,6 @@ class InstrumentEngine:
 
 __all__ = [
     "InstrumentConfig", "InstrumentEngine", "STATUS_ADJUSTING", "STATUS_EDITING", "STATUS_FULL", "STATUS_NO_STRINGS", "STATUS_NEED_HAND", "STATUS_NEED_PICK", "STATUS_NEED_STRING", "STATUS_PAUSED",
-    "STATUS_READY", "STATUS_TOO_CLOSE", "STATUS_UNCERTAIN", "fixed_lines", "fixed_pitches", "normalize_config",
+    "STATUS_READY", "STATUS_TOO_CLOSE", "STATUS_UNCERTAIN", "fixed_lines", "fixed_pitches",
+    "free_note", "free_pitch", "normalize_config",
 ]

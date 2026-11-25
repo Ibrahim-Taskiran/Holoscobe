@@ -12,8 +12,9 @@ Short tracking failures (hand missing, degraded, ambiguous or re-identified for 
 edit instead of ending it.
 
 Snapping (optional, `snap=True`) only acts when the string is already close, so free placement stays
-possible: near-horizontal/vertical angles straighten, and a string parallel to another one with its ends
-close to that one's ends takes the same ends (stacking); the gap then snaps to the existing stack gap.
+possible: near-horizontal/vertical angles straighten, and a string parallel to another one with one end
+close to that one's end lines up with it (stacking); the gap then snaps to the existing stack gap. The length
+decides the note, so snapping never changes it.
 """
 from __future__ import annotations
 
@@ -110,12 +111,6 @@ def drop_short(strings: tuple[Seg, ...], index: Optional[int], aspect: float) ->
     return strings[:index] + strings[index + 1:]
 
 
-def pitch_order(strings: Iterable[Seg]) -> list[int]:
-    """Indices sorted top to bottom (midpoint y, then x): the top string plays the lowest note."""
-    segs = list(strings)
-    return sorted(range(len(segs)), key=lambda i: ((segs[i][1] + segs[i][3]) / 2.0, (segs[i][0] + segs[i][2]) / 2.0, i))
-
-
 def hit_test(strings: Iterable[Seg], p: Vec, aspect: float, *, end_radius: float = END_RADIUS,
              grab_radius: float = GRAB_RADIUS) -> Optional[tuple[int, str]]:
     """(index, "p0" | "p1" | "body") of the string under normalized point p, ends first; None if none."""
@@ -192,15 +187,19 @@ def snap_segment(seg: Seg, others: Iterable[Seg], aspect: float) -> tuple[Seg, b
             continue
         ta = (ra[0] + nx * off, ra[1] + ny * off)
         tb = (rb[0] + nx * off, rb[1] + ny * off)
-        if dist(pa, ta) <= SNAP_END and dist(pb, tb) <= SNAP_END and (best is None or abs(off) < abs(best[0])):
-            best = (off, ra, rb, (nx, ny), pa is a)
+        da, db = dist(pa, ta), dist(pb, tb)
+        if min(da, db) <= SNAP_END and (best is None or abs(off) < abs(best[0])):
+            best = (off, ra, rb, (ux, uy), pa is a, da <= db + 1e-9)
     if best is not None:
-        off, ra, rb, (nx, ny), same = best
+        off, ra, rb, (ux, uy), same, first = best
         gap = _stack_gap(ra, rb, rest)
         if gap is not None and abs(abs(off) - gap) < SNAP_GAP:
             off = math.copysign(gap, off)
-        ta = (ra[0] + nx * off, ra[1] + ny * off)
-        tb = (rb[0] + nx * off, rb[1] + ny * off)
+        r, k = (ra, length) if first else (rb, -length)      # line up the closer end, keep the length
+        ta = (r[0] - uy * off, r[1] + ux * off)
+        tb = (ta[0] + ux * k, ta[1] + uy * k)
+        if not first:
+            ta, tb = tb, ta
         a, b = (ta, tb) if same else (tb, ta)
         snapped = True
     out = clamp_seg((*_norm(a, aspect), *_norm(b, aspect)))  # type: ignore[arg-type]
@@ -208,7 +207,7 @@ def snap_segment(seg: Seg, others: Iterable[Seg], aspect: float) -> tuple[Seg, b
 
 
 def _stack_gap(ra: Vec, rb: Vec, rest: list) -> Optional[float]:
-    """Smallest perpendicular gap between string r and the strings already stacked on it (ends aligned)."""
+    """Smallest perpendicular gap between string r and the strings already stacked on it (one end aligned)."""
     r_theta = _angle(ra, rb)
     ux, uy = math.cos(r_theta), math.sin(r_theta)
     gaps = []
@@ -216,8 +215,7 @@ def _stack_gap(ra: Vec, rb: Vec, rest: list) -> Optional[float]:
         if (qa, qb) == (ra, rb) or _line_diff(_angle(qa, qb), r_theta) > 1e-3:
             continue
         off = _offset(qa, qb, ra, rb, (-uy, ux))
-        aligned = any(max(abs((q[0] - r[0]) * ux + (q[1] - r[1]) * uy) for q, r in pairs) < 1e-3
-                      for pairs in (((qa, ra), (qb, rb)), ((qb, ra), (qa, rb))))
+        aligned = any(abs((q[0] - r[0]) * ux + (q[1] - r[1]) * uy) < 1e-3 for q in (qa, qb) for r in (ra, rb))
         if aligned and abs(off) > 1e-3:
             gaps.append(abs(off))
     return min(gaps) if gaps else None
@@ -258,6 +256,7 @@ class FreeEditor:
     def __init__(self, *, on_pu: float = 0.35, off_pu: float = 0.55, hold_ms: float = 400.0,
                  grace_ms: float = 250.0) -> None:
         self.on_pu, self.off_pu, self.hold_ms, self.grace_ms = on_pu, off_pu, hold_ms, grace_ms
+        self.loose_pu = (on_pu + off_pu) / 2.0           # an opening pinch no longer moves the string
         self.reset()
 
     def reset(self) -> None:
@@ -307,7 +306,7 @@ class FreeEditor:
         if grab is not None:
             if not allowed or any(h not in self._since for h in grab.hands):
                 return self._commit(strings, aspect, t)
-            if all(h in by_id for h in grab.hands):
+            if all(h in by_id and by_id[h].distance_pu <= self.loose_pu for h in grab.hands):
                 self._move(grab, by_id, strings, aspect, snap)
             return self._state(strings, grab)
 
@@ -403,6 +402,6 @@ class FreeEditor:
 
 __all__ = [
     "END_RADIUS", "EditState", "FreeEditor", "GRAB_RADIUS", "HandPinch", "MAX_STRINGS", "MIN_LENGTH", "REID_RADIUS", "Seg",
-    "clamp_seg", "drop_short", "ends", "fit_seg", "hit_test", "move_seg", "normalize_free_strings", "pitch_order",
+    "clamp_seg", "drop_short", "ends", "fit_seg", "hit_test", "move_seg", "normalize_free_strings",
     "put_seg", "seg_length", "snap_segment",
 ]

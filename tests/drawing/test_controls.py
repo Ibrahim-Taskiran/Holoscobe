@@ -3,9 +3,9 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from handcontrol.contracts import (FingerInfo, FingerName, FingerState, PoseFrameFeatures,
-                                   HandFeatures, Handedness, Landmark, Quality)
+                                   HandFeatures, Handedness, HandSample, Landmark, Quality)
 from handcontrol.drawing import PALETTE
-from handcontrol.drawing_gestures import DrawingControls, crossed_forearms
+from handcontrol.drawing_gestures import DrawingControls, arms_apart, crossed_forearms, crossed_hands
 
 
 def hand(side, pose, x=460, y=200, tilt=0.0, hand_id=None, quality=Quality.USABLE, curls=None,
@@ -148,6 +148,61 @@ def test_x_needs_visible_interior_intersection_near_chest():
     assert not crossed_forearms(joints, 4/3)
     joints[-2:] = [joint(.495, .4), joint(.505, .4)]     # praying hands
     assert not crossed_forearms(joints, 4/3)
+
+
+def body(left_wrist, right_wrist, left_hand, right_hand, elbows=((.72, 1.1), (.28, 1.1)), seen=.35):
+    """Pose points of a person at a laptop: elbows below the picture, crossed arms only half visible."""
+    def joint(xy, v):
+        return SimpleNamespace(x=xy[0], y=xy[1], presence=v, visibility=v)
+    return ([None]*11 + [joint((.68, .75), .95), joint((.32, .75), .95)] + [joint(e, .1) for e in elbows]
+            + [joint(p, seen) for p in (left_wrist, right_wrist, left_hand, right_hand, left_hand, right_hand)])
+
+
+def test_x_is_found_when_the_wrists_touch_or_hide_each_other():
+    touching = body((.505, .6), (.495, .6), (.44, .48), (.56, .48))        # wrists together, hands on the other side
+    assert crossed_forearms(touching, 4/3) and not arms_apart(touching, 4/3)
+    assert not crossed_forearms(body((.5, .6), (.5, .6), (.52, .48), (.48, .48)), 4/3)          # praying
+    assert not crossed_forearms(body((.62, .6), (.38, .6), (.62, .5), (.38, .5)), 4/3)          # hands up
+    folded = body((.4, .97), (.6, .97), (.36, .97), (.64, .97))
+    assert not crossed_forearms(folded, 4/3)
+    apart = body((.7, .5), (.3, .5), (.7, .4), (.3, .4), seen=.9)
+    assert arms_apart(apart, 4/3)
+
+
+def sample(side, x, lean, pointing=False):
+    """Hand at wrist x, leaning `lean` degrees towards +x."""
+    a = math.radians(lean)
+    marks = []
+    for i in range(21):
+        k = 0 if i == 0 else .1 if i in (5, 9, 13, 17) else .2
+        if pointing and i == 12:
+            k = .08
+        marks.append(Landmark(x + k*math.sin(a)*3/4, .6 - k*math.cos(a)))
+    return HandSample(side, .9, tuple(marks))
+
+
+def test_x_is_found_by_the_hands_alone():
+    x = sample(RIGHT, .53, 35), sample(LEFT, .47, -35)
+    assert crossed_hands(x, 4/3) and crossed_hands(x[::-1], 4/3)
+    assert not crossed_hands((sample(RIGHT, .4, 35), sample(LEFT, .6, -35)), 4/3)               # not crossed
+    assert not crossed_hands((sample(RIGHT, .53, -35), sample(LEFT, .47, 35)), 4/3)             # leaning inwards
+    assert not crossed_hands((sample(RIGHT, .53, 35, pointing=True), sample(LEFT, .47, -35)), 4/3)
+    assert not crossed_hands(x[:1], 4/3) and not crossed_hands((x[0], x[0]), 4/3)
+
+
+def test_x_that_is_seen_only_half_of_the_time_still_clears_within_two_seconds():
+    c = DrawingControls()
+    t = feed(c, 0, hand(RIGHT, PEN))
+    for i in range(60):
+        t = feed(c, t, crossed=i % 2 == 0, frames=1)
+    assert c.scene.clear_start is not None
+
+
+def test_a_drawing_hand_reaching_across_the_other_arm_is_no_x():
+    c = DrawingControls()
+    t = feed(c, 0, hand(RIGHT, PEN))
+    feed(c, t, hand(RIGHT, PEN), frames=60, crossed=True)
+    assert c.scene.clear_start is None and c.tool == "brush" and not c.blocked
 
 
 OK = [0, 1, 1, 1]

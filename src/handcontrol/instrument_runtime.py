@@ -21,7 +21,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
 from handcontrol.contracts import FrameFeatures, Handedness, Mode
-from handcontrol.instrument.engine import InstrumentConfig, InstrumentEngine
+from handcontrol.instrument.engine import InstrumentConfig, InstrumentEngine, free_note
 from handcontrol.instrument.events import NoteOn
 from handcontrol.instrument.freeform import normalize_free_strings
 from handcontrol.instrument.geometry import normalize_fixed_rect
@@ -276,7 +276,8 @@ class InstrumentRuntime(QObject):
             return
         for name, value in (("set_mirrored", bool(self.settings.mirror_preview)),
                             ("set_particles_enabled", bool(self.settings.instrument_particles)),
-                            ("set_free_snap", bool(getattr(self.settings, "instrument_free_snap", True)))):
+                            ("set_free_snap", self.settings.instrument_free_snap),
+                            ("set_free_note", lambda seg, aspect: free_note(seg, aspect, self.engine.config))):
             fn = getattr(w, name, None)
             if fn is not None:
                 fn(value)
