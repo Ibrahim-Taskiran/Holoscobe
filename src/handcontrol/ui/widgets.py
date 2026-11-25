@@ -7,11 +7,12 @@ from typing import Callable, Optional
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QLayout, QListView, QPushButton,
+    QAbstractButton, QAbstractSpinBox, QBoxLayout, QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QLayout, QListView, QPushButton,
     QSizePolicy, QSpinBox, QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
 )
 
 from handcontrol.ui import icons, theme
+from handcontrol.ui.painted import Painted, PaintedWidget
 
 
 def capitalize_tr(text: str) -> str:
@@ -27,8 +28,36 @@ def label(text: str = "", role: str = "", wrap: bool = False) -> QLabel:
     return w
 
 
-def button(text: str, kind: str = "", icon: str = "") -> QPushButton:
+def _box(layout: QBoxLayout, spacing: int, margins: tuple[int, ...]) -> QBoxLayout:
+    if margins:
+        layout.setContentsMargins(*margins)
+    layout.setSpacing(spacing)
+    return layout
+
+
+def hbox(parent: Optional[QWidget] = None, spacing: int = -1, *margins: int) -> QHBoxLayout:
+    """Row with its spacing (-1: style default) and left, top, right, bottom margins."""
+    return _box(QHBoxLayout() if parent is None else QHBoxLayout(parent), spacing, margins)
+
+
+def vbox(parent: Optional[QWidget] = None, spacing: int = -1, *margins: int) -> QVBoxLayout:
+    return _box(QVBoxLayout() if parent is None else QVBoxLayout(parent), spacing, margins)
+
+
+class DarkTitleBar:
+    """Mixin for the windows with a native caption."""
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        theme.dark_title_bar(self)
+
+
+def button(text: str, kind: str = "", icon: str = "", width: int = 0, auto_default: bool = True) -> QPushButton:
     w = QPushButton(text)
+    if width:
+        w.setMinimumWidth(width)
+    if not auto_default:
+        w.setAutoDefault(False)
     if kind:
         w.setProperty("kind", kind)
     if icon:
@@ -67,7 +96,7 @@ def _animation(owner: QWidget, ms: int, slot: Callable[[float], None]) -> QVaria
     return a
 
 
-class ToggleSwitch(QCheckBox):
+class ToggleSwitch(Painted, QCheckBox):
     """Animated switch. A plain QCheckBox for callers; `show_text` paints its label on the right."""
 
     W, H = 40, 22
@@ -106,9 +135,7 @@ class ToggleSwitch(QCheckBox):
     def hitButton(self, pos: QPoint) -> bool:  # noqa: N802
         return self.rect().contains(pos)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         t = self._pos if self._anim.state() == QVariantAnimation.State.Running else float(self.isChecked())
         track = QRectF(2, (self.height() - self.H) / 2, self.W, self.H)
         on = self.isEnabled()
@@ -132,7 +159,6 @@ class ToggleSwitch(QCheckBox):
         if self._show_text:
             p.setPen(QColor(theme.TEXT_SOFT if on else theme.FAINT))
             p.drawText(self.rect().adjusted(self.W + 12, 0, 0, 0), int(Qt.AlignmentFlag.AlignVCenter), self.text())
-        p.end()
 
 
 class ComboBox(QComboBox):
@@ -279,15 +305,12 @@ class Card(QFrame):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setProperty("role", "card")
-        self._column = QVBoxLayout(self)
-        self._column.setContentsMargins(0, 4, 0, 4)
-        self._column.setSpacing(0)
+        self._column = vbox(self, 0, 0, 4, 0, 4)
 
     def add(self, row: QWidget) -> QWidget:
         if self._column.count():
             holder = QWidget()
-            inset = QHBoxLayout(holder)
-            inset.setContentsMargins(16, 0, 16, 0)
+            inset = hbox(holder, -1, 16, 0, 16, 0)
             inset.addWidget(line())
             self._column.addWidget(holder)
         self._column.addWidget(row)
@@ -300,11 +323,8 @@ class SettingRow(QWidget):
     def __init__(self, title: str, description: str, control: QWidget, width: int = 0) -> None:
         super().__init__()
         self.control = control
-        row = QHBoxLayout(self)
-        row.setContentsMargins(16, 11, 16, 11)
-        row.setSpacing(20)
-        texts = QVBoxLayout()
-        texts.setSpacing(2)
+        row = hbox(self, 20, 16, 11, 16, 11)
+        texts = vbox(None, 2)
         texts.addWidget(label(title, "row", True))
         if description:
             texts.addWidget(label(description, "caption", True))
@@ -324,7 +344,7 @@ class SettingRow(QWidget):
         super().mouseReleaseEvent(event)
 
 
-class StatusPill(QWidget):
+class StatusPill(PaintedWidget):
     """Dot + short state text."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -348,9 +368,7 @@ class StatusPill(QWidget):
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(self.fontMetrics().horizontalAdvance(self._text) + 40, 28)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         p.setPen(QPen(QColor(theme.HAIRLINE), 1))
         p.setBrush(QColor(theme.SURFACE))
@@ -366,10 +384,9 @@ class StatusPill(QWidget):
         p.setPen(QColor(theme.TEXT_SOFT))
         p.setFont(self._font)
         p.drawText(self.rect().adjusted(28, 0, -8, 0), int(Qt.AlignmentFlag.AlignVCenter), self._text)
-        p.end()
 
 
-class NavButton(QToolButton):
+class NavButton(Painted, QToolButton):
     """Rail entry: icon above label. The rail paints the selected pill behind it."""
 
     def __init__(self, text: str, icon: str, parent: Optional[QWidget] = None, size: QSize = QSize(84, 62)) -> None:
@@ -403,9 +420,7 @@ class NavButton(QToolButton):
             return
         super().keyPressEvent(event)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         on = self.isChecked()
         if not on and (self.underMouse() or self.isDown()):
@@ -423,18 +438,15 @@ class NavButton(QToolButton):
         p.setPen(QColor(theme.ACCENT_TEXT if on else theme.TEXT if self.underMouse() else theme.MUTED))
         p.drawText(QRectF(0, 36, self.width(), 18), int(Qt.AlignmentFlag.AlignCenter),
                    p.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width() - 4))
-        p.end()
 
 
-class ModeRail(QWidget):
+class ModeRail(PaintedWidget):
     """Left navigation column; a tinted pill slides to the checked NavButton."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setFixedWidth(100)
-        self.column = QVBoxLayout(self)
-        self.column.setContentsMargins(8, 16, 8, 12)
-        self.column.setSpacing(4)
+        self.column = vbox(self, 4, 8, 16, 8, 12)
         self._target: Optional[QWidget] = None
         self._y = 0.0
         self._anim = _animation(self, theme.NORMAL_MS, self._move)
@@ -455,9 +467,7 @@ class ModeRail(QWidget):
             self._anim.start()
         self.update()
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         p.fillRect(self.rect(), QColor(theme.SURFACE))
         p.fillRect(QRect(self.width() - 1, 0, 1, self.height()), QColor(theme.HAIRLINE))
         if self._target is not None:
@@ -469,10 +479,9 @@ class ModeRail(QWidget):
             p.drawRoundedRect(pill, theme.RADIUS_L, theme.RADIUS_L)
             p.setBrush(QColor(theme.ACCENT))
             p.drawRoundedRect(QRectF(0, pill.center().y() - 12, 3, 24), 1.5, 1.5)
-        p.end()
 
 
-class SideItem(QToolButton):
+class SideItem(Painted, QToolButton):
     """Settings category: icon + label row with a filled selection."""
 
     def __init__(self, text: str, icon: str, parent: Optional[QWidget] = None) -> None:
@@ -484,9 +493,7 @@ class SideItem(QToolButton):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         on, hover = self.isChecked(), self.underMouse()
         p.setPen(QPen(QColor(theme.ACCENT), 1.5) if self.hasFocus() else Qt.PenStyle.NoPen)
@@ -501,7 +508,6 @@ class SideItem(QToolButton):
         p.setFont(theme.bold() if on else theme.font())
         p.setPen(c)
         p.drawText(self.rect().adjusted(46, 0, -8, 0), int(Qt.AlignmentFlag.AlignVCenter), self.text())
-        p.end()
 
 
 class Segmented(QFrame):
@@ -510,9 +516,7 @@ class Segmented(QFrame):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setProperty("role", "segments")
-        self.row = QHBoxLayout(self)
-        self.row.setContentsMargins(3, 3, 3, 3)
-        self.row.setSpacing(2)
+        self.row = hbox(self, 2, 3, 3, 3, 3)
 
     def add(self, text: str) -> QPushButton:
         b = QPushButton(text)
@@ -552,8 +556,7 @@ class HintBar(QWidget):
         super().__init__(parent)
         self._text, self._error, self._vertical = "", "", False
         self._flow: Optional[QLayout] = None
-        column = QVBoxLayout(self)
-        column.setContentsMargins(0, 0, 0, 0)
+        column = vbox(self, -1, 0, 0, 0, 0)
         self._body = QWidget()
         column.addWidget(self._body)
         self._rebuild()
@@ -594,9 +597,7 @@ class HintBar(QWidget):
         old.hide()
         old.deleteLater()
         if self._vertical or self._error:
-            box: QLayout = QVBoxLayout(self._body)
-            box.setContentsMargins(0, 0, 0, 0)
-            box.setSpacing(8)
+            box: QLayout = vbox(self._body, 8, 0, 0, 0, 0)
         else:
             box = FlowLayout(self._body, 16, 8)
         if self._error:
@@ -614,9 +615,7 @@ class HintBar(QWidget):
     @staticmethod
     def _chip(gesture: str, result: str) -> QWidget:
         w = QWidget()
-        row = QHBoxLayout(w)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        row = hbox(w, 8, 0, 0, 0, 0)
         row.addWidget(label(gesture, "keycap"))
         if result:
             row.addWidget(label(result, "caption"))
@@ -626,9 +625,7 @@ class HintBar(QWidget):
     def _side_card(gesture: str, result: str) -> QWidget:
         w = QFrame()
         w.setProperty("role", "card")
-        col = QVBoxLayout(w)
-        col.setContentsMargins(14, 10, 14, 10)
-        col.setSpacing(2)
+        col = vbox(w, 2, 14, 10, 14, 10)
         col.addWidget(label(gesture, "row", True))
         if result:
             col.addWidget(label(capitalize_tr(result), "caption", True))

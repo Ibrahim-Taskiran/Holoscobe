@@ -9,7 +9,7 @@ from typing import Optional
 
 from PySide6.QtCore import QRectF, Qt, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QMenu, QSystemTrayIcon, QWidget, QWidgetAction
+from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget, QWidgetAction
 
 from handcontrol.contracts import ControlState, Mode
 from handcontrol.ui import icons, theme
@@ -22,7 +22,7 @@ from handcontrol.ui.viewmodel import (
     UiBridge,
     UiState,
 )
-from handcontrol.ui.widgets import label
+from handcontrol.ui.widgets import hbox, label
 
 GUIDE_WIDTHS = (230, 330)         # gesture and result columns of the guide menu
 
@@ -71,9 +71,7 @@ def _guide_entry(gesture: str, result: str, parent: QMenu) -> QWidgetAction:
     entry.setText(f"{gesture} → {result}")
     entry.setEnabled(False)
     box = QWidget()
-    row = QHBoxLayout(box)
-    row.setContentsMargins(12, 5, 12, 5)
-    row.setSpacing(16)
+    row = hbox(box, 16, 12, 5, 12, 5)
     for text, role, width in ((gesture, "row", GUIDE_WIDTHS[0]), (result, "caption", GUIDE_WIDTHS[1])):
         part = label(text, role, True)
         part.ensurePolished()

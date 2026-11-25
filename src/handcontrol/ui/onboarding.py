@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QSizePolicy,
     QStackedWidget,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -28,7 +27,8 @@ from handcontrol.ui import icons, theme
 from handcontrol.ui.dpi import physical_to_logical
 from handcontrol.ui.illustrations import Illustration
 from handcontrol.ui.viewmodel import COMMANDS_GUIDE_TR
-from handcontrol.ui.widgets import Banner, button, label
+from handcontrol.ui.widgets import DarkTitleBar, hbox, vbox, Banner, button, label
+from handcontrol.ui.painted import PaintedWidget
 
 
 class OnboardingStep(Enum):
@@ -126,7 +126,7 @@ def _step_texts(hand: str) -> dict[OnboardingStep, _StepText]:
     }
 
 
-class _IconTile(QWidget):
+class _IconTile(PaintedWidget):
     """Small tinted square with an icon."""
 
     def __init__(self, icon: str, tone: str = theme.ACCENT) -> None:
@@ -134,25 +134,18 @@ class _IconTile(QWidget):
         self._icon, self._tone = icon, tone
         self.setFixedSize(38, 38)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(theme.color(self._tone, 0.15))
         p.drawRoundedRect(QRectF(self.rect()), 11, 11)
         icons.paint(p, self._icon, QRectF(9, 9, 20, 20), self._tone)
-        p.end()
 
 
 def _tip(icon: str, title: str, body: str, tone: str = theme.ACCENT) -> QWidget:
     w = QWidget()
-    row = QHBoxLayout(w)
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(14)
+    row = hbox(w, 14, 0, 0, 0, 0)
     row.addWidget(_IconTile(icon, tone), 0, Qt.AlignmentFlag.AlignTop)
-    col = QVBoxLayout()
-    col.setContentsMargins(0, 1, 0, 0)
-    col.setSpacing(2)
+    col = vbox(None, 2, 0, 1, 0, 0)
     col.addWidget(label(title, "row", True))
     col.addWidget(label(body, "caption", True))
     row.addLayout(col, 1)
@@ -162,14 +155,11 @@ def _tip(icon: str, title: str, body: str, tone: str = theme.ACCENT) -> QWidget:
 def _scene_page(scene: str, tips: tuple[tuple[str, str, str], ...], spacing: int = 16) -> QWidget:
     """Illustration on the left, explained points on the right."""
     page = QWidget()
-    row = QHBoxLayout(page)
-    row.setContentsMargins(0, 4, 0, 0)
-    row.setSpacing(32)
+    row = hbox(page, 32, 0, 4, 0, 0)
     art = Illustration(scene)
     art.setFixedWidth(340)
     row.addWidget(art)
-    col = QVBoxLayout()
-    col.setSpacing(spacing)
+    col = vbox(None, spacing)
     col.addStretch(1)
     for icon, title, body in tips:
         col.addWidget(_tip(icon, title, body))
@@ -178,7 +168,7 @@ def _scene_page(scene: str, tips: tuple[tuple[str, str, str], ...], spacing: int
     return page
 
 
-class ProgressDots(QWidget):
+class ProgressDots(PaintedWidget):
     """One dot per step: done = mint, current = accent pill, upcoming = grey."""
 
     def __init__(self, count: int, parent: Optional[QWidget] = None) -> None:
@@ -196,9 +186,7 @@ class ProgressDots(QWidget):
         self._current = max(0, min(self._count - 1, index))
         self.update()
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         p.setPen(Qt.PenStyle.NoPen)
         x, mid = 0.0, self.height() / 2.0
         for i in range(self._count):
@@ -207,10 +195,9 @@ class ProgressDots(QWidget):
                        else QColor(theme.STROKE))
             p.drawRoundedRect(QRectF(x, mid - 4.0, w, 8.0), 4.0, 4.0)
             x += w + 8.0
-        p.end()
 
 
-class PracticeArea(QWidget):
+class PracticeArea(PaintedWidget):
     """Painted practice surface; forwards real mouse events to the dialog."""
 
     def __init__(self, dialog: "OnboardingDialog") -> None:
@@ -251,9 +238,7 @@ class PracticeArea(QWidget):
 
     # ---- painting ----
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         p.setPen(QPen(QColor(theme.HAIRLINE), 1.0))
         p.setBrush(QColor(theme.SURFACE))
@@ -269,7 +254,6 @@ class PracticeArea(QWidget):
             self._paint_drag(p)
         else:
             self._paint_targets(p)
-        p.end()
 
     def _paint_targets(self, p: QPainter) -> None:
         d = self._dialog
@@ -340,7 +324,7 @@ class PracticeArea(QWidget):
                         QPointF(c.x() + s, c.y() - s * 0.6)])
 
 
-class OnboardingDialog(QDialog):
+class OnboardingDialog(DarkTitleBar, QDialog):
     """Interactive first-run tutorial (about 900x600, not always on top)."""
 
     completed = Signal()
@@ -394,9 +378,7 @@ class OnboardingDialog(QDialog):
     # ---------- layout ----------
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(32, 22, 32, 20)
-        root.setSpacing(14)
+        root = vbox(self, 14, 32, 22, 32, 20)
 
         top = QHBoxLayout()
         self.dots = ProgressDots(len(STEP_ORDER))
@@ -407,8 +389,7 @@ class OnboardingDialog(QDialog):
         root.addLayout(top)
 
         head = QHBoxLayout()
-        titles = QVBoxLayout()
-        titles.setSpacing(4)
+        titles = vbox(None, 4)
         self.title_label = label("", "display")
         self.subtitle_label = label("", "lead", True)
         titles.addWidget(self.title_label)
@@ -430,16 +411,11 @@ class OnboardingDialog(QDialog):
         self.hint_label = Banner("", theme.ACCENT, "hand")
         root.addWidget(self.hint_label)
 
-        foot = QHBoxLayout()
-        foot.setSpacing(8)
-        self.btn_skip = button("Atla", "ghost")
-        self.btn_skip.setAutoDefault(False)
+        foot = hbox(None, 8)
+        self.btn_skip = button("Atla", "ghost", auto_default=False)
         self.status_label = label("", "success")
-        self.btn_back = button("Geri")
-        self.btn_back.setAutoDefault(False)
-        self.btn_back.setMinimumWidth(92)
-        self.btn_next = button("İleri", "primary")
-        self.btn_next.setMinimumWidth(112)
+        self.btn_back = button("Geri", width=92, auto_default=False)
+        self.btn_next = button("İleri", "primary", width=112)
         self.btn_next.setDefault(True)
         foot.addWidget(self.btn_skip)
         foot.addStretch(1)
@@ -484,15 +460,7 @@ class OnboardingDialog(QDialog):
             ("shield", "Güvenlik", f"Bir şey ters giderse {self.hotkey} ile hemen durdur."),
         ), 28)
 
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        theme.dark_title_bar(self)
-
     # ---------- public state ----------
-
-    @property
-    def step_index(self) -> int:
-        return self._index
 
     @property
     def current_step(self) -> OnboardingStep:
@@ -543,13 +511,14 @@ class OnboardingDialog(QDialog):
         return QPointF(nx * self.practice.width(), ny * self.practice.height())
 
     def box_rect(self) -> QRectF:
-        nx, ny = self._box_center_n
-        cx, cy = nx * self.practice.width(), ny * self.practice.height()
-        return QRectF(cx - BOX_SIZE / 2, cy - BOX_SIZE / 2, BOX_SIZE, BOX_SIZE)
+        return self._square(self._box_center_n, BOX_SIZE)
 
     def zone_rect(self) -> QRectF:
-        cx, cy = ZONE_CENTER[0] * self.practice.width(), ZONE_CENTER[1] * self.practice.height()
-        return QRectF(cx - ZONE_SIZE / 2, cy - ZONE_SIZE / 2, ZONE_SIZE, ZONE_SIZE)
+        return self._square(ZONE_CENTER, ZONE_SIZE)
+
+    def _square(self, center: tuple[float, float], size: float) -> QRectF:
+        cx, cy = center[0] * self.practice.width(), center[1] * self.practice.height()
+        return QRectF(cx - size / 2, cy - size / 2, size, size)
 
     # ---------- navigation ----------
 
@@ -565,29 +534,25 @@ class OnboardingDialog(QDialog):
         if self._index > 0:
             self._enter_step(self._index - 1)
 
+    def _end(self, signal) -> bool:
+        """Report the outcome once."""
+        first, self._finished = not self._finished, True
+        if first:
+            self._idle_timer.stop()
+            signal.emit()
+        return first
+
     @Slot()
     def skip(self) -> None:
-        if self._finished:
-            return
-        self._finished = True
-        self._idle_timer.stop()
-        self.skipped.emit()
         self.reject()
 
     @Slot()
     def finish(self) -> None:
-        if self._finished:
-            return
-        self._finished = True
-        self._idle_timer.stop()
-        self.completed.emit()
-        self.accept()
+        if self._end(self.completed):
+            self.accept()
 
     def reject(self) -> None:  # window close / Esc counts as skip
-        if not self._finished:
-            self._finished = True
-            self._idle_timer.stop()
-            self.skipped.emit()
+        self._end(self.skipped)
         super().reject()
 
     def _enter_step(self, index: int) -> None:
@@ -705,14 +670,11 @@ class OnboardingDialog(QDialog):
                 self._drag_offset = self.box_rect().center() - pos
             elif self._inside_practice(pos):
                 self._miss(pos)
-        elif kind == "move_pointer" and self._dragging:
+        elif self._dragging and kind in ("move_pointer", "left_up"):
             c = pos + self._drag_offset
             self._box_center_n = (min(1.0, max(0.0, c.x() / w)), min(1.0, max(0.0, c.y() / h)))
-        elif kind == "left_up" and self._dragging:
-            c = pos + self._drag_offset
-            self._box_center_n = (min(1.0, max(0.0, c.x() / w)), min(1.0, max(0.0, c.y() / h)))
-            self._dragging = False
-            if self.zone_rect().contains(self.box_rect().center()):
+            self._dragging = kind == "move_pointer"
+            if not self._dragging and self.zone_rect().contains(self.box_rect().center()):
                 self._box_center_n = ZONE_CENTER
                 self._register_success()
 

@@ -14,14 +14,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Optional
+from statistics import fmean
+from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
-    QHBoxLayout,
     QProgressBar,
     QStackedWidget,
     QVBoxLayout,
@@ -38,7 +38,8 @@ from handcontrol.ui import icons, theme
 from handcontrol.ui.illustrations import Illustration
 from handcontrol.ui.preview import CameraPreviewWidget
 from handcontrol.ui.viewmodel import HANDEDNESS_LABELS_TR, UiBridge
-from handcontrol.ui.widgets import Banner, Card, SettingRow, button, label
+from handcontrol.ui.widgets import DarkTitleBar, hbox, vbox, Banner, Card, SettingRow, button, label
+from handcontrol.ui.painted import PaintedWidget
 
 
 class CalibrationStep(Enum):
@@ -51,51 +52,39 @@ class CalibrationStep(Enum):
     SUMMARY = "summary"
 
 
-STEP_ORDER: tuple[CalibrationStep, ...] = (
-    CalibrationStep.NEUTRAL_POSE,
-    CalibrationStep.MOVEMENT_CORNERS,
-    CalibrationStep.PINCH_REPEATS,
-    CalibrationStep.CLAP_REPEATS,
-    CalibrationStep.SUMMARY,
-)
+STEP_ORDER: tuple[CalibrationStep, ...] = tuple(CalibrationStep)
 
-STEP_TITLES_TR: dict[CalibrationStep, str] = {
-    CalibrationStep.NEUTRAL_POSE: "1. Adım: Nötr Duruş",
-    CalibrationStep.MOVEMENT_CORNERS: "2. Adım: Hareket Alanının Köşeleri",
-    CalibrationStep.PINCH_REPEATS: "3. Adım: Rahat Kıstırma (Pinch) Tekrarları",
-    CalibrationStep.CLAP_REPEATS: "4. Adım: El Çırpma Tekrarları",
-    CalibrationStep.SUMMARY: "Kalibrasyon Özeti ve Tamamlama",
-}
 
-STEP_SHORT_TR: dict[CalibrationStep, str] = {
-    CalibrationStep.NEUTRAL_POSE: "Nötr duruş",
-    CalibrationStep.MOVEMENT_CORNERS: "Köşeler",
-    CalibrationStep.PINCH_REPEATS: "Pinch",
-    CalibrationStep.CLAP_REPEATS: "El çırpma",
-    CalibrationStep.SUMMARY: "Özet",
-}
+@dataclass(frozen=True)
+class _StepInfo:
+    short: str
+    title: str
+    text: str
+    count: str = ""                  # name of the counted samples
+    required: int = 0
 
-STEP_INSTRUCTIONS_TR: dict[CalibrationStep, str] = {
-    CalibrationStep.NEUTRAL_POSE: (
+
+_STEPS: dict[CalibrationStep, _StepInfo] = {
+    CalibrationStep.NEUTRAL_POSE: _StepInfo(
+        "Nötr duruş", "1. Adım: Nötr Duruş",
         "Elinizi kameranın ortasında rahat ve açık bir nötr duruşta tutun. "
-        "Avuç içi ölçeği ve temel referans kaydedilecektir."
-    ),
-    CalibrationStep.MOVEMENT_CORNERS: (
+        "Avuç içi ölçeği ve temel referans kaydedilecektir.", "Nötr duruş örnekleri", 5),
+    CalibrationStep.MOVEMENT_CORNERS: _StepInfo(
+        "Köşeler", "2. Adım: Hareket Alanının Köşeleri",
         "Baskın elinizin işaret parmağıyla ekrandaki dört köşe hedefini "
-        "(Sol-Üst, Sağ-Üst, Sağ-Alt, Sol-Alt) sırasıyla işaret edin."
-    ),
-    CalibrationStep.PINCH_REPEATS: (
+        "(Sol-Üst, Sağ-Üst, Sağ-Alt, Sol-Alt) sırasıyla işaret edin.", "Kaydedilen köşe noktaları", 4),
+    CalibrationStep.PINCH_REPEATS: _StepInfo(
+        "Pinch", "3. Adım: Rahat Kıstırma (Pinch) Tekrarları",
         "Başparmak ve işaret parmağınızı rahat bir şekilde birkaç kez birleştirip "
-        "bırakın (kıstırma / pinch tekrarı)."
-    ),
-    CalibrationStep.CLAP_REPEATS: (
+        "bırakın (kıstırma / pinch tekrarı).", "Kıstırma (Pinch) tekrarları", 3),
+    CalibrationStep.CLAP_REPEATS: _StepInfo(
+        "El çırpma", "4. Adım: El Çırpma Tekrarları",
         "İki elinizi kameranın görebileceği şekilde rahatça yaklaştırıp "
-        "el çırpma hareketini birkaç kez tekrarlayın."
-    ),
-    CalibrationStep.SUMMARY: (
+        "el çırpma hareketini birkaç kez tekrarlayın.", "El çırpma tekrarları", 3),
+    CalibrationStep.SUMMARY: _StepInfo(
+        "Özet", "Kalibrasyon Özeti ve Tamamlama",
         "Kalibrasyon ölçümleri tamamlandı. Hesaplanan hareket sınırları ve "
-        "eşik değerlerini onaylayarak kaydedilmeleri için gönderebilirsiniz."
-    ),
+        "eşik değerlerini onaylayarak kaydedilmeleri için gönderebilirsiniz."),
 }
 
 
@@ -107,22 +96,6 @@ class MovementBounds:
     top: float = 0.15
     right: float = 0.85
     bottom: float = 0.85
-
-    def to_dict(self) -> dict[str, float]:
-        return {
-            "left": float(self.left),
-            "top": float(self.top),
-            "right": float(self.right),
-            "bottom": float(self.bottom),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> MovementBounds:
-        left = max(0.0, min(0.9, float(data.get("left", 0.15))))
-        top = max(0.0, min(0.9, float(data.get("top", 0.15))))
-        right = max(left + 0.05, min(1.0, float(data.get("right", 0.85))))
-        bottom = max(top + 0.05, min(1.0, float(data.get("bottom", 0.85))))
-        return cls(left=left, top=top, right=right, bottom=bottom)
 
 
 @dataclass(frozen=True)
@@ -136,29 +109,6 @@ class CalibrationThresholds:
     clap_separate_distance: float = 1.6
     neutral_palm_scale_px: float = 80.0
 
-    def to_dict(self) -> dict[str, float]:
-        return {
-            "pinch_on": float(self.pinch_on),
-            "pinch_off": float(self.pinch_off),
-            "clap_arm_distance": float(self.clap_arm_distance),
-            "clap_contact_distance": float(self.clap_contact_distance),
-            "clap_separate_distance": float(self.clap_separate_distance),
-            "neutral_palm_scale_px": float(self.neutral_palm_scale_px),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> CalibrationThresholds:
-        pinch_on = max(0.10, min(0.60, float(data.get("pinch_on", 0.28))))
-        pinch_off = max(pinch_on + 0.05, min(0.85, float(data.get("pinch_off", 0.42))))
-        return cls(
-            pinch_on=pinch_on,
-            pinch_off=pinch_off,
-            clap_arm_distance=float(data.get("clap_arm_distance", 2.0)),
-            clap_contact_distance=float(data.get("clap_contact_distance", 0.85)),
-            clap_separate_distance=float(data.get("clap_separate_distance", 1.6)),
-            neutral_palm_scale_px=max(10.0, float(data.get("neutral_palm_scale_px", 80.0))),
-        )
-
 
 @dataclass(frozen=True)
 class CalibrationResult:
@@ -170,41 +120,6 @@ class CalibrationResult:
     bounds: MovementBounds = field(default_factory=MovementBounds)
     thresholds: CalibrationThresholds = field(default_factory=CalibrationThresholds)
     dominant_hand: Handedness = Handedness.RIGHT
-    neutral_samples: int = 0
-    corner_samples: int = 0
-    pinch_count: int = 0
-    clap_count: int = 0
-    os_commands_suppressed: bool = True
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "bounds": self.bounds.to_dict(),
-            "thresholds": self.thresholds.to_dict(),
-            "dominant_hand": self.dominant_hand.value,
-            "neutral_samples": self.neutral_samples,
-            "corner_samples": self.corner_samples,
-            "pinch_count": self.pinch_count,
-            "clap_count": self.clap_count,
-            "os_commands_suppressed": self.os_commands_suppressed,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> CalibrationResult:
-        raw_hand = str(data.get("dominant_hand", Handedness.RIGHT.value))
-        try:
-            dom = Handedness(raw_hand)
-        except ValueError:
-            dom = Handedness.RIGHT
-        return cls(
-            bounds=MovementBounds.from_dict(data.get("bounds", {})),
-            thresholds=CalibrationThresholds.from_dict(data.get("thresholds", {})),
-            dominant_hand=dom,
-            neutral_samples=int(data.get("neutral_samples", 0)),
-            corner_samples=int(data.get("corner_samples", 0)),
-            pinch_count=int(data.get("pinch_count", 0)),
-            clap_count=int(data.get("clap_count", 0)),
-            os_commands_suppressed=bool(data.get("os_commands_suppressed", True)),
-        )
 
 
 class CalibrationPreviewCanvas(CameraPreviewWidget):
@@ -242,14 +157,8 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
         if self._step == CalibrationStep.NEUTRAL_POSE:
-            box_w = canvas.width() * 0.34
-            box_h = canvas.height() * 0.44
-            target_rect = QRectF(
-                canvas.center().x() - box_w * 0.5,
-                canvas.center().y() - box_h * 0.5,
-                box_w,
-                box_h,
-            )
+            target_rect = QRectF(0.0, 0.0, canvas.width() * 0.34, canvas.height() * 0.44)
+            target_rect.moveCenter(canvas.center())
             painter.drawRoundedRect(target_rect, 12.0, 12.0)
             self._mark_label(painter, QPointF(target_rect.center().x(), target_rect.top() - 20.0), "Nötr Duruş Alanı",
                              theme.ACCENT_TEXT)
@@ -308,7 +217,7 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
         painter.restore()
 
 
-class StepBar(QWidget):
+class StepBar(PaintedWidget):
     """Numbered steps with their names; done steps show a check mark."""
 
     def __init__(self, names: tuple[str, ...], parent: Optional[QWidget] = None) -> None:
@@ -321,9 +230,7 @@ class StepBar(QWidget):
             self._current = index
             self.update()
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         n = len(self._names)
         cell = self.width() / n
         for i in range(n - 1):
@@ -345,23 +252,15 @@ class StepBar(QWidget):
             p.setFont(theme.bold(theme.TEXT_PX["caption"]) if now else theme.font(theme.TEXT_PX["caption"]))
             p.setPen(QColor(theme.TEXT if now else theme.MUTED))
             p.drawText(QRectF(cell * i, 34, cell, 18), int(Qt.AlignmentFlag.AlignCenter), name)
-        p.end()
 
 
-class CalibrationWizard(QDialog):
+class CalibrationWizard(DarkTitleBar, QDialog):
     """Step-by-step hand gesture calibration dialog.
 
-    OS commands are never produced during calibration (`suppress_os_commands == True`).
+    The controller is in its calibration state meanwhile, so no OS command is produced.
     """
 
-    calibration_finished = Signal(object)       # CalibrationResult
-    calibration_cancelled = Signal()
     step_changed = Signal(object)               # CalibrationStep
-
-    REQUIRED_NEUTRAL_SAMPLES: int = 5
-    REQUIRED_CORNERS: int = 4
-    REQUIRED_PINCHES: int = 3
-    REQUIRED_CLAPS: int = 3
 
     def __init__(
         self,
@@ -371,7 +270,6 @@ class CalibrationWizard(QDialog):
         super().__init__(parent)
         self._bridge = bridge
         self._step_index: int = 0
-        self._suppress_os_commands: bool = True
 
         # Collected calibration measurements
         self._neutral_scales: list[float] = []
@@ -384,7 +282,6 @@ class CalibrationWizard(QDialog):
         self._clap_min_distances: list[float] = []
         self._clap_max_distances: list[float] = []
         self._clap_currently_near: bool = False
-        self._last_result: Optional[CalibrationResult] = None
 
         self.setWindowTitle("Holoscobe — El Hareketi Kalibrasyonu")
         theme.install()
@@ -398,33 +295,15 @@ class CalibrationWizard(QDialog):
             self._bridge.frame_updated.connect(self._on_bridge_frame)
 
     @property
-    def suppress_os_commands(self) -> bool:
-        """Always True while calibration is active so OS commands are never emitted."""
-        return self._suppress_os_commands
-
-    @property
-    def os_commands_enabled(self) -> bool:
-        """Always False during calibration."""
-        return not self._suppress_os_commands
-
-    @property
     def current_step(self) -> CalibrationStep:
         return STEP_ORDER[self._step_index]
 
-    @property
-    def last_result(self) -> Optional[CalibrationResult]:
-        return self._last_result
-
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        body = QVBoxLayout()
-        body.setContentsMargins(32, 22, 32, 18)
-        body.setSpacing(12)
+        root = vbox(self, 0, 0, 0, 0, 0)
+        body = vbox(None, 12, 32, 22, 32, 18)
         root.addLayout(body, 1)
 
-        self.step_bar = StepBar(tuple(STEP_SHORT_TR[step] for step in STEP_ORDER))
+        self.step_bar = StepBar(tuple(_STEPS[step].short for step in STEP_ORDER))
         body.addWidget(self.step_bar)
         self.step_title_label = label("", "title")
         self.instruction_label = label("", "lead", True)
@@ -439,8 +318,7 @@ class CalibrationWizard(QDialog):
         self._stage.addWidget(self._build_summary())
         body.addWidget(self._stage, 1)
 
-        progress_row = QHBoxLayout()
-        progress_row.setSpacing(16)
+        progress_row = hbox(None, 16)
         self.step_status_label = label("", "value")
         self.step_progress_bar = QProgressBar()
         self.step_progress_bar.setRange(0, 100)
@@ -455,39 +333,24 @@ class CalibrationWizard(QDialog):
 
         footer = QFrame()
         footer.setProperty("role", "footer")
-        button_row = QHBoxLayout(footer)
-        button_row.setContentsMargins(24, 12, 32, 12)
-        button_row.setSpacing(8)
-        self.btn_reset = button("Baştan Başla", "ghost", "undo")
-        self.btn_cancel = button("İptal", "ghost")
-        self.btn_prev = button("Geri")
-        self.btn_sample = button("Örnek Kaydet")
-        self.btn_next = button("İleri", "primary")
+        button_row = hbox(footer, 8, 24, 12, 32, 12)
+        self.btn_reset = button("Baştan Başla", "ghost", "undo", auto_default=False)
+        self.btn_cancel = button("İptal", "ghost", auto_default=False)
+        self.btn_prev = button("Geri", width=92, auto_default=False)
+        self.btn_sample = button("Örnek Kaydet", auto_default=False)
+        self.btn_next = button("İleri", "primary", width=112)
         self.btn_finish = button("Kalibrasyonu Tamamla", "primary")
-        for b in (self.btn_reset, self.btn_cancel, self.btn_prev, self.btn_sample):
-            b.setAutoDefault(False)
-        self.btn_next.setMinimumWidth(112)
-        self.btn_prev.setMinimumWidth(92)
-
-        self.btn_reset.clicked.connect(self.reset_calibration)
-        self.btn_prev.clicked.connect(self.previous_step)
-        self.btn_sample.clicked.connect(self.record_manual_step_sample)
-        self.btn_next.clicked.connect(self.next_step)
-        self.btn_finish.clicked.connect(self.finish_calibration)
-        self.btn_cancel.clicked.connect(self.cancel_calibration)
-
-        button_row.addWidget(self.btn_reset)
-        button_row.addWidget(self.btn_cancel)
-        button_row.addStretch(1)
-        for b in (self.btn_prev, self.btn_sample, self.btn_next, self.btn_finish):
+        for b, slot in ((self.btn_reset, self.reset_calibration), (self.btn_cancel, self.cancel_calibration),
+                        (self.btn_prev, self.previous_step), (self.btn_sample, self.record_manual_step_sample),
+                        (self.btn_next, self.next_step), (self.btn_finish, self.finish_calibration)):
+            b.clicked.connect(slot)
             button_row.addWidget(b)
+        button_row.insertStretch(2, 1)
         root.addWidget(footer)
 
     def _build_summary(self) -> QWidget:
         page = QWidget()
-        row = QHBoxLayout(page)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(20)
+        row = hbox(page, 20, 0, 0, 0, 0)
         row.addWidget(Illustration("done"), 1)
         self._metrics = {}
         card = Card()
@@ -503,10 +366,6 @@ class CalibrationWizard(QDialog):
         column.addStretch(1)
         row.addLayout(column, 1)
         return page
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        theme.dark_title_bar(self)
 
     @Slot(object)
     def _on_bridge_frame(self, frame: Optional[FrameFeatures]) -> None:
@@ -539,7 +398,7 @@ class CalibrationWizard(QDialog):
             if frame.width > 0 and frame.height > 0:
                 norm_x = max(0.0, min(1.0, primary.index_tip_px[0] / frame.width))
                 norm_y = max(0.0, min(1.0, primary.index_tip_px[1] / frame.height))
-                if len(self._corner_points) < self.REQUIRED_CORNERS:
+                if len(self._corner_points) < _STEPS[step].required:
                     self.record_corner_point(norm_x, norm_y)
 
         elif step == CalibrationStep.PINCH_REPEATS:
@@ -618,10 +477,7 @@ class CalibrationWizard(QDialog):
         if step == CalibrationStep.NEUTRAL_POSE:
             self.record_neutral_sample(82.0, self._dominant_hand)
         elif step == CalibrationStep.MOVEMENT_CORNERS:
-            preset_corners = [(0.14, 0.16), (0.86, 0.16), (0.86, 0.84), (0.14, 0.84)]
-            idx = len(self._corner_points) % len(preset_corners)
-            cx, cy = preset_corners[idx]
-            self.record_corner_point(cx, cy)
+            self.record_corner_point(*((0.14, 0.16), (0.86, 0.16), (0.86, 0.84), (0.14, 0.84))[len(self._corner_points) % 4])
         elif step == CalibrationStep.PINCH_REPEATS:
             self.record_pinch_sample(0.23, 0.46)
         elif step == CalibrationStep.CLAP_REPEATS:
@@ -629,17 +485,15 @@ class CalibrationWizard(QDialog):
 
     @Slot()
     def next_step(self) -> None:
-        """Advance to the next calibration step."""
-        if self._step_index < len(STEP_ORDER) - 1:
-            self._step_index += 1
-            self._refresh_step_ui()
-            self.step_changed.emit(self.current_step)
+        self._go(self._step_index + 1)
 
     @Slot()
     def previous_step(self) -> None:
-        """Return to the previous calibration step."""
-        if self._step_index > 0:
-            self._step_index -= 1
+        self._go(self._step_index - 1)
+
+    def _go(self, index: int) -> None:
+        if 0 <= index < len(STEP_ORDER) and index != self._step_index:
+            self._step_index = index
             self._refresh_step_ui()
             self.step_changed.emit(self.current_step)
 
@@ -647,84 +501,44 @@ class CalibrationWizard(QDialog):
     def reset_calibration(self) -> None:
         """Clear collected samples and restart at Step 1."""
         self._step_index = 0
-        self._neutral_scales.clear()
-        self._corner_points.clear()
-        self._pinch_min_distances.clear()
-        self._pinch_open_distances.clear()
-        self._clap_min_distances.clear()
-        self._clap_max_distances.clear()
+        for samples in (self._neutral_scales, self._corner_points, self._pinch_min_distances,
+                        self._pinch_open_distances, self._clap_min_distances, self._clap_max_distances):
+            samples.clear()
         self._pinch_currently_closed = False
         self._clap_currently_near = False
-        self._last_result = None
         self._refresh_step_ui()
         self.step_changed.emit(self.current_step)
 
     def compute_result(self) -> CalibrationResult:
         """Compute MovementBounds and CalibrationThresholds from collected samples."""
+        bounds = MovementBounds()
         if len(self._corner_points) >= 2:
-            xs = [pt[0] for pt in self._corner_points]
-            ys = [pt[1] for pt in self._corner_points]
-            left = max(0.0, min(xs))
-            right = min(1.0, max(xs))
-            top = max(0.0, min(ys))
-            bottom = min(1.0, max(ys))
+            xs, ys = zip(*self._corner_points)
+            left, top, right, bottom = min(xs), min(ys), max(xs), max(ys)
             if right - left < 0.15:
-                left, right = 0.15, 0.85
+                left, right = bounds.left, bounds.right
             if bottom - top < 0.15:
-                top, bottom = 0.15, 0.85
-            bounds = MovementBounds(left=left, top=top, right=right, bottom=bottom)
-        else:
-            bounds = MovementBounds()
+                top, bottom = bounds.top, bounds.bottom
+            bounds = MovementBounds(left, top, right, bottom)
 
-        if self._neutral_scales:
-            palm_scale = sum(self._neutral_scales) / len(self._neutral_scales)
-        else:
-            palm_scale = 80.0
-
+        base = CalibrationThresholds()
+        pinch_on, pinch_off = base.pinch_on, base.pinch_off
         if self._pinch_min_distances and self._pinch_open_distances:
-            avg_closed = sum(self._pinch_min_distances) / len(self._pinch_min_distances)
-            avg_open = sum(self._pinch_open_distances) / len(self._pinch_open_distances)
-            pinch_on = round(max(0.15, min(0.40, avg_closed + (avg_open - avg_closed) * 0.25)), 3)
-            pinch_off = round(max(pinch_on + 0.08, min(0.65, avg_closed + (avg_open - avg_closed) * 0.65)), 3)
-        else:
-            pinch_on = 0.28
-            pinch_off = 0.42
-
+            closed, opened = fmean(self._pinch_min_distances), fmean(self._pinch_open_distances)
+            pinch_on = round(max(0.15, min(0.40, closed + (opened - closed) * 0.25)), 3)
+            pinch_off = round(max(pinch_on + 0.08, min(0.65, closed + (opened - closed) * 0.65)), 3)
+        contact, apart = base.clap_contact_distance, base.clap_separate_distance
         if self._clap_min_distances and self._clap_max_distances:
-            avg_contact = sum(self._clap_min_distances) / len(self._clap_min_distances)
-            avg_sep = sum(self._clap_max_distances) / len(self._clap_max_distances)
-            clap_contact = round(max(0.45, min(1.15, avg_contact * 1.08)), 3)
-            clap_sep = round(max(clap_contact + 0.40, min(2.20, avg_sep * 0.95)), 3)
-        else:
-            clap_contact = 0.85
-            clap_sep = 1.60
-
-        thresholds = CalibrationThresholds(
-            pinch_on=pinch_on,
-            pinch_off=pinch_off,
-            clap_arm_distance=max(1.8, round(clap_sep + 0.35, 2)),
-            clap_contact_distance=clap_contact,
-            clap_separate_distance=clap_sep,
-            neutral_palm_scale_px=round(palm_scale, 2),
-        )
-
-        return CalibrationResult(
-            bounds=bounds,
-            thresholds=thresholds,
-            dominant_hand=self._dominant_hand,
-            neutral_samples=len(self._neutral_scales),
-            corner_samples=len(self._corner_points),
-            pinch_count=len(self._pinch_min_distances),
-            clap_count=len(self._clap_min_distances),
-            os_commands_suppressed=True,
-        )
+            contact = round(max(0.45, min(1.15, fmean(self._clap_min_distances) * 1.08)), 3)
+            apart = round(max(contact + 0.40, min(2.20, fmean(self._clap_max_distances) * 0.95)), 3)
+        thresholds = CalibrationThresholds(pinch_on, pinch_off, max(1.8, round(apart + 0.35, 2)), contact, apart,
+                                           round(fmean(self._neutral_scales or [base.neutral_palm_scale_px]), 2))
+        return CalibrationResult(bounds, thresholds, self._dominant_hand)
 
     @Slot()
     def finish_calibration(self) -> CalibrationResult:
         """Finalize calibration, emit CalibrationResult, and close dialog."""
         result = self.compute_result()
-        self._last_result = result
-        self.calibration_finished.emit(result)
         if self._bridge is not None:
             self._bridge.calibration_completed.emit(result)
             self._bridge.update_status(control_state=ControlState.PAUSED)
@@ -734,7 +548,6 @@ class CalibrationWizard(QDialog):
     @Slot()
     def cancel_calibration(self) -> None:
         """Cancel calibration without emitting a result."""
-        self.calibration_cancelled.emit()
         if self._bridge is not None:
             self._bridge.calibration_cancelled.emit()
             self._bridge.update_status(control_state=ControlState.PAUSED)
@@ -742,47 +555,29 @@ class CalibrationWizard(QDialog):
 
     def _refresh_step_ui(self) -> None:
         step = self.current_step
-        self.step_title_label.setText(STEP_TITLES_TR[step])
-        self.instruction_label.setText(STEP_INSTRUCTIONS_TR[step])
+        info = _STEPS[step]
+        self.step_title_label.setText(info.title)
+        self.instruction_label.setText(info.text)
         self.preview.set_calibration_step(step, self._corner_points)
 
-        if step == CalibrationStep.NEUTRAL_POSE:
-            done = len(self._neutral_scales)
-            req = self.REQUIRED_NEUTRAL_SAMPLES
-            pct = min(100, int((done / req) * 100))
-            status = f"Nötr duruş örnekleri: {done} / {req}"
-        elif step == CalibrationStep.MOVEMENT_CORNERS:
-            done = len(self._corner_points)
-            req = self.REQUIRED_CORNERS
-            pct = min(100, int((done / req) * 100))
-            status = f"Kaydedilen köşe noktaları: {done} / {req}"
-        elif step == CalibrationStep.PINCH_REPEATS:
-            done = len(self._pinch_min_distances)
-            req = self.REQUIRED_PINCHES
-            pct = min(100, int((done / req) * 100))
-            status = f"Kıstırma (Pinch) tekrarları: {done} / {req}"
-        elif step == CalibrationStep.CLAP_REPEATS:
-            done = len(self._clap_min_distances)
-            req = self.REQUIRED_CLAPS
-            pct = min(100, int((done / req) * 100))
-            status = f"El çırpma tekrarları: {done} / {req}"
+        samples = {CalibrationStep.NEUTRAL_POSE: self._neutral_scales, CalibrationStep.MOVEMENT_CORNERS: self._corner_points,
+                   CalibrationStep.PINCH_REPEATS: self._pinch_min_distances,
+                   CalibrationStep.CLAP_REPEATS: self._clap_min_distances}.get(step)
+        if samples is not None:
+            pct = min(100, int((len(samples) / info.required) * 100))
+            status = f"{info.count}: {len(samples)} / {info.required}"
         else:
             res = self.compute_result()
-            pct = 100
+            pct, status = 100, ""
             numbers = {
                 "area": f"%{round((res.bounds.right - res.bounds.left) * 100)} × "
                         f"%{round((res.bounds.bottom - res.bounds.top) * 100)}",
                 "pinch": f"{res.thresholds.pinch_on:.2f} / {res.thresholds.pinch_off:.2f}",
                 "clap": f"{res.thresholds.clap_contact_distance:.2f} / {res.thresholds.clap_separate_distance:.2f}",
-                "hand": HANDEDNESS_LABELS_TR.get(res.dominant_hand, "Belirsiz El"),
+                "hand": HANDEDNESS_LABELS_TR[res.dominant_hand],
             }
             for key, text in numbers.items():
                 self._metrics[key].setText(text.replace(".", ","))
-            status = (
-                f"Sınırlar: [{res.bounds.left:.2f}, {res.bounds.top:.2f}] - "
-                f"[{res.bounds.right:.2f}, {res.bounds.bottom:.2f}] | "
-                f"Pinch Aç/Kapa: {res.thresholds.pinch_on:.2f} / {res.thresholds.pinch_off:.2f}"
-            )
 
         self.step_status_label.setText(status)
         self.step_progress_bar.setValue(pct)
@@ -798,7 +593,3 @@ class CalibrationWizard(QDialog):
         for w in (self.step_status_label, self.step_progress_bar):
             w.setVisible(not last)
         (self.btn_finish if last else self.btn_next).setDefault(True)
-
-
-# Alias for convenience
-CalibrationDialog = CalibrationWizard

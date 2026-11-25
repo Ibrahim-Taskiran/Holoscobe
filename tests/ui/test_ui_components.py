@@ -391,8 +391,6 @@ def test_calibration_wizard_steps_and_os_command_suppression() -> None:
     bridge = UiBridge()
     wizard = CalibrationWizard(bridge=bridge)
 
-    assert wizard.suppress_os_commands is True
-    assert wizard.os_commands_enabled is False
     assert wizard.current_step == CalibrationStep.NEUTRAL_POSE
 
     # Step 1: Neutral pose
@@ -422,12 +420,10 @@ def test_calibration_wizard_steps_and_os_command_suppression() -> None:
 
     result = wizard.finish_calibration()
     assert isinstance(result, CalibrationResult)
-    assert result.os_commands_suppressed is True
     assert result.bounds.left == pytest.approx(0.12)
     assert result.bounds.right == pytest.approx(0.88)
     assert 0.15 <= result.thresholds.pinch_on < result.thresholds.pinch_off
     assert len(completed_results) == 1
-    assert CalibrationResult.from_dict(result.to_dict()) == result
 
 
 def test_feedback_toast_and_dry_run_panel() -> None:

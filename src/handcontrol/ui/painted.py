@@ -11,8 +11,8 @@ CLICK_THROUGH = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOn
                  | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.WindowTransparentForInput)
 
 
-class PaintedWidget(QWidget):
-    """Subclasses draw everything in _paint()."""
+class Painted:
+    """Mixin for any widget class: subclasses draw everything in _paint()."""
 
     def _paint(self, painter: QPainter, rect: QRectF) -> None:
         raise NotImplementedError
@@ -36,6 +36,10 @@ class PaintedWidget(QWidget):
         return image
 
 
+class PaintedWidget(Painted, QWidget):
+    pass
+
+
 class ClickThroughWindow(PaintedWidget):
     """Transparent always-on-top window that takes neither the focus nor the mouse."""
 
@@ -48,4 +52,4 @@ class ClickThroughWindow(PaintedWidget):
         self.resize(width, height)
 
 
-__all__ = ["CLICK_THROUGH", "ClickThroughWindow", "PaintedWidget"]
+__all__ = ["CLICK_THROUGH", "ClickThroughWindow", "Painted", "PaintedWidget"]

@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QScrollArea,
@@ -36,6 +35,7 @@ from handcontrol.ui import theme
 from handcontrol.ui.tray import create_mode_icon
 from handcontrol.ui.viewmodel import MODE_LABELS_TR, SWIPE_PROFILE_LABELS_TR, UiBridge
 from handcontrol.ui.widgets import (
+    DarkTitleBar, hbox, vbox,
     Card, ComboBox, DoubleSpinBox, SettingRow, SideItem, SpinBox, ToggleSwitch, button, label,
 )
 
@@ -229,7 +229,7 @@ def _format_auto_pause(seconds: int) -> str:
     return f"{seconds} sn"
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(DarkTitleBar, QDialog):
     """Settings window with a category sidebar: Genel, İmleç, Hareketler, Enstrüman, Gelişmiş."""
 
     settings_applied = Signal(object)       # SettingsData
@@ -265,16 +265,12 @@ class SettingsDialog(QDialog):
     # ---------- layout ----------
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root = hbox(self, 0, 0, 0, 0, 0)
 
         side = QFrame()
         side.setProperty("role", "sidebar")
         side.setFixedWidth(212)
-        side_column = QVBoxLayout(side)
-        side_column.setContentsMargins(12, 22, 12, 16)
-        side_column.setSpacing(4)
+        side_column = vbox(side, 4, 12, 22, 12, 16)
         title = label("Ayarlar", "title")
         title.setContentsMargins(12, 0, 0, 12)
         side_column.addWidget(title)
@@ -298,22 +294,14 @@ class SettingsDialog(QDialog):
         side_column.addStretch(1)
         root.addWidget(side)
 
-        content = QVBoxLayout()
-        content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(0)
+        content = vbox(None, 0, 0, 0, 0, 0)
         content.addWidget(self.tabs, 1)
         footer = QFrame()
         footer.setProperty("role", "footer")
-        btn_row = QHBoxLayout(footer)
-        btn_row.setContentsMargins(20, 12, 24, 12)
-        btn_row.setSpacing(8)
-        self.btn_defaults = button("Varsayılanlara Sıfırla", "ghost", "undo")
-        self.btn_save = button("Kaydet", "primary")
-        self.btn_cancel = button("İptal")
-        self.btn_save.setMinimumWidth(112)
-        self.btn_cancel.setMinimumWidth(96)
-        for b in (self.btn_defaults, self.btn_cancel):
-            b.setAutoDefault(False)
+        btn_row = hbox(footer, 8, 20, 12, 24, 12)
+        self.btn_defaults = button("Varsayılanlara Sıfırla", "ghost", "undo", auto_default=False)
+        self.btn_save = button("Kaydet", "primary", width=112)
+        self.btn_cancel = button("İptal", width=96, auto_default=False)
         self.btn_save.setDefault(True)
 
         self.btn_defaults.clicked.connect(self.reset_to_defaults)
@@ -326,10 +314,6 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(self.btn_save)
         content.addWidget(footer)
         root.addLayout(content, 1)
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        theme.dark_title_bar(self)
 
     @staticmethod
     def _scroll(page: QWidget) -> QScrollArea:
@@ -346,9 +330,7 @@ class SettingsDialog(QDialog):
     def _page(title: str) -> tuple[QWidget, QVBoxLayout]:
         page = QWidget()
         page.setProperty("role", "page")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(28, 22, 24, 28)
-        layout.setSpacing(10)
+        layout = vbox(page, 10, 28, 22, 24, 28)
         layout.addWidget(label(title, "title"))
         return page, layout
 
@@ -416,9 +398,7 @@ class SettingsDialog(QDialog):
         value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         value.setFixedWidth(52)
         box = QWidget()
-        row = QHBoxLayout(box)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        row = hbox(box, 8, 0, 0, 0, 0)
         row.addWidget(slider, 1)
         row.addWidget(value)
         box.setFixedWidth(CONTROL_WIDTH)

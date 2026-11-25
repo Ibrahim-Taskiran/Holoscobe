@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 from handcontrol.contracts import Mode
 from handcontrol.ui import icons, theme
 from handcontrol.ui.preview import paint_viewfinder
+from handcontrol.ui.painted import PaintedWidget
 
 # An open right hand in a unit square (MediaPipe landmark order).
 OPEN_HAND: tuple[tuple[float, float], ...] = (
@@ -38,7 +39,7 @@ def paint_hand(p: QPainter, rect: QRectF, color: str = theme.HAND_RIGHT, mirror:
         p.drawEllipse(pt, r, r)
 
 
-class Illustration(QWidget):
+class Illustration(PaintedWidget):
     """Card with one of the painted scenes: "welcome", "modes" or "done"."""
 
     def __init__(self, scene: str, parent: Optional[QWidget] = None) -> None:
@@ -47,9 +48,7 @@ class Illustration(QWidget):
         self.setMinimumSize(280, 240)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _paint(self, p: QPainter, rect: QRectF) -> None:
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         clip = QPainterPath()
         clip.addRoundedRect(r, theme.RADIUS_XL, theme.RADIUS_XL)
@@ -63,7 +62,6 @@ class Illustration(QWidget):
         p.drawPath(clip)
         p.setClipPath(clip)
         {"welcome": self._welcome, "modes": self._modes, "done": self._done}[self._scene](p, r)
-        p.end()
 
     def _welcome(self, p: QPainter, r: QRectF) -> None:
         s = min(r.width(), r.height() * 0.84)

@@ -12,7 +12,7 @@ from PySide6.QtCore import QRectF, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QPainter
 from PySide6.QtWidgets import (
     QBoxLayout, QButtonGroup, QFrame, QHBoxLayout, QMainWindow, QPushButton, QSlider, QStackedWidget, QToolButton,
-    QVBoxLayout, QWidget,
+    QWidget,
 )
 
 from handcontrol.contracts import CameraState, ControlState, Mode
@@ -25,6 +25,7 @@ from handcontrol.ui.settings import INSTRUMENT_TONE_LABELS_TR
 from handcontrol.ui.tray import create_mode_icon
 from handcontrol.ui.viewmodel import MODE_LABELS_TR, UiBridge, UiState
 from handcontrol.ui.widgets import (
+    DarkTitleBar, hbox, vbox,
     Banner, ComboBox, FlowLayout, HintBar, ModeRail, NavButton, Segmented, SpinBox, StatusPill, ToggleSwitch, label,
     set_icon, tool,
 )
@@ -69,15 +70,13 @@ class _Brand(QWidget):
 def _group(*widgets: QWidget, spacing: int = 8) -> QWidget:
     """Widgets that stay on one line when the instrument bar wraps."""
     w = QWidget()
-    row = QHBoxLayout(w)
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(spacing)
+    row = hbox(w, spacing, 0, 0, 0, 0)
     for child in widgets:
         row.addWidget(child)
     return w
 
 
-class MainWindow(QMainWindow):
+class MainWindow(DarkTitleBar, QMainWindow):
     instrument_changed = Signal(dict)          # settings fields to change, e.g. {"instrument_layout": "free"}
     free_strings_changed = Signal(object)      # new "Serbest teller" list (delete buttons)
 
@@ -96,13 +95,9 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root.setObjectName("root")
         self.setCentralWidget(root)
-        outer = QHBoxLayout(root)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        outer = hbox(root, 0, 0, 0, 0, 0)
         outer.addWidget(self._build_rail())
-        column = QVBoxLayout()
-        column.setContentsMargins(20, 14, 20, 16)
-        column.setSpacing(12)
+        column = vbox(None, 12, 20, 14, 20, 16)
         outer.addLayout(column, 1)
 
         column.addLayout(self._build_header())
@@ -171,8 +166,7 @@ class MainWindow(QMainWindow):
         return self._rail
 
     def _build_header(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        row = hbox(None, 8)
         row.addWidget(label("Holoscobe", "title"))
         row.addSpacing(6)
         self.status = StatusPill()
@@ -321,10 +315,6 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._arrange()
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        theme.dark_title_bar(self)
 
     @Slot()
     def bring_up(self, focus: bool = True) -> None:
