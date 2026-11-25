@@ -560,9 +560,7 @@ class InstrumentCanvas(CameraPreviewWidget):
             a = self.map_normalized_point(s[0], s[1], canvas)
             b = self.map_normalized_point(s[2], s[3], canvas)
             c.setAlphaF(0.30)
-            pen = QPen(c, 16.0)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
+            painter.setPen(theme.round_pen(c, 16.0))
             painter.drawLine(a, b)
             if view.free_snapped:
                 self._draw_snap_label(painter, a, b)

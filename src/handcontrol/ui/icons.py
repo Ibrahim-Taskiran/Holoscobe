@@ -164,10 +164,7 @@ def paint(p: QPainter, name: str, rect: QRectF, color: QColor | str = theme.TEXT
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     p.translate(rect.topLeft())
     p.scale(rect.width() / GRID, rect.height() / GRID)
-    pen = QPen(c, stroke)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    p.setPen(pen)
+    p.setPen(theme.round_pen(c, stroke))
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.drawPath(stroked)
     if not filled.isEmpty():
@@ -215,9 +212,7 @@ def paint_cat(p: QPainter, rect: QRectF, happy: bool = False) -> None:
     p.setBrush(QColor(theme.CAT_EDGE))                            # muzzle
     p.drawEllipse(QPointF(10.5, 16.5), 2.3, 2.0)
     p.drawEllipse(QPointF(13.5, 16.5), 2.3, 2.0)
-    pen = QPen(dark, 0.62)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    pen = theme.round_pen(dark, 0.62)
     if happy:
         p.setPen(QPen(pen))
         p.setBrush(Qt.BrushStyle.NoBrush)

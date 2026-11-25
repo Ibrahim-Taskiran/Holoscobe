@@ -25,6 +25,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - BGR-RGB çevirme `cv2.cvtColor` ile yapılıyor.
 
 ### Changed
+- Kod sadeleşti: kaynak 27.354 satırdan 24.700 satırın altına indi, davranış aynı. Ortak gövdeler: `ui/painted.py` (boyanan pencereler), `background.py` (iş parçacığı ve saat), `tools/common.py` `ToolRun` (ölçüm araçları), enstrüman motorunda tek vuruş yolu, tablo ile yürüyen ayar doğrulama ve ayar penceresi. Uygulamada hiç çağrılmayan kod (`ui/demo.py`, eski katman ve bildirim işlevleri) silindi.
 - Ana pencere kendiliğinden küçülmüyor; `hide_on_control` ayarı kaldırıldı.
 - Enstrüman ya da Çizim'in kendiliğinden başlattığı kontrol, pencere veya tepsiden masaüstü moduna dönünce duraklar; imleç yalnız kullanıcı sürdürünce çalışır.
 - Modern koyu grafit ve kayısı arayüz yenilemesi (`ui/theme.py`, `ui/widgets.py`, `ui/icons.py`, `ui/illustrations.py`): solda mod şeridi (mode rail), üstte durum/Ayrıntı/Kedi/Sürdür başlık çubuğu, sol kenar çubuklu ve kart tabanlı 5 kategorili Ayarlar penceresi, yenilenen eğitim, kalibrasyon, tepsi ve katman tasarımı.
@@ -36,6 +37,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Maskot modeli değişti: Fripouille (CC BY 4.0) yerine proje sahibinin gri kedisi. Kabuk kürk yerine gerçek tüy geometrisi, göz küresi etrafında dönen kapaklar; uygulama simgesi (`assets/icon.ico`) ve arayüz kedisi aynı renklere geçti.
 
 ### Fixed
+- Pencere menüsünde "Büyüt" ve "Diğer ekrana taşı" satırları artık kendi simgeleriyle görünüyor.
 - "Sürdür" düğmesi ve tepsi öğesi tek tıkta hem sürdürüp hem duraklatıyordu (kontrol duraklatılmış kalıyor, pencere yine de küçülüyordu); kamera düğmesi de açtığı kamerayı hemen kapatıyordu.
 - Maskot: kol kalkınca dirsek ve bilekte oluşan boğum giderildi; kol mesh'i yarı açık pozda üretiliyor.
 - Masaüstü kısayolu yeni simgeye geçmiyordu (Windows simge önbelleği); `update_shortcuts.ps1` her simgeye ayrı yol veriyor.

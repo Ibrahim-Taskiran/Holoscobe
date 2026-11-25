@@ -260,21 +260,14 @@ class OverlayWindow(ClickThroughWindow):
             start = 90.0 - (i - 0.5) * step - 1.2        # Qt: degrees counter-clockwise from 3 o'clock
             span = -(step - 2.4)
             if hot > 0.0 or item.active:
-                path = QPainterPath()
-                path.arcMoveTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start)
-                path.arcTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), start, span)
-                path.arcTo(QRectF(c.x() - inner, c.y() - inner, 2 * inner, 2 * inner), start + span, -span)
-                path.closeSubpath()
                 pen = QPen(theme.color(theme.ACCENT, hot), 4.0)     # rounds the slice corners
                 pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
                 painter.setPen(pen if hot > 0.0 else Qt.PenStyle.NoPen)
                 painter.setBrush(theme.mix(theme.color(theme.ACCENT, 0.14 if item.active else 0.0), theme.ACCENT, hot))
-                painter.drawPath(path)
+                painter.drawPath(theme.ring_slice(c, inner, r, start, span))
             if item.active:
                 rim = outer - 4.0
-                pen = QPen(theme.mix(theme.ACCENT, theme.ON_ACCENT, hot), 3.0)
-                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                painter.setPen(pen)
+                painter.setPen(theme.round_pen(theme.mix(theme.ACCENT, theme.ON_ACCENT, hot), 3.0))
                 painter.drawArc(QRectF(c.x() - rim, c.y() - rim, 2 * rim, 2 * rim), int((start - step * 0.3) * 16),
                                 int((span + step * 0.6) * 16))
             a = math.radians(i * step)

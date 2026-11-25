@@ -95,10 +95,7 @@ def paint_stage_card(p: QPainter, canvas: QRectF, title: str, text: str, icon: s
 
 def paint_viewfinder(p: QPainter, box: QRectF, color: QColor, width: float, arm: float, corners: int = 4) -> None:
     """Camera frame corners (the bottom right one is the fourth)."""
-    pen = QPen(color, width)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    p.setPen(pen)
+    p.setPen(theme.round_pen(color, width))
     p.setBrush(Qt.BrushStyle.NoBrush)
     for c, sx, sy in ((box.topLeft(), 1, 1), (box.topRight(), -1, 1), (box.bottomLeft(), 1, -1),
                       (box.bottomRight(), -1, -1))[:corners]:

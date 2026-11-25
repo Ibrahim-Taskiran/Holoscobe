@@ -267,10 +267,13 @@ def migrate(data: dict[str, Any]) -> dict[str, Any]:
 
 # ---------- storage ----------
 
+def app_data_dir() -> Path:
+    """Per-user folder of the settings, logs, telemetry and the single-instance lock."""
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / APP_DIR_NAME
+
+
 def default_settings_path() -> Path:
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / "AppData" / "Local"
-    return root / APP_DIR_NAME / SETTINGS_FILE
+    return app_data_dir() / SETTINGS_FILE
 
 
 class SettingsStore:

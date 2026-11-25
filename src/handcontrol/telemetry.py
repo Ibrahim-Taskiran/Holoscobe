@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import csv
 import math
-import os
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Union
 
+from handcontrol.config import app_data_dir
 from handcontrol.contracts import ActionKind, FingerName, Handedness
 
 FINGERS = tuple(f.value for f in FingerName)
@@ -29,8 +29,7 @@ COLUMNS = (
 
 
 def default_telemetry_dir() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / "Holoscobe" / "telemetry"
+    return app_data_dir() / "telemetry"
 
 
 def default_session_path(when: Optional[datetime] = None) -> Path:

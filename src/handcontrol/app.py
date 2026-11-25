@@ -5,7 +5,6 @@ import argparse
 import ctypes
 import json
 import logging
-import os
 import sys
 from dataclasses import asdict, fields, replace
 from pathlib import Path
@@ -15,7 +14,7 @@ from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
 from handcontrol.background import MonotonicClock
-from handcontrol.config import CalibrationBounds, Settings, SettingsStore, migrate, validate
+from handcontrol.config import CalibrationBounds, Settings, SettingsStore, app_data_dir, migrate, validate
 from handcontrol.contracts import CANVAS_MODES, CameraState, ControlState, Mode
 from handcontrol.controller import MenuKind
 from handcontrol.dryrun import DryRunSink, FakeVolume
@@ -221,9 +220,7 @@ def make_process_names():
 
 def acquire_single_instance(lock_dir: Path | None = None):
     """Return a held QLockFile, or None when another instance already runs."""
-    if lock_dir is None:
-        base = os.environ.get('LOCALAPPDATA') or str(Path.home() / 'AppData' / 'Local')
-        lock_dir = Path(base) / 'Holoscobe'
+    lock_dir = lock_dir or app_data_dir()
     try:
         Path(lock_dir).mkdir(parents=True, exist_ok=True)
         lock = QLockFile(str(Path(lock_dir) / 'holoscobe.lock'))

@@ -27,9 +27,7 @@ def paint_hand(p: QPainter, rect: QRectF, color: str = theme.HAND_RIGHT, mirror:
     pts = [QPointF(rect.left() + (1 - x if mirror else x) * rect.width(), rect.top() + y * rect.height())
            for x, y in OPEN_HAND]
     k = rect.width() / 160.0
-    pen = QPen(theme.color(color, 0.9), 3.4 * k)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    p.setPen(pen)
+    p.setPen(theme.round_pen(theme.color(color, 0.9), 3.4 * k))
     for a, b in BONES:
         p.drawLine(pts[a], pts[b])
     p.setPen(QPen(QColor(theme.SURFACE), 1.6 * k))
@@ -90,15 +88,10 @@ class Illustration(PaintedWidget):
             hot = mode is Mode.SCROLL
             if hot:
                 out = outer + 8.0
-                path = QPainterPath()
                 start, span = 90.0 - (i - 0.5) * step - 1.2, -(step - 2.4)
-                path.arcMoveTo(QRectF(c.x() - out, c.y() - out, 2 * out, 2 * out), start)
-                path.arcTo(QRectF(c.x() - out, c.y() - out, 2 * out, 2 * out), start, span)
-                path.arcTo(QRectF(c.x() - inner, c.y() - inner, 2 * inner, 2 * inner), start + span, -span)
-                path.closeSubpath()
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(QColor(theme.ACCENT))
-                p.drawPath(path)
+                p.drawPath(theme.ring_slice(c, inner, out, start, span))
             mid = (inner + outer) / 2
             at = QPointF(c.x() + mid * math.sin(a), c.y() - mid * math.cos(a))
             icons.paint(p, icons.MODE_ICONS[mode] if mode else "more", QRectF(at.x() - 13, at.y() - 13, 26, 26),

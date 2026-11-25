@@ -3,19 +3,19 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
-import os
 import sys
 import threading
 from pathlib import Path
 from typing import Callable, Optional
+
+from handcontrol.config import app_data_dir
 
 LOG_NAME = "holoscobe.log"
 _HANDLER_TAG = "_holoscobe_file_handler"
 
 
 def default_logs_dir() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / "Holoscobe" / "logs"
+    return app_data_dir() / "logs"
 
 
 def parse_level(level: object) -> int:

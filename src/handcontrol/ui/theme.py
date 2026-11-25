@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Optional
 
 from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 # ---------- tokens ----------
@@ -363,6 +363,22 @@ def paint_bar(p: QPainter, rect: QRectF, ratio: float, fill: QColor | str, track
                                  rect.height()), r, r)
 
 
+def round_pen(c: QColor, width: float) -> QPen:
+    return QPen(c, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+
+
+def ring_slice(c: QPointF, inner: float, outer: float, start: float, span: float) -> QPainterPath:
+    """Part of a donut; Qt degrees (counter-clockwise from 3 o'clock)."""
+    def box(r: float) -> QRectF:
+        return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+    path = QPainterPath()
+    path.arcMoveTo(box(outer), start)
+    path.arcTo(box(outer), start, span)
+    path.arcTo(box(inner), start + span, -span)
+    path.closeSubpath()
+    return path
+
+
 def paint_ring(p: QPainter, center: QPointF, radius: float, ratio: float, fill: QColor | str, width: float = 3.0,
                track: Optional[QColor] = None) -> None:
     """Progress ring starting at 12 o'clock, clockwise."""
@@ -371,7 +387,5 @@ def paint_ring(p: QPainter, center: QPointF, radius: float, ratio: float, fill: 
     p.setPen(QPen(track or color(WHITE, 0.16), width))
     p.drawEllipse(box)
     if ratio > 0.0:
-        pen = QPen(QColor(fill), width + 0.4)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
+        p.setPen(round_pen(QColor(fill), width + 0.4))
         p.drawArc(box, 90 * 16, -int(min(1.0, ratio) * 360 * 16))

@@ -315,10 +315,7 @@ class PracticeArea(PaintedWidget):
 
     @staticmethod
     def _check(p: QPainter, c: QPointF, s: float) -> None:
-        pen = QPen(SUCCESS, 4)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        p.setPen(pen)
+        p.setPen(theme.round_pen(SUCCESS, 4))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPolyline([QPointF(c.x() - s, c.y()), QPointF(c.x() - s * 0.3, c.y() + s * 0.7),
                         QPointF(c.x() + s, c.y() - s * 0.6)])
