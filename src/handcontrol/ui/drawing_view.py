@@ -31,6 +31,7 @@ def now_ms():
 
 class DrawingView(QWidget):
     _sample = Signal(object, int, bool, bool)
+    brush_changed = Signal(object, bool)     # ink (r, g, b); True while the pen draws or the color wheel is open
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,6 +48,7 @@ class DrawingView(QWidget):
         self._layer_key = None
         self._baked = 0
         self._seen_key = None
+        self._brush = None
         self._raster = InkRaster()
         self._sample.connect(self._accept, Qt.ConnectionType.QueuedConnection)
         self._timer = QTimer(self)
@@ -72,12 +74,21 @@ class DrawingView(QWidget):
         self._dirty = True
         if not usable or now_ms() - frame.capture_ms > self._pipeline.controller.config.stale_ms:
             self.controls.reset()
+            self._publish_brush()
             return
         if self._epoch != epoch:             # a clap candidate raises the epoch: a held X must survive it
             self._epoch = epoch
             self.controls.pen_up()
         self._pose_available = getattr(frame, "forearms_crossed", None) is not None
         self.controls.update(frame, hands_ok)
+        self._publish_brush()
+
+    def _publish_brush(self):
+        ctl = self.controls
+        brush = PALETTE[ctl.scene.color][1], ctl.tool == "brush" or ctl.palette is not None
+        if brush != self._brush:
+            self._brush = brush
+            self.brush_changed.emit(*brush)
 
     def set_state(self, state):
         self._mirrored = state.mirrored
@@ -85,6 +96,7 @@ class DrawingView(QWidget):
                   and state.camera_state is CameraState.RUNNING)
         if self._active and not active:
             self.controls.reset()
+            self._publish_brush()
         self._dirty = True
         self._active = active
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -22,10 +23,11 @@ from PySide6.QtOpenGL import (
 
 from shiboken6 import VoidPtr
 
-from handcontrol.mascot.rig import BONES, EYE_CENTERS, HEAD, CatRig, MascotPose
+from handcontrol.mascot.rig import BONES, EYE_CENTERS, HEAD, CatRig, MascotPose, frame
 
 SUPERSAMPLE = 2
 EYE_RADIUS = 0.305
+BRUSH_SCALE = 1.15
 GL_FLOAT, GL_BYTE, GL_UBYTE, GL_UINT, GL_TRIANGLES, GL_DEPTH_TEST, GL_CULL_FACE = 0x1406, 0x1400, 0x1401, 0x1405, 0x0004, 0x0B71, 0x0B44
 GL_COLOR_DEPTH, GL_COLOR, GL_LINEAR = 0x4100, 0x4000, 0x2601
 GL_READ_FRAMEBUFFER, GL_BGRA, GL_UNSIGNED_INT_8888_REV = 0x8CA8, 0x80E1, 0x8367
@@ -156,6 +158,41 @@ void main() {
 """
 
 
+BRUSH_VS = """
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in float aPart;           // 0 handle, 1 metal, 2 bristles
+uniform mat4 uViewProj; uniform mat4 uModel;
+out vec3 vNormal; out vec3 vWorld; out float vPart; out vec3 vLocal;
+void main() {
+    vWorld = (uModel * vec4(aPos, 1.0)).xyz;
+    vNormal = mat3(uModel) * aNormal;
+    vPart = aPart;
+    vLocal = aPos;
+    gl_Position = uViewProj * vec4(vWorld, 1.0);
+}
+"""
+
+BRUSH_FS = """
+#version 330 core
+in vec3 vNormal; in vec3 vWorld; in float vPart; in vec3 vLocal;
+uniform vec3 uColor;
+out vec4 fragColor;
+""" + LIGHT_GLSL + """
+void main() {
+    vec3 n = normalize(vNormal), v = normalize(uEye - vWorld);
+    vec3 paint = pow(uColor, vec3(2.2));
+    bool metal = vPart > 0.5 && vPart < 1.5, hair = vPart > 1.5;
+    float strand = hair ? 0.86 + 0.14 * sin(atan(vLocal.y, vLocal.x) * 22.0) : 1.0;
+    vec3 c = shade(metal ? vec3(0.46, 0.47, 0.50) : paint * strand, n, vWorld, 0.35, 1.0);
+    float gloss = metal ? 0.9 : hair ? 0.10 : 0.45;
+    c += gloss * pow(max(0.0, dot(n, normalize(normalize(KEY) + v))), metal ? 30.0 : 50.0);
+    fragColor = vec4(toSrgb(tone(c)), 1.0);
+}
+"""
+
+
 class RendererError(RuntimeError):
     """OpenGL or the cat model is not usable on this machine."""
 
@@ -174,6 +211,40 @@ def _sphere(rows: int = 28, cols: int = 36) -> tuple[np.ndarray, np.ndarray]:
     quad = np.array([[r * (cols + 1) + c, (r + 1) * (cols + 1) + c, r * (cols + 1) + c + 1, (r + 1) * (cols + 1) + c + 1]
                      for r in range(rows - 1) for c in range(cols)])
     return pos, np.concatenate((quad[:, [0, 1, 3]], quad[:, [0, 3, 2]]))
+
+
+def _brush_mesh(around: int = 20) -> tuple[np.ndarray, np.ndarray]:
+    """Paint brush along +Z, gripped at the origin: position, normal, part."""
+    parts = (
+        ((-.78, .0), (-.77, .022), (-.60, .040), (-.15, .062), (.12, .070), (.26, .056)),
+        ((.26, .062), (.28, .074), (.31, .066), (.40, .068), (.43, .078), (.46, .070)),
+        ((.46, .066), (.54, .098), (.64, .092), (.76, .050), (.86, .0)),
+    )
+    vertices, triangles = [], []
+    for part, profile in enumerate(parts):
+        z, r = np.array(profile).T
+        slope = np.gradient(r, z)
+        start = len(vertices)
+        for i in range(len(z)):
+            for k in range(around + 1):
+                a = 2 * math.pi * k / around
+                n = np.array([math.cos(a), math.sin(a), -slope[i]])
+                n /= np.linalg.norm(n)
+                vertices.append((r[i] * math.cos(a), r[i] * math.sin(a), z[i], *n, part))
+        for i in range(len(z) - 1):
+            for k in range(around):
+                a = start + i * (around + 1) + k
+                b = a + around + 1
+                triangles += [(a, a + 1, b + 1), (a, b + 1, b)]
+    return np.array(vertices, np.float32), np.array(triangles)
+
+
+@dataclass(frozen=True)
+class Brush:
+    """The paint brush in one paw: side 0 left / 1 right of the screen, color 0..255, size 0..1 while it pops in."""
+    side: int
+    color: tuple[float, float, float]
+    size: float = 1.0
 
 
 class _Mesh:
@@ -263,6 +334,9 @@ class CatRenderer:
             pos, tri = _sphere()
             self._ball = _Mesh(self._gl, pos.astype(np.float32), tri, ((GL_FLOAT, 3),))
             self._ball.setup(self._eye)
+            self._paint = self._program(BRUSH_VS, BRUSH_FS)
+            self._brush = _Mesh(self._gl, *_brush_mesh(), ((GL_FLOAT, 3), (GL_FLOAT, 3), (GL_FLOAT, 1)))
+            self._brush.setup(self._paint)
             self._pack, self._pack_spare = (QOpenGLBuffer(QOpenGLBuffer.Type.PixelPackBuffer) for _ in range(2))
             for b in (self._pack, self._pack_spare):
                 b.create()
@@ -287,7 +361,8 @@ class CatRenderer:
         self._fbo = QOpenGLFramebufferObject(QSize(w * SUPERSAMPLE, h * SUPERSAMPLE), big)
         self._small = QOpenGLFramebufferObject(QSize(w, h), QOpenGLFramebufferObjectFormat())
 
-    def render(self, pose: MascotPose, t: float, w: int, h: int, *, pupil: float = 0.35, wait: bool = False) -> QImage:
+    def render(self, pose: MascotPose, t: float, w: int, h: int, *, pupil: float = 0.35, wait: bool = False,
+               brush: Optional[Brush] = None) -> QImage:
         """Draw one frame. Returns the previous frame (null right after a start or resize): the graphics card copies
         its pixels in the background, because waiting for them here would hold the GIL and slow hand tracking down.
         `wait=True` returns this frame instead (tests, screenshots)."""
@@ -342,6 +417,9 @@ class CatRenderer:
             self._ball.vao.release()
             p.release()
 
+            if brush is not None and brush.size > 0.01:
+                self._draw_brush(brush, skin, vp, eye, head_pos)
+
             self._fbo.release()
             QOpenGLFramebufferObject.blitFramebuffer(
                 self._small, _rect(w, h), self._fbo, _rect(w * SUPERSAMPLE, h * SUPERSAMPLE), GL_COLOR, GL_LINEAR)
@@ -350,6 +428,25 @@ class CatRenderer:
             return self._swap_pixels(w, h)
         finally:
             self._ctx.doneCurrent()
+
+    def _draw_brush(self, brush: Brush, skin: np.ndarray, vp: QMatrix4x4, eye: QVector3D, head_pos: QVector3D) -> None:
+        side = -1.0 if brush.side == 0 else 1.0
+        m = self.rig.hand(skin, brush.side)
+        # Across the pads: the tip above the paw leans to the middle and to the viewer, the end sticks out below.
+        local = np.eye(4)
+        local[:3, :3] = frame(np.array([-.50 * side, -.22, .84]), np.array([0.0, -1.0, 0.0])) * brush.size * BRUSH_SCALE
+        local[:3, 3] = (0.0, -.20, .16)
+        model = QMatrix4x4(*[float(x) for x in (m @ local).ravel()])
+        p = self._paint
+        p.bind()
+        p.setUniformValue(p.uniformLocation("uViewProj"), vp)
+        p.setUniformValue(p.uniformLocation("uModel"), model)
+        self._common(p, eye, head_pos)
+        p.setUniformValue(p.uniformLocation("uColor"), QVector3D(*(c / 255.0 for c in brush.color)))
+        self._brush.vao.bind()
+        self._gl.glDrawElements(GL_TRIANGLES, self._brush.count, GL_UINT, VoidPtr(0))
+        self._brush.vao.release()
+        p.release()
 
     def _swap_pixels(self, w: int, h: int) -> QImage:
         size = w * h * 4
@@ -387,14 +484,14 @@ class CatRenderer:
             return
         self._closed = True
         if self._ctx.makeCurrent(self._surface):
-            for m in (self._body, self._ball):
+            for m in (self._body, self._ball, self._brush):
                 m.vao.destroy()
                 m.vbo.destroy()
                 m.ibo.destroy()
             self._pack.destroy()
             self._pack_spare.destroy()
             self._fbo = self._small = None
-            for p in (self._fur, self._eye):
+            for p in (self._fur, self._eye, self._paint):
                 p.removeAllShaders()
             self._ctx.doneCurrent()
         self._surface.destroy()
@@ -405,4 +502,4 @@ def _rect(w: int, h: int):
     return QRect(0, 0, w, h)
 
 
-__all__ = ["CatRenderer", "RendererError", "asset_dir"]
+__all__ = ["Brush", "CatRenderer", "RendererError", "asset_dir"]

@@ -133,6 +133,13 @@ class CatRig:
             self._arm(s, pose.paws[s], skin)
         return skin
 
+    def hand(self, skin: np.ndarray, s: int) -> np.ndarray:
+        """Frame of a paw: origin at the wrist, +Z towards the toes, -Y out of the pads."""
+        m = np.eye(4)
+        m[:3, :3] = skin[ARMS[s][2]][:3, :3] @ self.hand_bind[s] @ frame(*PALM_UP)
+        m[:3, 3] = apply(skin[ARMS[s][2]], self.arm_rest[s][2])
+        return m
+
     def _arm(self, s: int, paw: PawTarget, skin: np.ndarray) -> None:
         side = -1.0 if s == 0 else 1.0
         spine, arm, rest = skin[SPINE], ARMS[s], self.arm_rest[s]

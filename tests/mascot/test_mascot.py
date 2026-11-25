@@ -12,9 +12,9 @@ import numpy as np
 import pytest
 from PySide6.QtCore import QObject, QPoint, Signal
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication
 
-from handcontrol.app import ControlHider, fan_out
+from handcontrol.app import fan_out
 from handcontrol.contracts import CameraState, ControlState, Mode
 from handcontrol.mascot.renderer import CatRenderer, RendererError, asset_dir, load_cat
 from handcontrol.mascot.retarget import BodyInfo, FaceInfo, HandInfo, Retargeter, body_info, face_info, hand_info
@@ -190,7 +190,10 @@ def state(camera=CameraState.RUNNING, mode=Mode.POINTER, control=ControlState.PA
 
 class FakeWindow:
     def __init__(self, ok=True):
-        self.ok, self.visible, self.closed = ok, False, False
+        self.ok, self.visible, self.closed, self.playing = ok, False, False, False
+
+    def set_playing(self, on):
+        self.playing = on
 
     def set_visible(self, on):
         self.visible = on and self.ok
@@ -213,14 +216,14 @@ class FakePerception:
         self.closed = True
 
 
-def test_cat_is_shown_only_while_the_camera_runs_in_a_desktop_mode(app):
+def test_cat_is_shown_in_every_mode_while_the_camera_runs(app):
     bridge, window, perception = FakeBridge(), FakeWindow(), FakePerception()
     cat = Mascot(bridge, window=window, perception=perception)
     assert window.visible and perception.enabled
-    for hidden in (state(camera=CameraState.OFF), state(mode=Mode.DRAWING), state(mode=Mode.INSTRUMENT)):
-        bridge.state_changed.emit(hidden)
+    for mode in Mode:
+        bridge.state_changed.emit(state(camera=CameraState.OFF, mode=mode))
         assert not window.visible and not perception.enabled
-        bridge.state_changed.emit(state(mode=Mode.SCROLL))
+        bridge.state_changed.emit(state(mode=mode))
         assert window.visible and perception.enabled
     cat.set_enabled(False)
     assert not window.visible
@@ -266,34 +269,6 @@ def test_fan_out_reaches_every_reader():
         raise ValueError
     fan_out([bad, lambda f, ms: seen.append((f, ms))])("frame", 5.0)
     assert seen == [("frame", 5.0)] and fan_out([]) is None and fan_out([bad]) is bad
-
-
-def test_main_window_minimizes_once_when_live_control_starts(app):
-    bridge, window, on = FakeBridge(), QMainWindow(), [True]
-    ControlHider(bridge, window, live=True, enabled=lambda: on[0])
-    active = state(control=ControlState.ACTIVE)
-    window.show()
-    bridge.state_changed.emit(active)
-    assert window.isMinimized()
-    window.showNormal()
-    bridge.state_changed.emit(active)                       # already controlling: the user reopened it on purpose
-    assert not window.isMinimized()
-    bridge.state_changed.emit(state())
-    on[0] = False
-    bridge.state_changed.emit(active)
-    assert not window.isMinimized()
-    bridge.state_changed.emit(state(mode=Mode.DRAWING, control=ControlState.ACTIVE))
-    assert not window.isMinimized()
-    window.close()
-
-
-def test_dry_run_never_minimizes(app):
-    bridge, window = FakeBridge(), QMainWindow()
-    ControlHider(bridge, window, live=False, enabled=lambda: True)
-    window.show()
-    bridge.state_changed.emit(state(control=ControlState.ACTIVE))
-    assert not window.isMinimized()
-    window.close()
 
 
 def test_real_frame(app):

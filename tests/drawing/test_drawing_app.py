@@ -323,3 +323,15 @@ def test_choosing_drawing_starts_it(qt, monkeypatch):
     rt.select_mode(Mode.DRAWING)
     snap = rt.pipeline.controller.snapshot()
     assert snap.mode is Mode.DRAWING and snap.state is ControlState.ACTIVE
+
+
+def test_brush_signal_tells_color_and_use(view, clock):
+    seen = []
+    view.brush_changed.connect(lambda color, on: seen.append((color, on)))
+    strokes(view, clock, hand(Handedness.RIGHT, PEN))
+    assert seen[-1] == (drawing_view.PALETTE[0][1], True) and seen.count(seen[-1]) == 1
+    view.controls.scene.color = 2
+    strokes(view, clock, hand(Handedness.RIGHT, PEN))
+    assert seen[-1] == (drawing_view.PALETTE[2][1], True)
+    view.set_state(ui_state(control=ControlState.PAUSED))
+    assert seen[-1] == (drawing_view.PALETTE[2][1], False)

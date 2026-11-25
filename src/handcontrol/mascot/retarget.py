@@ -47,6 +47,7 @@ class HandInfo:
     wrist: Point
     curl: float
     lean: float
+    right: bool = False                      # the user's right hand, the one that draws
 
 
 def face_info(landmarks: Sequence[Any], shapes: dict[str, float], matrix: Any, aspect: float) -> FaceInfo:
@@ -95,12 +96,12 @@ def body_info(landmarks: Sequence[Any], aspect: float) -> Optional[BodyInfo]:
     return BodyInfo(shoulders, (point(13, 0.5), point(14, 0.5)), (point(15, 0.6), point(16, 0.6)))
 
 
-def hand_info(landmarks: Sequence[Any], curls: Sequence[float], aspect: float) -> HandInfo:
+def hand_info(landmarks: Sequence[Any], curls: Sequence[float], aspect: float, right: bool = False) -> HandInfo:
     w, m = landmarks[0], landmarks[9]
     dx, dy = (w.x - m.x) * aspect, w.y - m.y                       # mirrored x, y up
     fingers = [float(c) for c in curls]
     return HandInfo(((1.0 - w.x) * aspect, w.y), clamp((sum(fingers) / max(1, len(fingers)) - 0.15) / 0.6),
-                    math.atan2(dx, max(1e-6, abs(dy))) if dy > 0 else 0.0)
+                    math.atan2(dx, max(1e-6, abs(dy))) if dy > 0 else 0.0, right)
 
 
 @dataclass
@@ -113,6 +114,7 @@ class Retargeter:
     body_at: float = -1e9
     hands_at: float = -1e9
     aspect: float = 16 / 9
+    right_side: int = 1                                            # the paw that copies the user's right hand
     _pitch0: float = 0.0
     _yaw0: float = 0.0
     _sides: dict[int, Point] = field(default_factory=dict)
@@ -178,6 +180,7 @@ class Retargeter:
         paws = [PawTarget(), PawTarget()]
         placed = self._assign(hands, middle, span) if hands else {}
         self._sides = {s: h.wrist for s, h in placed.items()}
+        self.right_side = next((s for s, h in placed.items() if h.right), self.right_side)
         for s, origin in enumerate((left, right)):
             side = -1 if s == 0 else 1
             elbow = body.elbows[s] if body is not None else None

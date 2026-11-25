@@ -96,7 +96,6 @@ class Settings:
     emergency_hotkey: str = DEFAULT_HOTKEY
     overlay_visible: bool = True
     mascot_visible: bool = True
-    hide_on_control: bool = True          # minimize the main window when live desktop control starts
     monitor_mapping: MonitorMapping = field(default_factory=MonitorMapping)
     calibration: CalibrationBounds = field(default_factory=CalibrationBounds)
     start_with_windows: bool = False
@@ -194,7 +193,6 @@ def validate(data: Any) -> Settings:
     s.emergency_hotkey = normalize_hotkey(d.get("emergency_hotkey"))
     s.overlay_visible = _bool(d.get("overlay_visible"), s.overlay_visible)
     s.mascot_visible = _bool(d.get("mascot_visible"), s.mascot_visible)
-    s.hide_on_control = _bool(d.get("hide_on_control"), s.hide_on_control)
     s.start_with_windows = _bool(d.get("start_with_windows"), False)
     s.swipe_profile = _choice(d.get("swipe_profile"), SWIPE_PROFILES, s.swipe_profile)
     s.auto_pause_s = _int(d.get("auto_pause_s"), s.auto_pause_s, 0, 3600)

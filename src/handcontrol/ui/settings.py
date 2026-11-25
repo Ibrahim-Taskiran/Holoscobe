@@ -143,7 +143,6 @@ class SettingsData:
     show_overlay: bool = True
     show_feedback_osd: bool = True
     show_mascot: bool = True
-    hide_on_control: bool = True                # minimize the main window while the desktop is controlled
     show_dry_run_panel: bool = False
     monitor_mapping: str = "all"                # "all", "primary", "secondary"
     start_with_windows: bool = False            # Default False per spec
@@ -311,7 +310,6 @@ class SettingsData:
             show_overlay=bool(data.get("show_overlay", defaults.show_overlay)),
             show_feedback_osd=bool(data.get("show_feedback_osd", defaults.show_feedback_osd)),
             show_mascot=bool(data.get("show_mascot", defaults.show_mascot)),
-            hide_on_control=bool(data.get("hide_on_control", defaults.hide_on_control)),
             show_dry_run_panel=bool(data.get("show_dry_run_panel", defaults.show_dry_run_panel)),
             monitor_mapping=mon_map,
             start_with_windows=bool(data.get("start_with_windows", defaults.start_with_windows)),
@@ -556,9 +554,6 @@ class SettingsDialog(QDialog):
                   self.chk_feedback)
         self.chk_mascot = ToggleSwitch("Sağ alttaki kediyi göster")
         self._row(card, "Sağ alttaki kediyi göster", "El hareketlerini taklit eden küçük kedi", self.chk_mascot)
-        self.chk_hide_on_control = ToggleSwitch("Kontrol başlayınca ana pencereyi küçült")
-        self._row(card, "Kontrol başlayınca ana pencereyi küçült",
-                  "Masaüstünü kullanırken kamera paneli gizlenir, kedi sağ altta kalır", self.chk_hide_on_control)
         self.chk_startup = ToggleSwitch("Windows açılışında otomatik başlat")
         self._row(card, "Windows açılışında otomatik başlat", "Oturum açınca Holoscobe hazır olur", self.chk_startup)
 
@@ -948,7 +943,6 @@ class SettingsDialog(QDialog):
         self.chk_overlay.setChecked(cfg.show_overlay)
         self.chk_feedback.setChecked(cfg.show_feedback_osd)
         self.chk_mascot.setChecked(cfg.show_mascot)
-        self.chk_hide_on_control.setChecked(cfg.hide_on_control)
         self.chk_dry_run.setChecked(cfg.show_dry_run_panel)
         self._set_combo_by_data(self.combo_monitor, cfg.monitor_mapping)
         self.chk_startup.setChecked(cfg.start_with_windows)
@@ -998,7 +992,6 @@ class SettingsDialog(QDialog):
             show_overlay=bool(self.chk_overlay.isChecked()),
             show_feedback_osd=bool(self.chk_feedback.isChecked()),
             show_mascot=bool(self.chk_mascot.isChecked()),
-            hide_on_control=bool(self.chk_hide_on_control.isChecked()),
             show_dry_run_panel=bool(self.chk_dry_run.isChecked()),
             monitor_mapping=str(self.combo_monitor.currentData() or "all"),
             start_with_windows=bool(self.chk_startup.isChecked()),

@@ -55,3 +55,29 @@ def test_camera_button_restarts_after_an_error(runtime):
     runtime.pipeline.set_camera_state(CameraState.ERROR)
     runtime.bridge.request_camera_toggle()
     assert camera_state(runtime) is CameraState.STARTING and len(runtime.cameras) == 2
+
+
+def test_desktop_mode_waits_for_the_user_after_an_automatic_canvas_start(runtime):
+    runtime.pipeline.set_camera_state(CameraState.RUNNING)
+    for canvas in (Mode.INSTRUMENT, Mode.DRAWING):
+        runtime.bridge.select_mode(canvas)
+        assert state(runtime) is ControlState.ACTIVE
+        runtime.bridge.select_mode(Mode.POINTER)
+        assert state(runtime) is ControlState.PAUSED
+
+
+def test_control_resumed_by_the_user_survives_a_visit_to_a_canvas(runtime):
+    runtime.pipeline.set_camera_state(CameraState.RUNNING)
+    runtime.bridge.request_pause_resume()
+    runtime.bridge.select_mode(Mode.DRAWING)
+    runtime.bridge.select_mode(Mode.SCROLL)
+    assert state(runtime) is ControlState.ACTIVE
+
+
+def test_struck_string_reaches_the_cat(runtime):
+    from handcontrol.instrument.events import AllOff, NoteOn
+    struck = []
+    runtime.instrument.note_played.connect(lambda: struck.append(1))
+    runtime.instrument._emit_audio(Mock(spec=NoteOn))
+    runtime.instrument._emit_audio(Mock(spec=AllOff))
+    assert struck == [1]

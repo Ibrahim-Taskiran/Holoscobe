@@ -85,16 +85,15 @@ def test_mascot_button_and_tray_action_request_and_mirror() -> None:
     win.deleteLater()
 
 
-def test_settings_mascot_and_hide_on_control() -> None:
-    assert SettingsData().show_mascot is True and SettingsData().hide_on_control is True
-    dlg = SettingsDialog(initial=SettingsData(show_mascot=False, hide_on_control=False))
+def test_settings_mascot() -> None:
+    assert SettingsData().show_mascot is True
+    dlg = SettingsDialog(initial=SettingsData(show_mascot=False))
     out = dlg.get_settings()
-    assert out.show_mascot is False and out.hide_on_control is False
+    assert out.show_mascot is False
     assert SettingsData.from_dict(out.to_dict()) == out
     assert dlg.chk_mascot.text() == "Sağ alttaki kediyi göster"
-    assert dlg.chk_hide_on_control.text() == "Kontrol başlayınca ana pencereyi küçült"
     dlg.reset_to_defaults()
-    assert dlg.get_settings().hide_on_control is True
+    assert dlg.get_settings().show_mascot is True
 
 
 # ---------- shared controls ----------

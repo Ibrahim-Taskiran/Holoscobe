@@ -75,7 +75,7 @@ SETTINGS_V3_KEYS = ('swipe_profile', 'auto_pause_s', 'dwell_click', 'dwell_ms', 
 # schema 4 (Enstrüman mode); SettingsData uses the same field names
 SETTINGS_V4_KEYS = ('instrument_layout', 'instrument_scale', 'instrument_quantize', 'instrument_chords',
     'instrument_volume', 'instrument_tone', 'audio_device', 'audio_latency', 'instrument_particles',
-    'instrument_fixed_strings', 'instrument_free_snap', 'hide_on_control')
+    'instrument_fixed_strings', 'instrument_free_snap')
 
 
 def _dialog_keys(data) -> tuple[str, ...]:
@@ -325,6 +325,7 @@ class Runtime(QObject):
         self.instrument = None
         self.image_taps: list[Callable[[Any, float], None]] = []   # extra camera image readers (the cat)
         self.closed = False
+        self._auto_active = False              # control runs because a canvas mode started it, not the user
         self._auto_resume = False              # start the instrument as soon as the camera runs
         self.timer = QTimer(self)
         self.snapshot_received.connect(self._snapshot)
@@ -384,6 +385,8 @@ class Runtime(QObject):
         self.pipeline.set_mode(mode)
         if mode in (Mode.INSTRUMENT, Mode.DRAWING):
             self.ensure_canvas_active()
+        elif self._auto_active:                # the mouse is never taken over before the user resumes
+            self.pipeline.pause()
 
     def ensure_canvas_active(self):
         """Choosing the instrument or drawing also starts it: these modes never send OS input, so nothing can
@@ -392,7 +395,7 @@ class Runtime(QObject):
         if snap.mode not in (Mode.INSTRUMENT, Mode.DRAWING) or snap.state is not ControlState.PAUSED:
             return
         if snap.camera_state is CameraState.RUNNING:
-            self.pipeline.resume()
+            self._auto_active = self.pipeline.resume()
             return
         self._auto_resume = True
         if self.camera is None:
@@ -443,6 +446,8 @@ class Runtime(QObject):
             self._try_auto_resume()
         if snapshot.epoch != self.pipeline.controller.current_epoch():
             return
+        if snapshot.state is not ControlState.ACTIVE:
+            self._auto_active = False
         previous = self.bridge.state
         state = snapshot_to_viewmodel(snapshot, dry_run=not self.live, mirrored=self.settings.mirror_preview)
         self.bridge.update_state(replace(state, latest_frame=previous.latest_frame,
@@ -456,7 +461,7 @@ class Runtime(QObject):
             self._auto_resume = False
         elif snap.state is ControlState.PAUSED and snap.camera_state is CameraState.RUNNING:
             self._auto_resume = False
-            self.pipeline.resume()
+            self._auto_active = self.pipeline.resume()
 
     def toggle_pause(self):
         if self.pipeline.controller.snapshot().state == ControlState.ACTIVE:
@@ -704,24 +709,6 @@ def _make_instrument(runtime: 'Runtime'):
         persist=runtime.save_instrument_area, parent=runtime)
 
 
-class ControlHider(QObject):
-    """Minimizes the main window when live desktop control starts, so only the cat stays on the screen."""
-
-    def __init__(self, bridge, window, *, live: bool, enabled: Callable[[], bool], busy: Callable[[], bool] = lambda: False):
-        super().__init__(window)
-        self._window, self._live, self._enabled, self._busy = window, live, enabled, busy
-        self._controlling = False
-        bridge.state_changed.connect(self.apply_state)
-
-    @Slot(object)
-    def apply_state(self, state):
-        was, self._controlling = self._controlling, (
-            state.control_state is ControlState.ACTIVE and state.mode not in (Mode.INSTRUMENT, Mode.DRAWING))
-        if (self._live and self._controlling and not was and self._enabled() and not self._busy()
-                and self._window.isVisible()):
-            self._window.showMinimized()
-
-
 def show_or_reuse_dialog(ref: list, factory):
     """Raise the dialog held in `ref` if still open, else build one with `factory` and keep it there."""
     if ref and ref[0].isVisible():
@@ -875,6 +862,9 @@ def main(argv=None) -> int:
             notify=lambda text: bridge.show_feedback(message=text))
         runtime.image_taps.append(mascot.tap)
         runtime.pipeline.add_frame_observer(mascot.on_features)
+        window.drawing.brush_changed.connect(mascot.window.set_brush)
+        if runtime.instrument is not None:
+            runtime.instrument.note_played.connect(mascot.window.pluck)
         runtime.settings_changed.connect(lambda s: mascot.set_enabled(s.mascot_visible))
         app.aboutToQuit.connect(mascot.close)
     except Exception:
@@ -882,8 +872,6 @@ def main(argv=None) -> int:
     bridge.set_mascot_visible(runtime.settings.mascot_visible)
     runtime.settings_changed.connect(lambda s: bridge.set_mascot_visible(s.mascot_visible))
     bridge.mascot_toggle_requested.connect(runtime.set_mascot)
-    ControlHider(bridge, window, live=args.live, enabled=lambda: runtime.settings.hide_on_control,
-        busy=lambda: bool(onboarding_ref) or app.activeModalWidget() is not None)
     def calibration_dialog():
         if runtime.pipeline.controller.begin_calibration():
             CalibrationWizard(bridge=bridge, parent=window).exec()

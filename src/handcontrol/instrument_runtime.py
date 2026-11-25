@@ -21,7 +21,7 @@ from PySide6.QtGui import QImage
 
 from handcontrol.contracts import FrameFeatures, Handedness, Mode
 from handcontrol.instrument.engine import InstrumentConfig, InstrumentEngine
-from handcontrol.instrument.events import DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS
+from handcontrol.instrument.events import DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS, NoteOn
 from handcontrol.instrument.geometry import normalize_fixed_rect
 from handcontrol.instrument.session import InstrumentSession
 
@@ -84,6 +84,7 @@ def frame_to_qimage(frame: Any) -> Optional[QImage]:
 
 class InstrumentRuntime(QObject):
     view_ready = Signal(object)        # InstrumentView (queued to the GUI thread)
+    note_played = Signal()             # a string was struck (tracking thread: connect to a QObject slot)
     _mode_seen = Signal(object)        # Mode, from any thread
     _audio_failed = Signal(str)        # Turkish message, from the audio side
 
@@ -136,6 +137,8 @@ class InstrumentRuntime(QObject):
     # ------------------------------------------------------------ any thread
 
     def _emit_audio(self, event: Any) -> None:
+        if isinstance(event, NoteOn):
+            self.note_played.emit()
         audio = self.audio
         if audio is not None:
             audio.push(event)

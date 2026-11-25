@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0 (+ `main` dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1950 otomatik test, 7 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0 (+ `main` dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1963 otomatik test, 7 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -142,7 +142,7 @@ yalnız X ile temizleme kapalı kalır ve ekranda bildirilir. Çizim bellekte tu
 
 ## 3B Kedi Maskot
 
-Masaüstü kontrol modlarında (Enstrüman ve Çizim hariç) ekranın sağ alt köşesinde şeffaf, tıklama geçiren ve odak
+Kamera açıkken bütün modlarda ekranın sağ alt köşesinde şeffaf, tıklama geçiren ve odak
 çalmayan 3B tüylü bir kedi penceresi gösterilir. Gri, sarı gözlü ve tek dişli kedi proje sahibinin kendi modelidir.
 
 - **Gerçek zamanlı taklit:** Baş dönüşü, bakış yönü, göz kırpma, çene, gülümseme ve kaş hareketlerini (`face_landmarker.task`),
@@ -153,8 +153,9 @@ Masaüstü kontrol modlarında (Enstrüman ve Çizim hariç) ekranın sağ alt k
   algılanmadığında göz kırpar ve fare imlecini takip eder.
 - **Açma / kapatma:** Ana pencere başlığındaki **Kedi** düğmesinden, tepsiden ya da **Ayarlar > Genel** altından
   anında açılıp kapatılabilir.
-- **Pencereyi küçültme:** **Kontrol başlayınca ana pencereyi küçült** ayarı (`hide_on_control`, varsayılan açık) etkinken
-  canlı masaüstü kontrolü başlayınca ana kamera penceresi küçülür, kedi sağ altta kalır.
+- **Enstrüman modunda** kedinin arkasından küçük notalar yükselir; tele her vuruş yeni nota çıkarır (`mascot/notes.py`).
+- **Çizim modunda** kalem çizerken (ya da renk çarkı açıkken) sağ eli taklit eden patiye seçili renkte bir fırça gelir.
+- **Ana pencere** kendiliğinden küçülmez; küçültmek tamamen kullanıcıya aittir.
 - **Modeli yeniden üretme:** Blender 5.1 gerekir (uygulamayı çalıştırmak için gerekmez). `scripts/cat_model.py` modeli
   kurar, `scripts/build_mascot.py` onu `assets/mascot/cat.npz` dosyasına aktarır. Kollar ayrı mesh'tir ve yarı açık
   pozda üretilir; böylece dirsek ve bilek bükülürken boğum oluşmaz.
@@ -207,7 +208,7 @@ Ana penceredeki sol şeritten ya da tepsiden açılır. Sol kenar çubuğunda be
 
 | Kategori | İçerik |
 |---|---|
-| Genel | Kamera, ayna görüntüsü, baskın el, varsayılan mod, otomatik duraklat, acil durdurma kısayolu, monitör eşlemesi, katman/bildirim/kedi maskot, kontrol başlayınca pencereyi küçült, Windows ile başlat |
+| Genel | Kamera, ayna görüntüsü, baskın el, varsayılan mod, otomatik duraklat, acil durdurma kısayolu, monitör eşlemesi, katman/bildirim/kedi maskot, Windows ile başlat |
 | İmleç | Hassasiyet ön ayarı, imleç türü, hız, hassasiyet, yumuşatma, bekleyerek tıkla ve süresi, tık sesi, imleç halkası |
 | Hareketler | Pinch eşikleri, kaydırma ve yakınlaştırma yönü, kaydırma profili (Komutlar) |
 | Enstrüman | Düzen (Serbest/Sabit/Solo/Akor), dizi, diziye kilitle, sabit tel sayısı, serbest tel hizalama yardımı, 4 akor bölgesi, ses düzeyi, tını (Temiz/Elektro), ses cihazı, gecikme, kıvılcım efektleri, Test sesi çal |
