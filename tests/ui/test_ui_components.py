@@ -267,10 +267,8 @@ def test_settings_dialog_dataclass_and_dict_roundtrip() -> None:
     }
 
     dlg.set_values(custom_dict)
-    out_dict = dlg.get_values_dict()
     out_dataclass = dlg.get_settings()
 
-    assert out_dict == custom_dict
     assert out_dataclass.to_dict() == custom_dict
 
     # Test save signal emission

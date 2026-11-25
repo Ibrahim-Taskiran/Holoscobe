@@ -14,11 +14,10 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from handcontrol import diagnostics, logsetup
-from handcontrol.app import (Runtime, TapSink, acquire_single_instance, extend_controller_config,
-    settings_to_dialog_data, sound_kind_for)
+from handcontrol.app import Runtime, TapSink, acquire_single_instance, settings_to_dialog_data, sound_kind_for
 from handcontrol.config import Settings, SettingsStore, validate
 from handcontrol.contracts import Action, ActionKind
-from handcontrol.controller import ControllerConfig
+from handcontrol.pipeline import controller_config
 from handcontrol.dryrun import FakeDisplays, FakeVolume, FakeWindows
 from handcontrol.ui import UiBridge
 
@@ -45,7 +44,7 @@ def make(qt, tmp_path, settings=None, **kw) -> Runtime:
 # ---- mapping
 
 def test_controller_config_gets_schema3_fields() -> None:
-    cfg = extend_controller_config(ControllerConfig(), validate({'auto_pause_s': 15, 'dwell_click': True,
+    cfg = controller_config(validate({'auto_pause_s': 15, 'dwell_click': True,
         'dwell_ms': 800, 'swipe_profile': 'media'}))
     assert cfg.auto_pause_ms == 15000.0
     assert cfg.dwell_ms == 800.0 and cfg.dwell_click is True and cfg.swipe_profile == 'media'

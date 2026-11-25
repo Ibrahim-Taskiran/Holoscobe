@@ -42,6 +42,7 @@ from typing import Any, Callable, Optional
 from handcontrol.config import Settings
 from handcontrol.contracts import (
     ActionSink,
+    CANVAS_MODES,
     CameraState,
     Clock,
     ControlState,
@@ -107,11 +108,12 @@ def gesture_config(settings: Settings) -> GestureConfig:
     return GestureConfig(pinch_on_pu=settings.pinch_on_threshold, pinch_off_pu=settings.pinch_off_threshold)
 
 
-def controller_config(settings: Settings) -> ControllerConfig:
+def controller_config(settings: Settings, **fields: Any) -> ControllerConfig:
     base = ControllerConfig()
     s = settings.sensitivity if settings.sensitivity > 0 else 1.0
     mm = settings.monitor_mapping
     return ControllerConfig(
+        **fields,
         dominant=dominant_of(settings),
         mirror=settings.mirror_preview,
         calibration=calibration_rect(settings),
@@ -127,6 +129,10 @@ def controller_config(settings: Settings) -> ControllerConfig:
         # thumb+middle uses the same pinch thresholds as thumb+index
         right_pinch_on_pu=settings.pinch_on_threshold,
         right_pinch_off_pu=settings.pinch_off_threshold,
+        swipe_profile=settings.swipe_profile,
+        auto_pause_ms=settings.auto_pause_s * 1000.0,
+        dwell_click=settings.dwell_click,
+        dwell_ms=float(settings.dwell_ms),
     )
 
 
@@ -193,7 +199,7 @@ class Pipeline:
             events = pre + self.gestures.update(ff)
             self.last_features = ff
             self.last_events = tuple(events)
-            self.controller.set_menu_dwell(getattr(self.gestures, "menu_dwell_progress", 0.0))
+            self.controller.set_menu_dwell(self.gestures.menu_dwell_progress)
             self.controller.on_frame(ff, events)
             if self._frame_observers:
                 self._notify_observers(ff, self.last_events)
@@ -274,9 +280,7 @@ class Pipeline:
         mode changes made from any thread (the listener keeps _seen current)."""
         with self._flag_lock:
             mode = self._seen[1]
-        setter = getattr(self.gestures, "set_instrument_profile", None)
-        if setter is not None:
-            setter(mode in (Mode.INSTRUMENT, Mode.DRAWING))
+        self.gestures.set_instrument_profile(mode in CANVAS_MODES)
 
     def _take_pending_reset(self) -> list[GestureEvent]:
         with self._flag_lock:
@@ -301,7 +305,7 @@ class Pipeline:
 TWO_HAND_MODES = (Mode.ZOOM, Mode.INSTRUMENT)      # the second hand must be seen on its first frame
 
 
-class _MonotonicClock:
+class MonotonicClock:
     def now_ms(self) -> float:
         return time.monotonic() * 1000.0
 
@@ -360,7 +364,7 @@ def run_camera_pipeline(
     from handcontrol.camera import Camera, CameraConfig
     from handcontrol.tracking import HandTracker, TrackingLoop
 
-    clk = clock if clock is not None else _MonotonicClock()
+    clk = clock if clock is not None else MonotonicClock()
 
     def on_state(state: CameraState, message: Optional[str]) -> None:
         pipeline.set_camera_state(state)
@@ -369,6 +373,9 @@ def run_camera_pipeline(
                 on_error(message)
             except Exception:
                 pass
+
+    def on_loop_error(message: str) -> None:
+        on_state(CameraState.ERROR, message)
 
     if camera is None:
         cs = pipeline.settings.camera
@@ -381,14 +388,6 @@ def run_camera_pipeline(
         tracker = HandTracker(clock=clk, swap_handedness=swap_handedness,
                               pose_enabled=lambda: pipeline.controller.snapshot().mode is Mode.DRAWING,
                               fast_single_hand=lambda: pipeline.controller.snapshot().mode not in TWO_HAND_MODES)
-
-    def on_loop_error(message: str) -> None:
-        pipeline.set_camera_state(CameraState.ERROR)
-        if on_error is not None:
-            try:
-                on_error(message)
-            except Exception:
-                pass
 
     loop = TrackingLoop(camera, tracker, pipeline.process, clock=clk, on_error=on_loop_error,
                         idle=lambda: pipeline.controller.snapshot().state is ControlState.PAUSED)

@@ -416,7 +416,7 @@ def test_instrument_config_from_settings_and_dialog_round_trip():
     data = settings_to_dialog_data(s)
     assert isinstance(data, SettingsData) and data.instrument_chords == ("Am", "F", "C", "G")
     values = dialog_data_to_values({}, data)
-    assert values["instrument_chords"] == ["Am", "F", "C", "G"] and "audio_device_choices" not in values
+    assert list(values["instrument_chords"]) == ["Am", "F", "C", "G"] and "audio_device_choices" not in values
     back = validate({**values, "dominant_hand": "left"})
     for key in ("instrument_layout", "instrument_scale", "instrument_quantize", "instrument_chords",
                 "instrument_volume", "instrument_tone", "audio_device", "audio_latency", "instrument_particles"):

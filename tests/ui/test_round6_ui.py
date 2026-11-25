@@ -158,9 +158,9 @@ def test_sensitivity_preset_logic() -> None:
     dlg = SettingsDialog()
     assert dlg.current_preset() == "normal"
     assert dlg.combo_preset.currentText() == "Normal"
-    dlg.apply_preset("precise")
+    dlg._set_combo_by_data(dlg.combo_preset, "precise")
     assert (dlg.pointer_speed(), dlg.spin_sensitivity.value()) == (0.7, 0.8)
-    dlg.apply_preset("fast")
+    dlg._set_combo_by_data(dlg.combo_preset, "fast")
     assert (dlg.get_settings().pointer_speed, dlg.get_settings().pointer_sensitivity) == SENSITIVITY_PRESETS["fast"]
     dlg.slider_pointer_speed.setValue(dlg.slider_pointer_speed.value() + 1)   # user edit
     assert dlg.combo_preset.currentText() == "Özel"

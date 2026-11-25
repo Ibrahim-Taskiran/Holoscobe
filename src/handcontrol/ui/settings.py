@@ -6,8 +6,9 @@ plain dictionary (`dict[str, Any]`).
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Mapping, Optional, Sequence
+import math
+from dataclasses import asdict, dataclass, fields
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -27,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from handcontrol.contracts import Handedness, Mode
+from handcontrol.contracts import Mode
 from handcontrol.instrument.events import (
     CHORD_NAMES, DEFAULT_CHORDS, DEFAULT_FIXED_STRINGS, FIXED_STRINGS_RANGE, LATENCIES, LAYOUTS, SCALE_NAMES, TONES,
 )
@@ -113,11 +114,28 @@ def preset_for(pointer_speed: float, pointer_sensitivity: float) -> str:
     return "custom"
 
 
-def _int_or(value: Any, default: int) -> int:
+def _number_or(value: Any, default: float) -> float:
     try:
-        return int(value)
+        number = float(value)
     except (TypeError, ValueError):
         return default
+    return number if math.isfinite(number) else default
+
+
+_CHOICES: dict[str, tuple[str, ...]] = {
+    "camera_backend": ("media_foundation", "directshow"), "dominant_hand": ("right", "left"),
+    "pointer_mode": POINTER_MODES, "scroll_direction": ("natural", "reverse"), "zoom_direction": ("natural", "reverse"),
+    "default_mode": tuple(m.value for m in Mode), "monitor_mapping": ("all", "primary", "secondary"),
+    "swipe_profile": SWIPE_PROFILES, "instrument_layout": LAYOUTS, "instrument_scale": SCALE_NAMES,
+    "instrument_tone": TONES, "audio_latency": LATENCIES,
+}
+_RANGES: dict[str, tuple[float, float, int]] = {      # lowest, highest, digits (0: whole number)
+    "camera_index": (0, 16, 0), "pointer_sensitivity": (0.10, 3.00, 2), "smoothing_factor": (0.0, 1.0, 2),
+    "pointer_speed": (POINTER_SPEED_MIN, POINTER_SPEED_MAX, 1), "pinch_on_threshold": (0.10, 0.60, 2),
+    "pinch_off_threshold": (0.15, 0.85, 2), "detection_threshold": (0.10, 0.95, 2), "tracking_threshold": (0.10, 0.95, 2),
+    "auto_pause_s": (0, AUTO_PAUSE_MAX_S, 0), "dwell_ms": (DWELL_MS_MIN, DWELL_MS_MAX, 0),
+    "instrument_volume": (0.0, 1.0, 2), "instrument_fixed_strings": (*FIXED_STRINGS_RANGE, 0),
+}
 
 
 @dataclass(frozen=True)
@@ -181,157 +199,28 @@ class SettingsData:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SettingsData:
         """Construct SettingsData from a dictionary with safe fallbacks and clamping."""
-        defaults = cls()
-
-        raw_dom = data.get("dominant_hand", defaults.dominant_hand)
-        if isinstance(raw_dom, Handedness):
-            dom_str = raw_dom.value
-        else:
-            dom_str = str(raw_dom).lower()
-        if dom_str not in ("left", "right"):
-            dom_str = defaults.dominant_hand
-
-        raw_mode = data.get("default_mode", data.get("mode", defaults.default_mode))
-        if isinstance(raw_mode, Mode):
-            mode_str = raw_mode.value
-        else:
-            mode_str = str(raw_mode).lower()
-        valid_modes = {m.value for m in Mode}
-        if mode_str not in valid_modes:
-            mode_str = defaults.default_mode
-
-        scroll_dir = str(data.get("scroll_direction", defaults.scroll_direction)).lower()
-        if scroll_dir not in ("natural", "reverse"):
-            scroll_dir = defaults.scroll_direction
-
-        zoom_dir = str(data.get("zoom_direction", defaults.zoom_direction)).lower()
-        if zoom_dir not in ("natural", "reverse"):
-            zoom_dir = defaults.zoom_direction
-
-        mon_map = str(data.get("monitor_mapping", defaults.monitor_mapping)).lower()
-        if mon_map not in ("all", "primary", "secondary"):
-            mon_map = defaults.monitor_mapping
-
-        pointer_mode = str(data.get("pointer_mode", defaults.pointer_mode)).lower()
-        if pointer_mode not in POINTER_MODES:
-            pointer_mode = defaults.pointer_mode
-
-        try:
-            speed = float(data.get("pointer_speed", defaults.pointer_speed))
-        except (TypeError, ValueError):
-            speed = defaults.pointer_speed
-        if speed != speed:  # NaN
-            speed = defaults.pointer_speed
-        pointer_speed = round(max(POINTER_SPEED_MIN, min(POINTER_SPEED_MAX, speed)), 1)
-
-        backend = str(data.get("camera_backend", defaults.camera_backend)).lower()
-        if backend not in ("media_foundation", "directshow"):
-            backend = defaults.camera_backend
-
-        pinch_on = round(
-            max(0.10, min(0.60, float(data.get("pinch_on_threshold", defaults.pinch_on_threshold)))),
-            2,
-        )
-        pinch_off = round(
-            max(0.15, min(0.85, float(data.get("pinch_off_threshold", defaults.pinch_off_threshold)))),
-            2,
-        )
-
-        hotkey = str(data.get("emergency_hotkey", defaults.emergency_hotkey)).strip()
-        if not hotkey:
-            hotkey = defaults.emergency_hotkey
-
-        swipe = str(data.get("swipe_profile", defaults.swipe_profile)).lower()
-        if swipe not in SWIPE_PROFILES:
-            swipe = defaults.swipe_profile
-
-        auto_pause = max(0, min(AUTO_PAUSE_MAX_S, _int_or(data.get("auto_pause_s"), defaults.auto_pause_s)))
-        if 0 < auto_pause < 10:
-            auto_pause = 10
-
-        dwell_ms = max(DWELL_MS_MIN, min(DWELL_MS_MAX, _int_or(data.get("dwell_ms"), defaults.dwell_ms)))
-        dwell_ms = int(round(dwell_ms / _DWELL_UNIT_MS) * _DWELL_UNIT_MS)
-
-        layout = str(data.get("instrument_layout", defaults.instrument_layout)).lower()
-        if layout not in LAYOUTS:
-            layout = defaults.instrument_layout
-        scale = str(data.get("instrument_scale", defaults.instrument_scale))
-        if scale not in SCALE_NAMES:
-            scale = defaults.instrument_scale
-        tone = str(data.get("instrument_tone", defaults.instrument_tone)).lower()
-        if tone not in TONES:
-            tone = defaults.instrument_tone
-        latency = str(data.get("audio_latency", defaults.audio_latency)).lower()
-        if latency not in LATENCIES:
-            latency = defaults.audio_latency
-        try:
-            volume = float(data.get("instrument_volume", defaults.instrument_volume))
-        except (TypeError, ValueError):
-            volume = defaults.instrument_volume
-        if volume != volume:  # NaN
-            volume = defaults.instrument_volume
-        raw_dev = data.get("audio_device", defaults.audio_device)
-        device = raw_dev.strip()[:200] if isinstance(raw_dev, str) else ""
-        lo, hi = FIXED_STRINGS_RANGE
-        fixed_strings = max(lo, min(hi, _int_or(data.get("instrument_fixed_strings"),
-                                                defaults.instrument_fixed_strings)))
-        raw_choices = data.get("audio_device_choices", ())
-        choices = tuple(str(c) for c in raw_choices) if isinstance(raw_choices, (list, tuple)) else ()
-
-        return cls(
-            camera_index=max(0, int(data.get("camera_index", defaults.camera_index))),
-            camera_backend=backend,
-            mirror=bool(data.get("mirror", defaults.mirror)),
-            dominant_hand=dom_str,
-            pointer_sensitivity=round(
-                max(0.10, min(3.00, float(data.get("pointer_sensitivity", defaults.pointer_sensitivity)))),
-                2,
-            ),
-            smoothing_factor=round(
-                max(0.00, min(1.00, float(data.get("smoothing_factor", defaults.smoothing_factor)))),
-                2,
-            ),
-            pointer_mode=pointer_mode,
-            pointer_speed=pointer_speed,
-            pinch_on_threshold=pinch_on,
-            pinch_off_threshold=pinch_off,
-            detection_threshold=round(
-                max(0.10, min(0.95, float(data.get("detection_threshold", defaults.detection_threshold)))),
-                2,
-            ),
-            tracking_threshold=round(
-                max(0.10, min(0.95, float(data.get("tracking_threshold", defaults.tracking_threshold)))),
-                2,
-            ),
-            scroll_direction=scroll_dir,
-            zoom_direction=zoom_dir,
-            default_mode=mode_str,
-            emergency_hotkey=hotkey,
-            show_overlay=bool(data.get("show_overlay", defaults.show_overlay)),
-            show_feedback_osd=bool(data.get("show_feedback_osd", defaults.show_feedback_osd)),
-            show_mascot=bool(data.get("show_mascot", defaults.show_mascot)),
-            show_dry_run_panel=bool(data.get("show_dry_run_panel", defaults.show_dry_run_panel)),
-            monitor_mapping=mon_map,
-            start_with_windows=bool(data.get("start_with_windows", defaults.start_with_windows)),
-            swipe_profile=swipe,
-            auto_pause_s=auto_pause,
-            dwell_click=bool(data.get("dwell_click", defaults.dwell_click)),
-            dwell_ms=dwell_ms,
-            click_sound=bool(data.get("click_sound", defaults.click_sound)),
-            cursor_feedback=bool(data.get("cursor_feedback", defaults.cursor_feedback)),
-            instrument_layout=layout,
-            instrument_scale=scale,
-            instrument_quantize=bool(data.get("instrument_quantize", defaults.instrument_quantize)),
-            instrument_chords=_clean_chords(data.get("instrument_chords", defaults.instrument_chords)),
-            instrument_volume=round(max(0.0, min(1.0, volume)), 2),
-            instrument_tone=tone,
-            audio_device=device,
-            audio_latency=latency,
-            instrument_particles=bool(data.get("instrument_particles", defaults.instrument_particles)),
-            instrument_fixed_strings=fixed_strings,
-            instrument_free_snap=bool(data.get("instrument_free_snap", defaults.instrument_free_snap)),
-            audio_device_choices=choices,
-        )
+        raw = {"default_mode": data.get("mode", cls.default_mode), **data}
+        out: dict[str, Any] = {}
+        for f in fields(cls):
+            value = raw.get(f.name, f.default)
+            if f.name in _CHOICES:
+                value = str(getattr(value, "value", value)).lower()
+                out[f.name] = value if value in _CHOICES[f.name] else f.default
+            elif f.name in _RANGES:
+                lo, hi, digits = _RANGES[f.name]
+                number = max(lo, min(hi, _number_or(value, f.default)))
+                out[f.name] = round(number, digits) if digits else int(number)
+            elif isinstance(f.default, bool):
+                out[f.name] = bool(value)
+            elif isinstance(f.default, str):
+                out[f.name] = (value.strip()[:200] if isinstance(value, str) else "") or f.default
+        if 0 < out["auto_pause_s"] < 10:
+            out["auto_pause_s"] = 10
+        out["dwell_ms"] = round(out["dwell_ms"] / _DWELL_UNIT_MS) * _DWELL_UNIT_MS
+        out["instrument_chords"] = _clean_chords(raw.get("instrument_chords"))
+        choices = raw.get("audio_device_choices")
+        out["audio_device_choices"] = tuple(map(str, choices)) if isinstance(choices, (list, tuple)) else ()
+        return cls(**out)
 
 
 def _format_auto_pause(seconds: int) -> str:
@@ -344,7 +233,6 @@ class SettingsDialog(QDialog):
     """Settings window with a category sidebar: Genel, İmleç, Hareketler, Enstrüman, Gelişmiş."""
 
     settings_applied = Signal(object)       # SettingsData
-    settings_dict_applied = Signal(dict)    # dict[str, Any]
     export_settings_requested = Signal(str)  # target JSON path chosen in QFileDialog
     import_settings_requested = Signal(str)  # source JSON path chosen in QFileDialog
     diagnostics_requested = Signal()
@@ -361,27 +249,18 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._bridge = bridge
         self._syncing_preset = False
-        self._available_cameras: list[tuple[int, str]] = (
-            list(available_cameras)
-            if available_cameras
-            else [
-                (0, "Kamera 0 (Varsayılan)"),
-                (1, "Kamera 1 (Harici)"),
-                (2, "Kamera 2"),
-            ]
-        )
+        self._available_cameras = available_cameras or (
+            (0, "Kamera 0 (Varsayılan)"), (1, "Kamera 1 (Harici)"), (2, "Kamera 2"))
 
         self.setWindowTitle("Holoscobe — Ayarlar")
         theme.install()
         self.resize(940, 720)
         self.setMinimumSize(760, 520)
 
+        self._audio_device_choices: tuple[str, ...] = ()
+        self._fields: dict[str, QWidget] = {}          # SettingsData field -> control with the same value
         self._build_ui()
-
-        if initial is not None:
-            self.set_values(initial)
-        else:
-            self.set_values(SettingsData())
+        self.set_values(initial if initial is not None else SettingsData())
 
     # ---------- layout ----------
 
@@ -497,8 +376,42 @@ class SettingsDialog(QDialog):
             width = NUMBER_WIDTH
         card.add(SettingRow(title, description, control, width))
 
-    @staticmethod
-    def _slider_row(slider: QSlider, value: QLabel) -> QWidget:
+    def _combo(self, card: Card, field: str, title: str, description: str,
+               items: Iterable[tuple[str, Any]], width: int = 0) -> QComboBox:
+        """Row with a list; items are (text, value)."""
+        combo = ComboBox()
+        for text, value in items:
+            combo.addItem(text, value)
+        self._row(card, title, description, combo, width)
+        if field:
+            self._fields[field] = combo
+        return combo
+
+    def _toggle(self, card: Card, field: str, title: str, description: str, name: str = "") -> ToggleSwitch:
+        """Row with a switch; `name` is read out instead of the title."""
+        toggle = ToggleSwitch(name or title)
+        self._row(card, title, description, toggle)
+        self._fields[field] = toggle
+        return toggle
+
+    def _number(self, card: Card, field: str, title: str, description: str, step: float) -> QDoubleSpinBox:
+        spin = DoubleSpinBox()
+        spin.setDecimals(2)
+        spin.setRange(*_RANGES[field][:2])
+        spin.setSingleStep(step)
+        spin.setValue(getattr(SettingsData, field))
+        self._row(card, title, description, spin)
+        self._fields[field] = spin
+        return spin
+
+    def _slider(self, card: Card, title: str, description: str, lo: int, hi: int, step: int, page: int,
+                changed: Callable[..., None]) -> tuple[QSlider, QLabel]:
+        """Row with a slider and its value text, which `changed` keeps current."""
+        slider, value = QSlider(Qt.Orientation.Horizontal), QLabel()
+        slider.setRange(lo, hi)
+        slider.setSingleStep(step)
+        slider.setPageStep(page)
+        slider.valueChanged.connect(changed)
         value.setProperty("role", "value")
         value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         value.setFixedWidth(52)
@@ -509,53 +422,44 @@ class SettingsDialog(QDialog):
         row.addWidget(slider, 1)
         row.addWidget(value)
         box.setFixedWidth(CONTROL_WIDTH)
-        return box
+        self._row(card, title, description, box)
+        return slider, value
 
     def _build_general_tab(self) -> QWidget:
         page, layout = self._page("Genel")
 
         card = self._section(layout, "Kamera ve El")
-        self.combo_camera = ComboBox()
-        for idx, text in self._available_cameras:
-            self.combo_camera.addItem(text, idx)
-        self._row(card, "Kamera", "El hareketlerinin izlendiği kamera", self.combo_camera)
-        self.chk_mirror = ToggleSwitch("Önizleme ve eşlemeyi aynala")
-        self._row(card, "Ayna görüntüsü", "Önizleme ve eşlemeyi aynala", self.chk_mirror)
-        self.combo_dominant_hand = ComboBox()
-        self.combo_dominant_hand.addItem("Sağ El", "right")
-        self.combo_dominant_hand.addItem("Sol El", "left")
-        self._row(card, "Baskın el", "İmleci yöneten elin", self.combo_dominant_hand)
+        self.combo_camera = self._combo(card, "camera_index", "Kamera", "El hareketlerinin izlendiği kamera",
+                                        ((text, idx) for idx, text in self._available_cameras))
+        self.chk_mirror = self._toggle(card, "mirror", "Ayna görüntüsü", "Önizleme ve eşlemeyi aynala",
+                                       "Önizleme ve eşlemeyi aynala")
+        self.combo_dominant_hand = self._combo(card, "dominant_hand", "Baskın el", "İmleci yöneten elin",
+                                               (("Sağ El", "right"), ("Sol El", "left")))
 
         card = self._section(layout, "Kontrol")
-        self.combo_mode = ComboBox()
-        for mode in Mode:
-            self.combo_mode.addItem(create_mode_icon(mode, 16), MODE_LABELS_TR[mode], mode.value)
-        self._row(card, "Varsayılan mod", "Uygulama açılınca seçili olan mod", self.combo_mode)
-        self.combo_auto_pause = ComboBox()
-        for seconds, text in AUTO_PAUSE_CHOICES:
-            self.combo_auto_pause.addItem(text, seconds)
-        self._row(card, "Otomatik duraklat", "El bu süre görünmezse kontrol kendiliğinden duraklar.",
-                  self.combo_auto_pause)
-        self.edit_hotkey = QLineEdit("Ctrl+Alt+Shift+F12")
-        self.edit_hotkey.setPlaceholderText("Örn: Ctrl+Alt+Shift+F12")
+        self.combo_mode = self._combo(card, "default_mode", "Varsayılan mod", "Uygulama açılınca seçili olan mod",
+                                      ((MODE_LABELS_TR[mode], mode.value) for mode in Mode))
+        for i, mode in enumerate(Mode):
+            self.combo_mode.setItemIcon(i, create_mode_icon(mode, 16))
+        self.combo_auto_pause = self._combo(card, "", "Otomatik duraklat",
+                                            "El bu süre görünmezse kontrol kendiliğinden duraklar.",
+                                            ((text, seconds) for seconds, text in AUTO_PAUSE_CHOICES))
+        self.edit_hotkey = QLineEdit(SettingsData.emergency_hotkey)
+        self.edit_hotkey.setPlaceholderText(f"Örn: {SettingsData.emergency_hotkey}")
         self._row(card, "Acil durdurma kısayolu", "Tüm girdileri bırakır ve kontrolü duraklatır", self.edit_hotkey)
 
         card = self._section(layout, "Görünüm ve Sistem")
-        self.combo_monitor = ComboBox()
-        self.combo_monitor.addItem("Tüm Ekranlar (Sanal Masaüstü)", "all")
-        self.combo_monitor.addItem("Yalnız Birincil Ekran", "primary")
-        self.combo_monitor.addItem("Yalnız İkincil Ekran", "secondary")
-        self._row(card, "Monitör eşlemesi", "İmlecin gezebildiği ekranlar", self.combo_monitor)
-        self.chk_overlay = ToggleSwitch("Mod ve pencere eylem katmanını göster")
-        self._row(card, "Mod ve pencere eylem katmanını göster", "Mod çarkı, pencere menüsü ve durum göstergesi",
-                  self.chk_overlay)
-        self.chk_feedback = ToggleSwitch("Kısa durum bildirimlerini göster")
-        self._row(card, "Kısa durum bildirimlerini göster", "Mod değişince ya da kontrol açılınca kısa mesaj",
-                  self.chk_feedback)
-        self.chk_mascot = ToggleSwitch("Sağ alttaki kediyi göster")
-        self._row(card, "Sağ alttaki kediyi göster", "El hareketlerini taklit eden küçük kedi", self.chk_mascot)
-        self.chk_startup = ToggleSwitch("Windows açılışında otomatik başlat")
-        self._row(card, "Windows açılışında otomatik başlat", "Oturum açınca Holoscobe hazır olur", self.chk_startup)
+        self.combo_monitor = self._combo(card, "monitor_mapping", "Monitör eşlemesi", "İmlecin gezebildiği ekranlar", (
+            ("Tüm Ekranlar (Sanal Masaüstü)", "all"), ("Yalnız Birincil Ekran", "primary"),
+            ("Yalnız İkincil Ekran", "secondary")))
+        self.chk_overlay = self._toggle(card, "show_overlay", "Mod ve pencere eylem katmanını göster",
+                                        "Mod çarkı, pencere menüsü ve durum göstergesi")
+        self.chk_feedback = self._toggle(card, "show_feedback_osd", "Kısa durum bildirimlerini göster",
+                                         "Mod değişince ya da kontrol açılınca kısa mesaj")
+        self.chk_mascot = self._toggle(card, "show_mascot", "Sağ alttaki kediyi göster",
+                                       "El hareketlerini taklit eden küçük kedi")
+        self.chk_startup = self._toggle(card, "start_with_windows", "Windows açılışında otomatik başlat",
+                                        "Oturum açınca Holoscobe hazır olur")
 
         layout.addStretch(1)
         return page
@@ -564,55 +468,35 @@ class SettingsDialog(QDialog):
         page, layout = self._page("İmleç")
 
         card = self._section(layout, "Hareket")
-        self.combo_preset = ComboBox()
-        for key in (*SENSITIVITY_PRESETS, "custom"):
-            self.combo_preset.addItem(SENSITIVITY_PRESET_LABELS_TR[key], key)
+        self.combo_preset = self._combo(card, "", "Hassasiyet ön ayarı", "Hız ve hassasiyeti birlikte değiştirir", (
+            (SENSITIVITY_PRESET_LABELS_TR[key], key) for key in (*SENSITIVITY_PRESETS, "custom")))
         self.combo_preset.currentIndexChanged.connect(self._on_preset_selected)
-        self._row(card, "Hassasiyet ön ayarı", "Hız ve hassasiyeti birlikte değiştirir", self.combo_preset)
-
-        self.combo_pointer_mode = ComboBox()
-        for mode_key in POINTER_MODES:
-            self.combo_pointer_mode.addItem(POINTER_MODE_LABELS_TR[mode_key], mode_key)
-        self._row(card, "İmleç türü", "El hareketinin imlece nasıl aktarıldığı", self.combo_pointer_mode)
-
-        self.slider_pointer_speed = QSlider(Qt.Orientation.Horizontal)
-        self.slider_pointer_speed.setRange(round(POINTER_SPEED_MIN * _SPEED_STEPS),
-                                           round(POINTER_SPEED_MAX * _SPEED_STEPS))
-        self.slider_pointer_speed.setSingleStep(1)
-        self.slider_pointer_speed.setPageStep(1)
-        self.label_pointer_speed = QLabel()
-        self.slider_pointer_speed.valueChanged.connect(self._update_speed_label)
-        self._row(card, "İmleç hızı", "Yalnız göreli imleçte geçerli",
-                  self._slider_row(self.slider_pointer_speed, self.label_pointer_speed))
+        self.combo_pointer_mode = self._combo(card, "pointer_mode", "İmleç türü",
+                                              "El hareketinin imlece nasıl aktarıldığı",
+                                              ((POINTER_MODE_LABELS_TR[key], key) for key in POINTER_MODES))
+        self.slider_pointer_speed, self.label_pointer_speed = self._slider(
+            card, "İmleç hızı", "Yalnız göreli imleçte geçerli", round(POINTER_SPEED_MIN * _SPEED_STEPS),
+            round(POINTER_SPEED_MAX * _SPEED_STEPS), 1, 1, self._update_speed_label)
         self.set_pointer_speed(1.0)
-
-        self.spin_sensitivity = self._make_double_spin(0.10, 3.00, 0.05, 1.00)
+        self.spin_sensitivity = self._number(card, "pointer_sensitivity", "İmleç hassasiyeti",
+                                             "Büyük değer: küçük hareket daha uzağa gider", 0.05)
         self.spin_sensitivity.valueChanged.connect(self._sync_preset_from_values)
-        self._row(card, "İmleç hassasiyeti", "Büyük değer: küçük hareket daha uzağa gider", self.spin_sensitivity)
-
-        self.spin_smoothing = self._make_double_spin(0.00, 1.00, 0.05, 0.50)
-        self._row(card, "Yumuşatma oranı", "Büyük değer: daha az titreme, biraz daha gecikme", self.spin_smoothing)
+        self.spin_smoothing = self._number(card, "smoothing_factor", "Yumuşatma oranı",
+                                           "Büyük değer: daha az titreme, biraz daha gecikme", 0.05)
 
         card = self._section(layout, "Tıklama ve Geri Bildirim")
-        self.chk_dwell_click = ToggleSwitch("Bekleyerek tıkla (imleç sabit kalınca sol tık)")
+        self.chk_dwell_click = self._toggle(card, "dwell_click", "Bekleyerek tıkla", "İmleç sabit kalınca sol tık",
+                                            "Bekleyerek tıkla (imleç sabit kalınca sol tık)")
         self.chk_dwell_click.toggled.connect(self._update_dwell_enabled)
-        self._row(card, "Bekleyerek tıkla", "İmleç sabit kalınca sol tık", self.chk_dwell_click)
-
-        self.slider_dwell_ms = QSlider(Qt.Orientation.Horizontal)
-        self.slider_dwell_ms.setRange(DWELL_MS_MIN // _DWELL_UNIT_MS, DWELL_MS_MAX // _DWELL_UNIT_MS)
-        self.slider_dwell_ms.setSingleStep(2)
-        self.slider_dwell_ms.setPageStep(4)
-        self.label_dwell_ms = QLabel()
-        self.slider_dwell_ms.valueChanged.connect(self._update_dwell_label)
-        self._row(card, "Bekleme süresi", "İmlecin sabit kalması gereken süre",
-                  self._slider_row(self.slider_dwell_ms, self.label_dwell_ms))
+        self.slider_dwell_ms, self.label_dwell_ms = self._slider(
+            card, "Bekleme süresi", "İmlecin sabit kalması gereken süre", DWELL_MS_MIN // _DWELL_UNIT_MS,
+            DWELL_MS_MAX // _DWELL_UNIT_MS, 2, 4, self._update_dwell_label)
         self.set_dwell_ms(1000)
-
-        self.chk_click_sound = ToggleSwitch("Tık ve komutlarda kısa ses çal")
-        self._row(card, "Tık sesi", "Tık ve komutlarda kısa ses çal", self.chk_click_sound)
-        self.chk_cursor_feedback = ToggleSwitch("Basılı tutma sırasında imlecin yanında ilerleme halkası göster")
-        self._row(card, "İmleç halkası", "Basılı tutma sırasında imlecin yanında ilerleme halkası göster",
-                  self.chk_cursor_feedback)
+        self.chk_click_sound = self._toggle(card, "click_sound", "Tık sesi", "Tık ve komutlarda kısa ses çal",
+                                            "Tık ve komutlarda kısa ses çal")
+        self.chk_cursor_feedback = self._toggle(
+            card, "cursor_feedback", "İmleç halkası", "Basılı tutma sırasında imlecin yanında ilerleme halkası göster",
+            "Basılı tutma sırasında imlecin yanında ilerleme halkası göster")
 
         layout.addStretch(1)
         return page
@@ -621,29 +505,21 @@ class SettingsDialog(QDialog):
         page, layout = self._page("Hareketler")
 
         card = self._section(layout, "Pinch")
-        self.spin_pinch_on = self._make_double_spin(0.10, 0.60, 0.01, 0.33)
-        self._row(card, "Başlatma eşiği", "Parmaklar bu kadar yaklaşınca pinch başlar (avuç birimi)",
-                  self.spin_pinch_on)
-        self.spin_pinch_off = self._make_double_spin(0.15, 0.85, 0.01, 0.48)
-        self._row(card, "Bırakma eşiği", "Parmaklar bu kadar ayrılınca pinch biter (avuç birimi)",
-                  self.spin_pinch_off)
+        self.spin_pinch_on = self._number(card, "pinch_on_threshold", "Başlatma eşiği",
+                                          "Parmaklar bu kadar yaklaşınca pinch başlar (avuç birimi)", 0.01)
+        self.spin_pinch_off = self._number(card, "pinch_off_threshold", "Bırakma eşiği",
+                                           "Parmaklar bu kadar ayrılınca pinch biter (avuç birimi)", 0.01)
 
         card = self._section(layout, "Yönler ve Komutlar")
-        self.combo_scroll_dir = ComboBox()
-        self.combo_scroll_dir.addItem("Doğal (Yukarı = Yukarı)", "natural")
-        self.combo_scroll_dir.addItem("Ters (Yukarı = Aşağı)", "reverse")
-        self._row(card, "Kaydırma yönü", "Kaydırma modunda elin yönü", self.combo_scroll_dir)
-
-        self.combo_zoom_dir = ComboBox()
-        self.combo_zoom_dir.addItem("Doğal (Eller Açılınca Yakınlaş)", "natural")
-        self.combo_zoom_dir.addItem("Ters (Eller Açılınca Uzaklaş)", "reverse")
-        self._row(card, "Yakınlaştırma yönü", "Yakınlaştırma modunda ellerin yönü", self.combo_zoom_dir)
-
-        self.combo_swipe_profile = ComboBox()
-        for key, text in SWIPE_PROFILE_LABELS_TR.items():
-            self.combo_swipe_profile.addItem(text, key)
-        self._row(card, "Kaydırma profili", "Komutlar modunda sola/sağa kaydırmanın anlamı. Otomatik: ön plandaki "
-                  "uygulamaya göre seçilir (sunum, tarayıcı, medya ya da sanal masaüstleri).", self.combo_swipe_profile)
+        self.combo_scroll_dir = self._combo(card, "scroll_direction", "Kaydırma yönü", "Kaydırma modunda elin yönü", (
+            ("Doğal (Yukarı = Yukarı)", "natural"), ("Ters (Yukarı = Aşağı)", "reverse")))
+        self.combo_zoom_dir = self._combo(
+            card, "zoom_direction", "Yakınlaştırma yönü", "Yakınlaştırma modunda ellerin yönü", (
+                ("Doğal (Eller Açılınca Yakınlaş)", "natural"), ("Ters (Eller Açılınca Uzaklaş)", "reverse")))
+        self.combo_swipe_profile = self._combo(
+            card, "swipe_profile", "Kaydırma profili", "Komutlar modunda sola/sağa kaydırmanın anlamı. Otomatik: ön "
+            "plandaki uygulamaya göre seçilir (sunum, tarayıcı, medya ya da sanal masaüstleri).",
+            ((text, key) for key, text in SWIPE_PROFILE_LABELS_TR.items()))
 
         layout.addStretch(1)
         return page
@@ -651,69 +527,55 @@ class SettingsDialog(QDialog):
     def _build_instrument_tab(self) -> QWidget:
         page, layout = self._page("Enstrüman")
 
+        def named(keys: Sequence[str], labels: Mapping[str, str]) -> Iterable[tuple[str, str]]:
+            return ((labels.get(key, key), key) for key in keys)
+
         card = self._section(layout, "Çalış")
-        self.combo_instrument_layout = ComboBox()
-        for key in LAYOUTS:
-            self.combo_instrument_layout.addItem(INSTRUMENT_LAYOUT_LABELS_TR.get(key, key), key)
-        self._row(card, "Düzen", "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, tel eli "
-                  "yüksekliği akoru seçer. Sabit teller: teller ekranda durur, iki elle de çalınır. "
-                  "Serbest teller: telleri kendin çizersin, istediğin yere ve boyda.", self.combo_instrument_layout)
-        self.combo_instrument_scale = ComboBox()
-        for key in SCALE_NAMES:
-            self.combo_instrument_scale.addItem(INSTRUMENT_SCALE_LABELS_TR.get(key, key), key)
-        self._row(card, "Dizi", "Çalınabilecek notalar", self.combo_instrument_scale)
-        self.chk_instrument_quantize = ToggleSwitch("Diziye kilitle")
-        self._row(card, "Diziye kilitle", "Perdeler dizinin en yakın notasına oturur", self.chk_instrument_quantize)
+        self.combo_instrument_layout = self._combo(
+            card, "instrument_layout", "Düzen", "Solo: tek tel, eller arası uzaklık perdeyi belirler. Akor: dört tel, "
+            "tel eli yüksekliği akoru seçer. Sabit teller: teller ekranda durur, iki elle de çalınır. "
+            "Serbest teller: telleri kendin çizersin, istediğin yere ve boyda.",
+            named(LAYOUTS, INSTRUMENT_LAYOUT_LABELS_TR))
+        self.combo_instrument_scale = self._combo(card, "instrument_scale", "Dizi", "Çalınabilecek notalar",
+                                                  named(SCALE_NAMES, INSTRUMENT_SCALE_LABELS_TR))
+        self.chk_instrument_quantize = self._toggle(card, "instrument_quantize", "Diziye kilitle",
+                                                    "Perdeler dizinin en yakın notasına oturur")
 
         card = self._section(layout, "Teller")
         self.spin_instrument_fixed_strings = SpinBox()
         self.spin_instrument_fixed_strings.setRange(*FIXED_STRINGS_RANGE)
+        self._fields["instrument_fixed_strings"] = self.spin_instrument_fixed_strings
         self._row(card, "Tel sayısı (sabit)", "Sabit teller düzenindeki tel sayısı", self.spin_instrument_fixed_strings)
         card.add(self._hint(
             "Telleri taşımak ya da boyutlandırmak için: Enstrüman penceresinde fareyle sürükle (köşeden "
             "boyutlandır) ya da iki elinle çimdikle, yarım saniye tut, gerdir ve bırak."))
-        self.chk_instrument_free_snap = ToggleSwitch("Serbest tellerde hizalama yardımı")
-        self._row(card, "Serbest tellerde hizalama yardımı", "Açıksa yakın getirdiğin tel düzleşir ve diğer telin "
-                  "üstüne hizalanır; kapalıysa tel tam bıraktığın yerde kalır.", self.chk_instrument_free_snap)
+        self.chk_instrument_free_snap = self._toggle(
+            card, "instrument_free_snap", "Serbest tellerde hizalama yardımı", "Açıksa yakın getirdiğin tel düzleşir "
+            "ve diğer telin üstüne hizalanır; kapalıysa tel tam bıraktığın yerde kalır.")
         card.add(self._hint(
             "Serbest teller: boş yerde çimdikle, yarım saniye tut, çekerek tel çiz. Telin ucunu tutup boyutlandır, "
             "ortasından tutup taşı. İki elle bir telin iki ucunu tutabilirsin. Teli çok kısaltıp bırakırsan silinir."))
 
         card = self._section(layout, "Akorlar (Akor düzeni)")
-        self.combo_chords: list[QComboBox] = []
-        for zone_label in CHORD_ZONE_LABELS_TR:
-            combo = ComboBox()
-            for name in CHORD_NAMES:
-                combo.addItem(name, name)
-            self._row(card, zone_label, "", combo, NUMBER_WIDTH)
-            self.combo_chords.append(combo)
+        self.combo_chords = [self._combo(card, "", zone, "", ((name, name) for name in CHORD_NAMES), NUMBER_WIDTH)
+                             for zone in CHORD_ZONE_LABELS_TR]
 
         card = self._section(layout, "Ses")
-        self.slider_instrument_volume = QSlider(Qt.Orientation.Horizontal)
-        self.slider_instrument_volume.setRange(0, 100)
-        self.slider_instrument_volume.setSingleStep(5)
-        self.slider_instrument_volume.setPageStep(10)
-        self.label_instrument_volume = QLabel()
-        self.slider_instrument_volume.valueChanged.connect(self._update_volume_label)
-        self._row(card, "Ses düzeyi", "Enstrümanın sesi; sistem sesini değiştirmez",
-                  self._slider_row(self.slider_instrument_volume, self.label_instrument_volume))
-        self.combo_instrument_tone = ComboBox()
-        for key in TONES:
-            self.combo_instrument_tone.addItem(INSTRUMENT_TONE_LABELS_TR.get(key, key), key)
-        self._row(card, "Tını", "Telin ses rengi", self.combo_instrument_tone)
-        self.combo_audio_device = ComboBox()
-        self._row(card, "Ses cihazı", "Enstrümanın çaldığı çıkış", self.combo_audio_device)
+        self.slider_instrument_volume, self.label_instrument_volume = self._slider(
+            card, "Ses düzeyi", "Enstrümanın sesi; sistem sesini değiştirmez", 0, 100, 5, 10, self._update_volume_label)
+        self.combo_instrument_tone = self._combo(card, "instrument_tone", "Tını", "Telin ses rengi",
+                                                 named(TONES, INSTRUMENT_TONE_LABELS_TR))
+        self.combo_audio_device = self._combo(card, "", "Ses cihazı", "Enstrümanın çaldığı çıkış", ())
         self.btn_test_sound = button("Test sesi çal", "", "sound_test")
         self.btn_test_sound.clicked.connect(self.request_test_sound)
         self._row(card, "Cihazı dene", "Seçili cihazdan kısa bir nota çalar", self.btn_test_sound)
-        self.combo_audio_latency = ComboBox()
-        for key in LATENCIES:
-            self.combo_audio_latency.addItem(AUDIO_LATENCY_LABELS_TR.get(key, key), key)
-        self._row(card, "Gecikme", "Ses kesik kesik gelirse gecikmeyi Normal yapın.", self.combo_audio_latency)
+        self.combo_audio_latency = self._combo(card, "audio_latency", "Gecikme",
+                                               "Ses kesik kesik gelirse gecikmeyi Normal yapın.",
+                                               named(LATENCIES, AUDIO_LATENCY_LABELS_TR))
 
         card = self._section(layout, "Görünüm")
-        self.chk_instrument_particles = ToggleSwitch("Kıvılcım efektleri")
-        self._row(card, "Kıvılcım efektleri", "Tele vurunca kıvılcım saçar", self.chk_instrument_particles)
+        self.chk_instrument_particles = self._toggle(card, "instrument_particles", "Kıvılcım efektleri",
+                                                     "Tele vurunca kıvılcım saçar")
 
         layout.addStretch(1)
         return page
@@ -754,17 +616,14 @@ class SettingsDialog(QDialog):
         page, layout = self._page("Gelişmiş")
 
         card = self._section(layout, "Kamera ve Takip")
-        self.combo_backend = ComboBox()
-        self.combo_backend.addItem("Media Foundation (Önerilen)", "media_foundation")
-        self.combo_backend.addItem("DirectShow (Yedek)", "directshow")
-        self._row(card, "Kamera altyapısı", "Kamera açılmıyorsa diğerini dene", self.combo_backend)
-        self.spin_detection = self._make_double_spin(0.10, 0.95, 0.05, 0.55)
-        self._row(card, "Algılama güven eşiği", "Elin ilk bulunması için gereken güven", self.spin_detection)
-        self.spin_tracking = self._make_double_spin(0.10, 0.95, 0.05, 0.55)
-        self._row(card, "Takip güven eşiği", "Elin izlenmeye devam etmesi için gereken güven", self.spin_tracking)
-        self.chk_dry_run = ToggleSwitch("Dry-run komut panelini göster")
-        self._row(card, "Dry-run komut panelini göster", "Komutsuz denemede üretilecek komutları listeler",
-                  self.chk_dry_run)
+        self.combo_backend = self._combo(card, "camera_backend", "Kamera altyapısı", "Kamera açılmıyorsa diğerini dene", (
+            ("Media Foundation (Önerilen)", "media_foundation"), ("DirectShow (Yedek)", "directshow")))
+        self.spin_detection = self._number(card, "detection_threshold", "Algılama güven eşiği",
+                                           "Elin ilk bulunması için gereken güven", 0.05)
+        self.spin_tracking = self._number(card, "tracking_threshold", "Takip güven eşiği",
+                                          "Elin izlenmeye devam etmesi için gereken güven", 0.05)
+        self.chk_dry_run = self._toggle(card, "show_dry_run_panel", "Dry-run komut panelini göster",
+                                        "Komutsuz denemede üretilecek komutları listeler")
 
         card = self._section(layout, "Araçlar")
         self.btn_export = button("Ayarları dışa aktar…", "", "export")
@@ -789,20 +648,6 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         return page
 
-    @staticmethod
-    def _make_double_spin(
-        minimum: float,
-        maximum: float,
-        step: float,
-        value: float,
-    ) -> QDoubleSpinBox:
-        spin = DoubleSpinBox()
-        spin.setDecimals(2)
-        spin.setRange(minimum, maximum)
-        spin.setSingleStep(step)
-        spin.setValue(value)
-        return spin
-
     # ---------- pointer speed / preset ----------
 
     def pointer_speed(self) -> float:
@@ -822,10 +667,6 @@ class SettingsDialog(QDialog):
     def current_preset(self) -> str:
         """Selected Hassasiyet ön ayarı key: precise, normal, fast or custom."""
         return str(self.combo_preset.currentData() or "custom") if hasattr(self, "combo_preset") else "custom"
-
-    def apply_preset(self, key: str) -> None:
-        """Select a preset; non-custom presets set pointer_speed and pointer_sensitivity."""
-        self._set_combo_by_data(self.combo_preset, key)
 
     @Slot(int)
     def _on_preset_selected(self, _index: int) -> None:
@@ -918,106 +759,50 @@ class SettingsDialog(QDialog):
 
     def set_values(self, values: SettingsData | Mapping[str, Any]) -> None:
         """Populate UI controls from a SettingsData instance or dictionary."""
-        cfg = (
-            values
-            if isinstance(values, SettingsData)
-            else SettingsData.from_dict(values)
-        )
-        self._set_combo_by_data(self.combo_camera, cfg.camera_index)
-        self._set_combo_by_data(self.combo_backend, cfg.camera_backend)
-        self.chk_mirror.setChecked(cfg.mirror)
-        self._set_combo_by_data(self.combo_dominant_hand, cfg.dominant_hand)
-        self._set_combo_by_data(self.combo_pointer_mode, cfg.pointer_mode)
+        cfg = values if isinstance(values, SettingsData) else SettingsData.from_dict(values)
+        for name, control in self._fields.items():
+            value = getattr(cfg, name)
+            if isinstance(control, QComboBox):
+                self._set_combo_by_data(control, value)
+            elif isinstance(control, ToggleSwitch):
+                control.setChecked(value)
+            else:
+                control.setValue(value)
         self.set_pointer_speed(cfg.pointer_speed)
-        self.spin_sensitivity.setValue(cfg.pointer_sensitivity)
         self._sync_preset_from_values()
-        self.spin_smoothing.setValue(cfg.smoothing_factor)
-        self.spin_pinch_on.setValue(cfg.pinch_on_threshold)
-        self.spin_pinch_off.setValue(cfg.pinch_off_threshold)
-        self.spin_detection.setValue(cfg.detection_threshold)
-        self.spin_tracking.setValue(cfg.tracking_threshold)
-        self._set_combo_by_data(self.combo_scroll_dir, cfg.scroll_direction)
-        self._set_combo_by_data(self.combo_zoom_dir, cfg.zoom_direction)
-        self._set_combo_by_data(self.combo_mode, cfg.default_mode)
         self.edit_hotkey.setText(cfg.emergency_hotkey)
-        self.chk_overlay.setChecked(cfg.show_overlay)
-        self.chk_feedback.setChecked(cfg.show_feedback_osd)
-        self.chk_mascot.setChecked(cfg.show_mascot)
-        self.chk_dry_run.setChecked(cfg.show_dry_run_panel)
-        self._set_combo_by_data(self.combo_monitor, cfg.monitor_mapping)
-        self.chk_startup.setChecked(cfg.start_with_windows)
-        self._set_combo_by_data(self.combo_swipe_profile, cfg.swipe_profile)
         self._set_auto_pause(cfg.auto_pause_s)
-        self.chk_dwell_click.setChecked(cfg.dwell_click)
         self.set_dwell_ms(cfg.dwell_ms)
         self._update_dwell_enabled()
-        self.chk_click_sound.setChecked(cfg.click_sound)
-        self.chk_cursor_feedback.setChecked(cfg.cursor_feedback)
-        self._set_combo_by_data(self.combo_instrument_layout, cfg.instrument_layout)
-        self._set_combo_by_data(self.combo_instrument_scale, cfg.instrument_scale)
-        self.chk_instrument_quantize.setChecked(cfg.instrument_quantize)
         for combo, name in zip(self.combo_chords, _clean_chords(cfg.instrument_chords)):
             self._set_combo_by_data(combo, name)
-        self.slider_instrument_volume.setValue(round(max(0.0, min(1.0, cfg.instrument_volume)) * 100))
+        self.slider_instrument_volume.setValue(round(cfg.instrument_volume * 100))
         self._update_volume_label()
-        self._set_combo_by_data(self.combo_instrument_tone, cfg.instrument_tone)
         # An empty choice list (e.g. reset to defaults) keeps the devices already listed.
-        choices = cfg.audio_device_choices or getattr(self, "_audio_device_choices", ())
-        self._set_audio_devices(choices, cfg.audio_device)
-        self._set_combo_by_data(self.combo_audio_latency, cfg.audio_latency)
-        self.chk_instrument_particles.setChecked(cfg.instrument_particles)
-        self.spin_instrument_fixed_strings.setValue(int(cfg.instrument_fixed_strings))
-        self.chk_instrument_free_snap.setChecked(bool(cfg.instrument_free_snap))
+        self._set_audio_devices(cfg.audio_device_choices or self._audio_device_choices, cfg.audio_device)
 
     def get_settings(self) -> SettingsData:
         """Read current UI control values as a validated SettingsData instance."""
-        hotkey = self.edit_hotkey.text().strip() or "Ctrl+Alt+Shift+F12"
+        values: dict[str, Any] = {}
+        for name, control in self._fields.items():
+            if isinstance(control, QComboBox):
+                data = control.currentData()
+                values[name] = getattr(SettingsData, name) if data is None else data
+            elif isinstance(control, ToggleSwitch):
+                values[name] = control.isChecked()
+            else:
+                values[name] = round(control.value(), 2)
         return SettingsData(
-            camera_index=int(self.combo_camera.currentData() or 0),
-            camera_backend=str(self.combo_backend.currentData() or "media_foundation"),
-            mirror=bool(self.chk_mirror.isChecked()),
-            dominant_hand=str(self.combo_dominant_hand.currentData() or "right"),
-            pointer_mode=str(self.combo_pointer_mode.currentData() or "relative"),
+            **values,
             pointer_speed=self.pointer_speed(),
-            pointer_sensitivity=round(float(self.spin_sensitivity.value()), 2),
-            smoothing_factor=round(float(self.spin_smoothing.value()), 2),
-            pinch_on_threshold=round(float(self.spin_pinch_on.value()), 2),
-            pinch_off_threshold=round(float(self.spin_pinch_off.value()), 2),
-            detection_threshold=round(float(self.spin_detection.value()), 2),
-            tracking_threshold=round(float(self.spin_tracking.value()), 2),
-            scroll_direction=str(self.combo_scroll_dir.currentData() or "natural"),
-            zoom_direction=str(self.combo_zoom_dir.currentData() or "natural"),
-            default_mode=str(self.combo_mode.currentData() or Mode.POINTER.value),
-            emergency_hotkey=hotkey,
-            show_overlay=bool(self.chk_overlay.isChecked()),
-            show_feedback_osd=bool(self.chk_feedback.isChecked()),
-            show_mascot=bool(self.chk_mascot.isChecked()),
-            show_dry_run_panel=bool(self.chk_dry_run.isChecked()),
-            monitor_mapping=str(self.combo_monitor.currentData() or "all"),
-            start_with_windows=bool(self.chk_startup.isChecked()),
-            swipe_profile=str(self.combo_swipe_profile.currentData() or "auto"),
+            emergency_hotkey=self.edit_hotkey.text().strip() or SettingsData.emergency_hotkey,
             auto_pause_s=int(self.combo_auto_pause.currentData() or 0),
-            dwell_click=bool(self.chk_dwell_click.isChecked()),
             dwell_ms=self.dwell_ms(),
-            click_sound=bool(self.chk_click_sound.isChecked()),
-            cursor_feedback=bool(self.chk_cursor_feedback.isChecked()),
-            instrument_layout=str(self.combo_instrument_layout.currentData() or "free"),
-            instrument_scale=str(self.combo_instrument_scale.currentData() or "e_minor_pentatonic"),
-            instrument_quantize=bool(self.chk_instrument_quantize.isChecked()),
             instrument_chords=_clean_chords([c.currentData() for c in self.combo_chords]),
             instrument_volume=self.instrument_volume(),
-            instrument_tone=str(self.combo_instrument_tone.currentData() or "clean"),
             audio_device=self.selected_audio_device(),
-            audio_latency=str(self.combo_audio_latency.currentData() or "low"),
-            instrument_particles=bool(self.chk_instrument_particles.isChecked()),
-            instrument_fixed_strings=int(self.spin_instrument_fixed_strings.value()),
-            instrument_free_snap=bool(self.chk_instrument_free_snap.isChecked()),
-            audio_device_choices=tuple(getattr(self, "_audio_device_choices", ())),
+            audio_device_choices=self._audio_device_choices,
         )
-
-    def get_values_dict(self) -> dict[str, Any]:
-        """Read current UI control values as a plain dictionary."""
-        return self.get_settings().to_dict()
 
     @Slot()
     def reset_to_defaults(self) -> None:
@@ -1026,11 +811,9 @@ class SettingsDialog(QDialog):
 
     @Slot()
     def save_and_accept(self) -> SettingsData:
-        """Emit settings_applied / settings_dict_applied signals and close dialog."""
+        """Emit the settings and close the dialog."""
         data = self.get_settings()
-        as_dict = data.to_dict()
         self.settings_applied.emit(data)
-        self.settings_dict_applied.emit(as_dict)
         if self._bridge is not None:
             self._bridge.settings_saved.emit(data)
             self._bridge.update_status(
@@ -1041,6 +824,3 @@ class SettingsDialog(QDialog):
         self.accept()
         return data
 
-
-# Alias for convenience
-SettingsWindow = SettingsDialog

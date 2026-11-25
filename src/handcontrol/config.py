@@ -10,7 +10,7 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -164,6 +164,18 @@ def _chords(v: Any) -> list[str]:
     return [_exact(items[i] if i < len(items) else None, CHORD_NAMES, DEFAULT_CHORDS[i]) for i in range(4)]
 
 
+_CHOICES: dict[str, tuple[str, ...]] = {
+    "dominant_hand": HANDS, "pointer_mode": POINTER_MODES, "scroll_direction": DIRECTIONS, "zoom_direction": DIRECTIONS,
+    "default_mode": MODES, "swipe_profile": SWIPE_PROFILES, "instrument_layout": LAYOUTS, "instrument_tone": TONES,
+    "audio_latency": LATENCIES,
+}
+_RANGES: dict[str, tuple[float, float]] = {
+    "pinch_on_threshold": (0.05, 1.5), "pinch_off_threshold": (0.05, 2.0), "sensitivity": (0.2, 3.0),
+    "pointer_speed": (0.5, 2.0), "auto_pause_s": (0, 3600), "dwell_ms": (400, 3000), "instrument_volume": (0.0, 1.0),
+    "instrument_fixed_strings": FIXED_STRINGS_RANGE,
+}
+
+
 def validate(data: Any) -> Settings:
     """Build a valid Settings from arbitrary data; bad values fall back to defaults, ranges clamp."""
     d = _dict(data)
@@ -175,49 +187,28 @@ def validate(data: Any) -> Settings:
     c.height = _int(cd.get("height"), c.height, 120, 2160)
     c.fps = _int(cd.get("fps"), c.fps, 5, 120)
 
-    s.mirror_preview = _bool(d.get("mirror_preview"), s.mirror_preview)
-    s.dominant_hand = _choice(d.get("dominant_hand"), HANDS, s.dominant_hand)
-    on = _num(d.get("pinch_on_threshold"), s.pinch_on_threshold, 0.05, 1.5)
-    off = _num(d.get("pinch_off_threshold"), s.pinch_off_threshold, 0.05, 2.0)
-    if off <= on:  # hysteresis must be real
-        off = min(2.0, on + 0.05)
-        if off <= on:
-            on = off - 0.05
-    s.pinch_on_threshold, s.pinch_off_threshold = on, off
-    s.sensitivity = _num(d.get("sensitivity"), s.sensitivity, 0.2, 3.0)
-    s.pointer_mode = _choice(d.get("pointer_mode"), POINTER_MODES, s.pointer_mode)
-    s.pointer_speed = _num(d.get("pointer_speed"), s.pointer_speed, 0.5, 2.0)
-    s.scroll_direction = _choice(d.get("scroll_direction"), DIRECTIONS, s.scroll_direction)
-    s.zoom_direction = _choice(d.get("zoom_direction"), DIRECTIONS, s.zoom_direction)
-    s.default_mode = _choice(d.get("default_mode"), MODES, s.default_mode)
+    for f in fields(s):
+        default = getattr(s, f.name)
+        if isinstance(default, bool):
+            setattr(s, f.name, _bool(d.get(f.name), default))
+    for name, options in _CHOICES.items():
+        setattr(s, name, _choice(d.get(name), options, getattr(s, name)))
+    for name, (lo, hi) in _RANGES.items():
+        default = getattr(s, name)
+        setattr(s, name, (_int if isinstance(default, int) else _num)(d.get(name), default, lo, hi))
+    if s.pinch_off_threshold <= s.pinch_on_threshold:  # hysteresis must be real
+        s.pinch_off_threshold = min(2.0, s.pinch_on_threshold + 0.05)
+        if s.pinch_off_threshold <= s.pinch_on_threshold:
+            s.pinch_on_threshold = s.pinch_off_threshold - 0.05
     s.emergency_hotkey = normalize_hotkey(d.get("emergency_hotkey"))
-    s.overlay_visible = _bool(d.get("overlay_visible"), s.overlay_visible)
-    s.mascot_visible = _bool(d.get("mascot_visible"), s.mascot_visible)
-    s.start_with_windows = _bool(d.get("start_with_windows"), False)
-    s.swipe_profile = _choice(d.get("swipe_profile"), SWIPE_PROFILES, s.swipe_profile)
-    s.auto_pause_s = _int(d.get("auto_pause_s"), s.auto_pause_s, 0, 3600)
     if 0 < s.auto_pause_s < 10:
         s.auto_pause_s = 10
-    s.dwell_click = _bool(d.get("dwell_click"), s.dwell_click)
-    s.dwell_ms = _int(d.get("dwell_ms"), s.dwell_ms, 400, 3000)
-    s.click_sound = _bool(d.get("click_sound"), s.click_sound)
-    s.cursor_feedback = _bool(d.get("cursor_feedback"), s.cursor_feedback)
-    s.onboarding_done = _bool(d.get("onboarding_done"), s.onboarding_done)
-    s.instrument_layout = _choice(d.get("instrument_layout"), LAYOUTS, s.instrument_layout)
     s.instrument_scale = _exact(d.get("instrument_scale"), SCALE_NAMES, s.instrument_scale)
-    s.instrument_quantize = _bool(d.get("instrument_quantize"), s.instrument_quantize)
     s.instrument_chords = _chords(d.get("instrument_chords"))
-    s.instrument_volume = _num(d.get("instrument_volume"), s.instrument_volume, 0.0, 1.0)
-    s.instrument_tone = _choice(d.get("instrument_tone"), TONES, s.instrument_tone)
     dev = d.get("audio_device")
     s.audio_device = dev.strip()[:200] if isinstance(dev, str) else ""
-    s.audio_latency = _choice(d.get("audio_latency"), LATENCIES, s.audio_latency)
-    s.instrument_particles = _bool(d.get("instrument_particles"), s.instrument_particles)
     s.instrument_fixed_rect = list(normalize_fixed_rect(d.get("instrument_fixed_rect"), DEFAULT_FIXED_RECT))
     s.instrument_free_strings = [list(x) for x in normalize_free_strings(d.get("instrument_free_strings") or ())]
-    s.instrument_free_snap = _bool(d.get("instrument_free_snap"), s.instrument_free_snap)
-    s.instrument_fixed_strings = _int(d.get("instrument_fixed_strings"), s.instrument_fixed_strings,
-                                      *FIXED_STRINGS_RANGE)
 
     m, md = s.monitor_mapping, _dict(d.get("monitor_mapping"))
     m.mode = _choice(md.get("mode"), MONITOR_MODES, m.mode)
@@ -257,12 +248,8 @@ def _migrate_v2(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _migrate_v3(data: dict[str, Any]) -> dict[str, Any]:
-    """Schema 3 -> 4: Enstrüman mode fields only; validate() fills their defaults. Nothing else changes."""
-    return data
-
-
-MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1, 2: _migrate_v2, 3: _migrate_v3}
+# Schema 3 -> 4 only added fields: validate() fills their defaults.
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1, 2: _migrate_v2}
 
 
 def migrate(data: dict[str, Any]) -> dict[str, Any]:

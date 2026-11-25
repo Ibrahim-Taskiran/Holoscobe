@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import inspect
 import json
 import logging
 import os
 import sys
-import time
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -16,11 +14,13 @@ from typing import Any, Callable, Optional
 from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
-from handcontrol.config import SettingsStore, CalibrationBounds, validate, migrate
-from handcontrol.contracts import CameraState, ControlState, Mode
+from handcontrol.config import CalibrationBounds, Settings, SettingsStore, migrate, validate
+from handcontrol.contracts import CANVAS_MODES, CameraState, ControlState, Mode
 from handcontrol.controller import MenuKind
 from handcontrol.dryrun import DryRunSink, FakeVolume
-from handcontrol.pipeline import Pipeline, dominant_of, run_camera_pipeline
+from handcontrol.gestures import GestureRecognizer
+from handcontrol.pipeline import (MonotonicClock, Pipeline, calibration_rect, controller_config, dominant_of,
+    gesture_config, run_camera_pipeline)
 from handcontrol.telemetry import SessionRecorder, TelemetrySink
 from handcontrol.ui import (UiBridge, UiState, OverlayState, OverlayMenuKind,
     OverlayMenuItem, VirtualCursorState, HandControlTray,
@@ -29,11 +29,6 @@ from handcontrol.windows import (enable_per_monitor_v2, WindowsDisplayProvider,
     WindowsWindowQuery, WindowsVolumeControl, WindowsActionSink, WindowsHotkey, WindowsSession)
 from handcontrol.windows import startup as windows_startup
 from handcontrol.windows.hotkey import HotkeyConflictError
-
-
-class Clock:
-    def now_ms(self) -> float:
-        return time.monotonic() * 1000
 
 
 def hotkey_binding(text: str) -> tuple[int, int]:
@@ -67,24 +62,24 @@ def read_os_cursor(*, api: Any = None) -> Optional[tuple[int, int]]:
         return None
 
 
+log = logging.getLogger(__name__)
+
 STARTUP_SOURCE_TR = 'Windows ile başlatma yalnızca paketlenmiş sürümde kullanılabilir'
 STARTUP_FAILED_TR = 'Windows ile başlatma ayarı değiştirilemedi'
 
 
-SETTINGS_V3_KEYS = ('swipe_profile', 'auto_pause_s', 'dwell_click', 'dwell_ms', 'click_sound', 'cursor_feedback')
-# schema 4 (Enstrüman mode); SettingsData uses the same field names
-SETTINGS_V4_KEYS = ('instrument_layout', 'instrument_scale', 'instrument_quantize', 'instrument_chords',
-    'instrument_volume', 'instrument_tone', 'audio_device', 'audio_latency', 'instrument_particles',
-    'instrument_fixed_strings', 'instrument_free_snap')
+_DIRECTIONS = {'natural': 'normal', 'reverse': 'reversed'}           # dialog value -> stored value
+_BACKENDS = {'media_foundation': 'msmf', 'directshow': 'dshow'}
+_MONITORS = {'all': ('virtual_desktop', 0), 'primary': ('primary', 0), 'secondary': ('monitor', 1)}
+# dialog field -> stored field, where the values are the same
+_SAME = {f.name: f.name for f in fields(SettingsData) if f.name in {s.name for s in fields(Settings)} - {
+    'scroll_direction', 'zoom_direction', 'monitor_mapping', 'start_with_windows'}}
+_SAME |= {'mirror': 'mirror_preview', 'pointer_sensitivity': 'sensitivity', 'show_overlay': 'overlay_visible',
+    'show_mascot': 'mascot_visible'}
 
 
-def _dialog_keys(data) -> tuple[str, ...]:
-    """Schema 3 keys always (as before); schema 4 keys only when the dialog data has them."""
-    try:
-        known = {f.name for f in fields(data)}
-    except TypeError:          # plain objects (older callers): look the attributes up
-        known = {k for k in SETTINGS_V4_KEYS if hasattr(data, k)} | set(SETTINGS_V3_KEYS)
-    return SETTINGS_V3_KEYS + tuple(k for k in SETTINGS_V4_KEYS if k in known)
+def _key_of(table: dict, value, default: str) -> str:
+    return next((k for k, v in table.items() if v == value), default)
 
 
 def audio_device_names() -> tuple[str, ...]:
@@ -104,41 +99,22 @@ def settings_to_dialog_data(s, *, startup_enabled: bool | None = None) -> Settin
     """Map stored Settings to dialog values so saving does not reset untouched fields.
 
     startup_enabled overrides the stored flag with the real registry state when known."""
-    mm = s.monitor_mapping
-    monitor = ('primary' if mm.mode == 'primary' else 'secondary' if mm.mode == 'monitor' and mm.monitor_index == 1
-        else 'all')
-    data = SettingsData(mirror=s.mirror_preview, dominant_hand=s.dominant_hand,
-        camera_index=s.camera.index, camera_backend='directshow' if s.camera.backend == 'dshow' else 'media_foundation',
-        emergency_hotkey=s.emergency_hotkey, pinch_on_threshold=s.pinch_on_threshold,
-        pinch_off_threshold=s.pinch_off_threshold, pointer_sensitivity=s.sensitivity, default_mode=s.default_mode,
-        scroll_direction='reverse' if s.scroll_direction == 'reversed' else 'natural',
-        zoom_direction='reverse' if s.zoom_direction == 'reversed' else 'natural',
-        pointer_mode=s.pointer_mode, pointer_speed=s.pointer_speed,
-        show_overlay=s.overlay_visible, show_mascot=s.mascot_visible, monitor_mapping=monitor,
+    return SettingsData(**{k: getattr(s, stored) for k, stored in _SAME.items()},
+        camera_index=s.camera.index, camera_backend=_key_of(_BACKENDS, s.camera.backend, 'media_foundation'),
+        scroll_direction=_key_of(_DIRECTIONS, s.scroll_direction, 'natural'),
+        zoom_direction=_key_of(_DIRECTIONS, s.zoom_direction, 'natural'),
+        monitor_mapping=_key_of(_MONITORS, (s.monitor_mapping.mode, s.monitor_mapping.monitor_index),
+            'primary' if s.monitor_mapping.mode == 'primary' else 'all'),
         start_with_windows=s.start_with_windows if startup_enabled is None else startup_enabled)
-    values = {k: getattr(s, k) for k in _dialog_keys(data)}
-    if 'instrument_chords' in values:
-        values['instrument_chords'] = tuple(values['instrument_chords'])
-    return replace(data, **values)
 
 
 def dialog_data_to_values(values: dict, data) -> dict:
-    """Copy schema 3/4 dialog fields into a settings dict (only those the dialog provides)."""
-    for key in _dialog_keys(data):
-        values[key] = getattr(data, key)
-    if 'instrument_chords' in values:
-        values['instrument_chords'] = list(values['instrument_chords'])
+    """Write the dialog fields into a settings dict (validate() checks the result)."""
+    values.update({stored: getattr(data, k) for k, stored in _SAME.items()})
+    values.update(scroll_direction=_DIRECTIONS[data.scroll_direction], zoom_direction=_DIRECTIONS[data.zoom_direction],
+        monitor_mapping=dict(zip(('mode', 'monitor_index'), _MONITORS[data.monitor_mapping])))
+    values['camera'] = {**values.get('camera', {}), 'index': data.camera_index, 'backend': _BACKENDS.get(data.camera_backend, 'auto')}
     return values
-
-
-def extend_controller_config(cfg, settings):
-    """Add schema 3 behaviour fields to a ControllerConfig that supports them."""
-    known = {f.name for f in fields(cfg)}
-    extra = {'swipe_profile': getattr(settings, 'swipe_profile', 'auto'),
-        'auto_pause_ms': float(getattr(settings, 'auto_pause_s', 0)) * 1000.0,
-        'dwell_click': bool(getattr(settings, 'dwell_click', False)),
-        'dwell_ms': float(getattr(settings, 'dwell_ms', 1000))}
-    return replace(cfg, **{k: v for k, v in extra.items() if k in known})
 
 
 def snapshot_to_viewmodel(snapshot, *, dry_run: bool = True, mirrored: bool = True) -> UiState:
@@ -153,7 +129,7 @@ def snapshot_to_viewmodel(snapshot, *, dry_run: bool = True, mirrored: bool = Tr
             title='Mod Çarkı' if menu.kind == MenuKind.MODE else 'Pencere Eylemleri', items=items,
             cursor=VirtualCursorState(*menu.pointer, visible=True, hold_progress=menu.hold_progress),
             inactivity_ms=max(0, 5000 - menu.remaining_ms))
-    elif getattr(snapshot, "menu_dwell", 0.0) >= 0.2:          # V held: the ring that fills before the wheel opens
+    elif snapshot.menu_dwell >= 0.2:          # V held: the ring that fills before the wheel opens
         overlay = OverlayState(visible=True, kind=OverlayMenuKind.MODE_MENU,
             cursor=VirtualCursorState(hold_progress=snapshot.menu_dwell))
     return UiState(control_state=snapshot.state, camera_state=snapshot.camera_state,
@@ -212,7 +188,7 @@ class TapSink:
                 kind = getattr(action.kind, 'value', str(action.kind))
                 self._on_action(kind, int(action.x or 0), int(action.y or 0))
             except Exception:
-                logging.getLogger(__name__).debug('action tap failed', exc_info=True)
+                log.debug('action tap failed', exc_info=True)
         return result
 
     def __getattr__(self, name):
@@ -229,7 +205,7 @@ def fan_out(taps):
             try:
                 t(frame, capture_ms)
             except Exception:
-                logging.getLogger(__name__).debug('image tap failed', exc_info=True)
+                log.debug('image tap failed', exc_info=True)
     return tap
 
 
@@ -341,13 +317,9 @@ class Runtime(QObject):
             self.sink = EpochSink(inner, bridge)
             tap = TapSink(self.sink, self.action_performed.emit)
             pipeline_sink = TelemetrySink(tap, telemetry) if telemetry else tap
-            extra = {}
-            if self.process_names is not None and 'process_names' in inspect.signature(Pipeline.__init__).parameters:
-                extra['process_names'] = self.process_names
-            self.pipeline = Pipeline(Clock(), pipeline_sink, self.displays, self.windows, self.volume, self.settings,
-                cursor_source=self.cursor_source, **extra)
-            self.pipeline.controller._cfg = extend_controller_config(
-                replace(self.pipeline.controller.config, camera_error_paused=True), self.settings)
+            self.pipeline = Pipeline(MonotonicClock(), pipeline_sink, self.displays, self.windows, self.volume,
+                self.settings, cursor_source=self.cursor_source, process_names=self.process_names)
+            self.pipeline.controller._cfg = controller_config(self.settings, camera_error_paused=True)
             self.pipeline.controller.add_listener(self._on_snapshot)
             if telemetry:
                 telemetry.dominant = lambda: dominant_of(self.settings)
@@ -380,7 +352,7 @@ class Runtime(QObject):
         """Mode picked with the mouse (window button or tray)."""
         self._auto_resume = False
         self.pipeline.set_mode(mode)
-        if mode in (Mode.INSTRUMENT, Mode.DRAWING):
+        if mode in CANVAS_MODES:
             self.ensure_canvas_active()
         elif self._auto_active:                # the mouse is never taken over before the user resumes
             self.pipeline.pause()
@@ -389,7 +361,7 @@ class Runtime(QObject):
         """Choosing the instrument or drawing also starts it: these modes never send OS input, so nothing can
         go wrong on the desktop, and a paused canvas looks like a broken mode."""
         snap = self.pipeline.controller.snapshot()
-        if snap.mode not in (Mode.INSTRUMENT, Mode.DRAWING) or snap.state is not ControlState.PAUSED:
+        if snap.mode not in CANVAS_MODES or snap.state is not ControlState.PAUSED:
             return
         if snap.camera_state is CameraState.RUNNING:
             self._auto_active = self.pipeline.resume()
@@ -401,25 +373,24 @@ class Runtime(QObject):
     def update_instrument(self, values: dict) -> bool:
         """Instrument bar change: apply and save at once, without pausing or restarting the camera."""
         settings = validate({**asdict(self.settings), **values})
-        try:
-            self.store.save(settings)
-        except Exception:
-            logging.getLogger(__name__).warning('could not save instrument settings', exc_info=True)
         self.settings = self.pipeline.settings = settings
         if self.instrument is not None:
             self.instrument.apply_settings(settings)
-        self.settings_changed.emit(settings)
+        self._keep(settings)
         return True
 
-    def set_mascot(self, on: bool) -> None:
-        """Cat button or tray: apply and save at once, without pausing control."""
-        settings = replace(self.settings, mascot_visible=bool(on))
+    def _keep(self, settings) -> None:
+        """Save and use settings that change nothing in the running control."""
         try:
             self.store.save(settings)
         except Exception:
-            logging.getLogger(__name__).warning('could not save the mascot setting', exc_info=True)
+            log.warning('could not save the settings', exc_info=True)
         self.settings = self.pipeline.settings = settings
         self.settings_changed.emit(settings)
+
+    def set_mascot(self, on: bool) -> None:
+        """Cat button or tray: apply and save at once, without pausing control."""
+        self._keep(replace(self.settings, mascot_visible=bool(on)))
 
     def _emergency(self):
         self._auto_resume = False
@@ -454,7 +425,7 @@ class Runtime(QObject):
 
     def _try_auto_resume(self):
         snap = self.pipeline.controller.snapshot()
-        if snap.mode not in (Mode.INSTRUMENT, Mode.DRAWING) or snap.state is ControlState.ACTIVE:
+        if snap.mode not in CANVAS_MODES or snap.state is ControlState.ACTIVE:
             self._auto_resume = False
         elif snap.state is ControlState.PAUSED and snap.camera_state is CameraState.RUNNING:
             self._auto_resume = False
@@ -497,18 +468,8 @@ class Runtime(QObject):
 
     def save_settings(self, data):
         self.pipeline.pause('Ayarlar değiştirildi')
-        values = asdict(self.settings)
-        values.update(mirror_preview=data.mirror, dominant_hand=data.dominant_hand,
-            sensitivity=data.pointer_sensitivity, pinch_on_threshold=data.pinch_on_threshold,
-            pinch_off_threshold=data.pinch_off_threshold, default_mode=data.default_mode,
-            pointer_mode=data.pointer_mode, pointer_speed=data.pointer_speed,
-            emergency_hotkey=data.emergency_hotkey, overlay_visible=data.show_overlay,
-            mascot_visible=data.show_mascot, scroll_direction='reversed' if data.scroll_direction == 'reverse' else 'normal',
-            zoom_direction='reversed' if data.zoom_direction == 'reverse' else 'normal')
-        values['camera'].update(index=data.camera_index, backend={'media_foundation':'msmf', 'directshow':'dshow'}.get(data.camera_backend, 'auto'))
-        values['monitor_mapping'] = {'mode': 'primary' if data.monitor_mapping == 'primary' else 'monitor' if data.monitor_mapping == 'secondary' else 'virtual_desktop', 'monitor_index': 1 if data.monitor_mapping == 'secondary' else 0}
+        values = dialog_data_to_values(asdict(self.settings), data)
         values['start_with_windows'] = self._apply_startup(bool(data.start_with_windows))
-        dialog_data_to_values(values, data)
         self.apply_settings(validate(values))
 
     def apply_settings(self, settings) -> bool:
@@ -527,7 +488,7 @@ class Runtime(QObject):
             payload = json.dumps(asdict(validate(asdict(self.settings))), indent=2, ensure_ascii=False)
             Path(path).write_text(payload, encoding='utf-8')
         except Exception as exc:
-            logging.getLogger(__name__).warning('settings export failed: %s', exc)
+            log.warning('settings export failed: %s', exc)
             self.bridge.show_feedback(message=f'{EXPORT_FAILED_TR}: {exc}')
             return False
         self.bridge.show_feedback(message='Ayarlar dışa aktarıldı')
@@ -540,7 +501,7 @@ class Runtime(QObject):
                 raise ValueError('dosya bir ayar nesnesi değil')
             imported = validate(migrate(data))
         except Exception as exc:
-            logging.getLogger(__name__).warning('settings import failed: %s', exc)
+            log.warning('settings import failed: %s', exc)
             self.bridge.show_feedback(message=f'{IMPORT_FAILED_TR}: {exc}')
             return False
         self.pipeline.pause('Ayarlar içe aktarıldı')
@@ -562,7 +523,7 @@ class Runtime(QObject):
     @Slot(str, int, int)
     def _dispatch_action_listeners(self, kind, x, y):
         sound = sound_kind_for(kind)
-        if sound and getattr(self.settings, 'click_sound', False):
+        if sound and self.settings.click_sound:
             try:
                 player = self.sound_player
                 if player is None:
@@ -570,36 +531,24 @@ class Runtime(QObject):
                     player = player_module.play
                 player(sound)
             except Exception:
-                logging.getLogger(__name__).debug('click sound failed', exc_info=True)
+                log.debug('click sound failed', exc_info=True)
         for listener in list(self.action_listeners):
             try:
                 listener(kind, x, y)
             except Exception:
-                logging.getLogger(__name__).debug('action listener failed', exc_info=True)
+                log.debug('action listener failed', exc_info=True)
 
     def mark_onboarding_done(self) -> None:
-        if self.settings.onboarding_done:
-            return
-        settings = replace(self.settings, onboarding_done=True)
-        try:
-            self.store.save(settings)
-            self.settings = self.pipeline.settings = settings
-        except Exception:
-            logging.getLogger(__name__).warning('could not save onboarding flag', exc_info=True)
+        if not self.settings.onboarding_done:
+            self._keep(replace(self.settings, onboarding_done=True))
 
     def save_instrument_area(self, instrument_settings) -> None:
         """Keep the "Sabit teller" area the user placed (window drag or two-hand pinch)."""
         rect = list(instrument_settings.instrument_fixed_rect)
-        free = [list(s) for s in getattr(instrument_settings, 'instrument_free_strings', [])]
+        free = [list(s) for s in instrument_settings.instrument_free_strings]
         if list(self.settings.instrument_fixed_rect) == rect and self.settings.instrument_free_strings == free:
             return
-        settings = replace(self.settings, instrument_fixed_rect=rect, instrument_free_strings=free)
-        try:
-            self.store.save(settings)
-        except Exception:
-            logging.getLogger(__name__).warning('could not save the string area', exc_info=True)
-        self.settings = self.pipeline.settings = settings
-        self.settings_changed.emit(settings)
+        self._keep(replace(self.settings, instrument_fixed_rect=rect, instrument_free_strings=free))
 
     def build_diagnostics(self, dest_dir: Path | None = None) -> Path | None:
         from handcontrol import diagnostics, logsetup, telemetry as telemetry_module
@@ -615,7 +564,7 @@ class Runtime(QObject):
                 logs_dir=self.logs_dir or logsetup.default_logs_dir(),
                 telemetry_dir=telemetry_module.default_telemetry_dir(), extra=extra)
         except Exception as exc:
-            logging.getLogger(__name__).warning('diagnostics failed: %s', exc)
+            log.warning('diagnostics failed: %s', exc)
             self.bridge.show_feedback(message=f'Tanılama dosyası oluşturulamadı: {exc}')
             return None
 
@@ -637,23 +586,20 @@ class Runtime(QObject):
         return wanted
 
     def _replace_pipeline(self, settings):
-        from handcontrol.pipeline import controller_config, gesture_config, dominant_of, calibration_rect
         # Keep controller epoch monotonic; configuration changes happen while paused.
         camera_was_running = self.camera is not None
         previous_mode = self.pipeline.controller.snapshot().mode
         self.stop_camera()
         with self.pipeline._lock, self.pipeline.controller._lock:
             self.settings = self.pipeline.settings = settings
-            self.pipeline.controller._cfg = extend_controller_config(
-                replace(controller_config(settings), camera_error_paused=True), settings)
+            self.pipeline.controller._cfg = controller_config(settings, camera_error_paused=True)
             # Pipeline and controller are reused, not rebuilt: keep the real-cursor reader wired.
             self.pipeline.controller._cursor_source = self.cursor_source
             self.pipeline.controller.set_calibration(calibration_rect(settings))
-            from handcontrol.gestures import GestureRecognizer
             self.pipeline.gestures = GestureRecognizer(gesture_config(settings), dominant_of(settings))
             self.pipeline.request_gesture_reset(full=True)
             # Saving from the Enstrüman tab must not throw the user out of the instrument.
-            keep = previous_mode in (Mode.INSTRUMENT, Mode.DRAWING)
+            keep = previous_mode in CANVAS_MODES
             self.pipeline.set_mode(previous_mode if keep else Mode(settings.default_mode))
         if self.instrument is not None:
             self.instrument.apply_settings(settings)
@@ -685,7 +631,7 @@ class Runtime(QObject):
             try:
                 self.instrument.close()
             except Exception:
-                logging.getLogger(__name__).debug('instrument close failed', exc_info=True)
+                log.debug('instrument close failed', exc_info=True)
         if self.telemetry:
             self.telemetry.close()
         for service in (self.sink, self.hotkey, self.session, self.displays):
@@ -812,9 +758,8 @@ def main(argv=None) -> int:
         was_active = runtime.pipeline.controller.snapshot().state is ControlState.ACTIVE
         runtime.pipeline.pause('Ayarlar')
         s = runtime.settings
-        initial = settings_to_dialog_data(s, startup_enabled=runtime.startup_enabled())
-        if 'audio_device_choices' in {f.name for f in fields(initial)}:
-            initial = replace(initial, audio_device_choices=audio_device_names())
+        initial = replace(settings_to_dialog_data(s, startup_enabled=runtime.startup_enabled()),
+            audio_device_choices=audio_device_names())
         dialog = SettingsDialog(initial=initial, bridge=bridge, parent=window)
         wire_settings_dialog(dialog)
         dialog.exec()
@@ -822,29 +767,19 @@ def main(argv=None) -> int:
             runtime.ensure_canvas_active()     # Enstrüman/Çizim only; other modes stay paused
     onboarding_ref: list = []
     def open_onboarding():
-        try:
-            from handcontrol.ui.onboarding import OnboardingDialog
-        except ImportError:
-            return
-
+        from handcontrol.ui.onboarding import OnboardingDialog
         show_or_reuse_dialog(onboarding_ref, lambda: build_onboarding_dialog(OnboardingDialog, runtime, window, onboarding_ref, args.live))
-    def export_settings(path):
-        runtime.export_settings(path)
-    def import_settings(path):
-        runtime.import_settings(path)
     def diagnostics_zip():
         path = runtime.build_diagnostics()
         if path:
             tray.showMessage('Holoscobe', f'Tanılama dosyası hazır: {path}')
     def wire_settings_dialog(dialog):
-        for name, slot in (('export_settings_requested', export_settings), ('import_settings_requested', import_settings),
-                ('diagnostics_requested', diagnostics_zip), ('tutorial_requested', open_onboarding),
-                ('test_sound_requested', runtime.instrument.play_test_tone if runtime.instrument else None)):
-            if slot is None:
-                continue
-            signal = getattr(dialog, name, None)
-            if signal is not None:
-                signal.connect(slot)
+        dialog.export_settings_requested.connect(runtime.export_settings)
+        dialog.import_settings_requested.connect(runtime.import_settings)
+        dialog.diagnostics_requested.connect(diagnostics_zip)
+        dialog.tutorial_requested.connect(open_onboarding)
+        if runtime.instrument is not None:
+            dialog.test_sound_requested.connect(runtime.instrument.play_test_tone)
     bridge.tutorial_requested.connect(open_onboarding)
     if runtime.instrument is not None:
         def open_instrument():
@@ -864,7 +799,7 @@ def main(argv=None) -> int:
         runtime.settings_changed.connect(lambda s: mascot.set_enabled(s.mascot_visible))
         app.aboutToQuit.connect(mascot.close)
     except Exception:
-        logging.getLogger(__name__).exception('mascot unavailable')      # the cat must never stop the app
+        log.exception('mascot unavailable')      # the cat must never stop the app
     bridge.set_mascot_visible(runtime.settings.mascot_visible)
     runtime.settings_changed.connect(lambda s: bridge.set_mascot_visible(s.mascot_visible))
     bridge.mascot_toggle_requested.connect(runtime.set_mascot)
