@@ -58,7 +58,7 @@ def released_after_down(r: Rig) -> bool:
 def test_defaults_pinch_mouse_on_and_depth_tap_off():
     cfg = ControllerConfig()
     assert cfg.pinch_mouse is True and cfg.index_tap_click is False
-    assert cfg.tap_max_ms == 1500.0 and cfg.double_click_window_ms == 500.0
+    assert cfg.double_click_window_ms == 500.0
     assert cfg.mouse_drag_move_palm == 0.6 and cfg.right_hold_max_ms == 3000.0
 
 

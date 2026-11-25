@@ -26,23 +26,23 @@ from handcontrol.ui.calibration import (
     CalibrationStep,
     CalibrationWizard,
 )
-from handcontrol.ui.demo import build_synthetic_frame, build_synthetic_hand
+from ui_synth import build_synthetic_frame, build_synthetic_hand
 from handcontrol.ui.feedback import DryRunPanel, FeedbackToast
 from handcontrol.ui.overlay import (
     OverlayWindow,
-    compute_closing_progress,
 )
 from handcontrol.ui.preview import CameraPreviewWidget
 from handcontrol.ui.settings import SettingsData, SettingsDialog
 from handcontrol.ui.tray import HandControlTray, create_tray_pixmap
 from handcontrol.ui.viewmodel import (
-    FeedbackKind,
+    MODE_LABELS_TR,
+    OverlayMenuItem,
     OverlayMenuKind,
+    OverlayState,
     TrayIconState,
     UiBridge,
     UiState,
     VirtualCursorState,
-    WindowActionKind,
     resolve_tray_icon_state,
 )
 
@@ -159,11 +159,7 @@ def test_tray_menu_actions_emit_expected_signals() -> None:
     selected_modes: list[Mode] = []
 
     bridge.pause_resume_requested.connect(lambda: events.append("pause_resume"))
-    bridge.resume_requested.connect(lambda: events.append("resume"))
-    bridge.pause_requested.connect(lambda: events.append("pause"))
     bridge.camera_toggle_requested.connect(lambda: events.append("camera_toggle"))
-    bridge.camera_start_requested.connect(lambda: events.append("camera_start"))
-    bridge.camera_stop_requested.connect(lambda: events.append("camera_stop"))
     bridge.settings_requested.connect(lambda: events.append("settings"))
     bridge.calibration_requested.connect(lambda: events.append("calibrate"))
     bridge.exit_requested.connect(lambda: events.append("exit"))
@@ -171,24 +167,10 @@ def test_tray_menu_actions_emit_expected_signals() -> None:
 
     # Currently PAUSED and camera OFF
     tray.action_pause_resume.trigger()
-    assert "pause_resume" in events
-    assert "resume" in events
+    assert events == ["pause_resume"]
 
     tray.action_camera_toggle.trigger()
-    assert "camera_toggle" in events
-    assert "camera_start" in events
-
-    # Switch to ACTIVE + RUNNING and trigger again
-    events.clear()
-    bridge.update_status(
-        control_state=ControlState.ACTIVE,
-        camera_state=CameraState.RUNNING,
-    )
-    tray.action_pause_resume.trigger()
-    assert "pause" in events
-
-    tray.action_camera_toggle.trigger()
-    assert "camera_stop" in events
+    assert events == ["pause_resume", "camera_toggle"]
 
     tray.action_settings.trigger()
     assert "settings" in events
@@ -299,8 +281,8 @@ def test_settings_dialog_dataclass_and_dict_roundtrip() -> None:
     assert saved_payloads[0] == out_dataclass
 
 
-def test_overlay_window_flags_virtual_cursor_close_ring_and_timeout() -> None:
-    """OverlayWindow has non-focus/click-through flags, virtual cursor, 1s Close ring, and 5s timeout."""
+def test_overlay_window_flags_wheel_and_window_menu() -> None:
+    """OverlayWindow takes neither focus nor clicks and draws what the controller snapshot asks for."""
     overlay = OverlayWindow()
     flags = overlay.windowFlags()
 
@@ -313,50 +295,28 @@ def test_overlay_window_flags_virtual_cursor_close_ring_and_timeout() -> None:
     assert overlay.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     assert overlay.focusPolicy() == Qt.FocusPolicy.NoFocus
 
-    # Mode menu state & rendering
-    overlay.configure_mode_menu(
-        active_mode=Mode.POINTER,
-        hovered_mode=Mode.ZOOM,
-        cursor=VirtualCursorState(x=0.4, y=0.6, visible=True, pinching=True),
-    )
-    assert overlay.overlay_state.kind == OverlayMenuKind.MODE_MENU
-    assert len(overlay.overlay_state.items) == len(Mode)
-    img_mode = overlay.render_to_image()
-    assert not img_mode.isNull()
+    def picture(kind, items, **cursor):
+        overlay.apply_overlay_state(OverlayState(visible=True, kind=kind, items=items, inactivity_ms=1000.0,
+                                                 cursor=VirtualCursorState(visible=True, **cursor)))
+        return overlay.render_to_image(480, 460)
 
-    # Window action menu with 1-second Close hold progress ring
-    overlay.configure_window_action_menu(
-        hovered_action=WindowActionKind.CLOSE,
-        close_armed=True,
-        close_hold_progress=0.0,
-        multi_monitor=False,
-    )
-    assert overlay.overlay_state.kind == OverlayMenuKind.WINDOW_ACTION_MENU
-    # Single monitor disables "Move to other monitor"
-    move_item = next(
-        it for it in overlay.overlay_state.items
-        if it.item_id == WindowActionKind.MOVE_OTHER_MONITOR.value
-    )
-    assert move_item.enabled is False
+    modes = tuple(OverlayMenuItem(m.value, MODE_LABELS_TR[m], hovered=m is Mode.ZOOM) for m in Mode)
+    wheel = picture(OverlayMenuKind.MODE_MENU, modes, x=0.4, y=0.6)
+    assert not wheel.isNull() and wheel != picture(OverlayMenuKind.MODE_MENU, modes[:3], x=0.4, y=0.6)
 
-    overlay.set_close_hold_ms(650.0, total_ms=1000.0, armed=True)
-    assert overlay.close_hold_progress == pytest.approx(0.65)
-    img_win = overlay.render_to_image()
-    assert not img_win.isNull()
+    def close(progress):
+        return (OverlayMenuItem("maximize", "Büyüt"),
+                OverlayMenuItem("close", "Kapat", armed=True, hold_progress=progress))
+    assert picture(OverlayMenuKind.WINDOW_ACTION_MENU, close(0.2)) != picture(OverlayMenuKind.WINDOW_ACTION_MENU,
+                                                                              close(0.8))
 
-    # External 5-second inactivity timing and closing animation
-    assert compute_closing_progress(2500.0, 5000.0) == pytest.approx(0.0)
-    assert compute_closing_progress(4500.0, 5000.0) == pytest.approx(0.5)
-    assert compute_closing_progress(5000.0, 5000.0) == pytest.approx(1.0)
 
-    overlay.set_inactivity_time(4500.0, timeout_ms=5000.0)
-    assert overlay.closing_progress == pytest.approx(0.5)
-    assert overlay.effective_opacity == pytest.approx(0.5)
-    assert not overlay.is_expired
-
-    overlay.set_inactivity_time(5000.0, timeout_ms=5000.0)
-    assert overlay.closing_progress == pytest.approx(1.0)
-    assert overlay.is_expired
+def test_every_window_action_has_its_own_icon() -> None:
+    from handcontrol.controller import _WINDOW_ACTIONS
+    from handcontrol.ui import icons
+    from handcontrol.ui.overlay import _WINDOW_ICONS
+    assert set(_WINDOW_ICONS) == {*_WINDOW_ACTIONS, "close"}
+    assert len(set(_WINDOW_ICONS.values())) == 4 and set(_WINDOW_ICONS.values()) <= set(icons.ICONS)
 
 
 def test_preview_renders_0_1_2_hands_and_uncertain_fingers_without_crashing() -> None:
@@ -475,32 +435,18 @@ def test_calibration_wizard_steps_and_os_command_suppression() -> None:
 def test_feedback_toast_and_dry_run_panel() -> None:
     """FeedbackToast and DryRunPanel display Turkish texts, do not steal focus, and auto-dismiss."""
     bridge = UiBridge()
-    toast = FeedbackToast(bridge, auto_show_window=False, default_duration_ms=1500)
+    toast = FeedbackToast(bridge)
     dry_panel = DryRunPanel(bridge)
 
     assert bool(toast.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)
     assert bool(dry_panel.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)
 
-    toast.notify_activated()
-    assert toast.is_notification_active is True
-    assert "Etkinleşti" in toast.current_text
-
-    toast.notify_paused()
-    assert "Duraklatıldı" in toast.current_text
-
-    toast.notify_mode_changed(Mode.SCROLL)
-    assert "Kaydırma" in toast.current_text
-
-    toast.notify_volume(0.68)
-    assert "%68" in toast.current_text
-
-    toast.notify_close_confirmation(progress=0.5, confirmed=False)
-    assert "%50" in toast.current_text
-    assert not toast.render_to_image().isNull()
-
-    # Auto-dismiss after duration elapses
-    toast.advance_time(1500)
-    assert toast.is_notification_active is False
+    bridge.show_feedback("Ayarlar içe aktarıldı")
+    assert toast.current_message.text == "Ayarlar içe aktarıldı"
+    assert toast._active and toast._hide_timer.isActive()
+    shown = toast.render_to_image()
+    toast.dismiss()
+    assert not toast._active and toast.render_to_image() != shown
 
     # Dry-run panel formatting
     act = Action(
@@ -511,15 +457,5 @@ def test_feedback_toast_and_dry_run_panel() -> None:
         target=WindowTarget(hwnd=0x200, pid=1234),
     )
     bridge.record_dry_run_action(act)
-    assert dry_panel.current_command_text.startswith("Üretilecek komut:")
     assert "%80" in dry_panel.current_command_text
     assert not dry_panel.render_to_image().isNull()
-
-
-@pytest.mark.manual
-def test_manual_demo_showcase() -> None:
-    """Manual showcase test; skipped by default in automated runs."""
-    from handcontrol.ui.demo import DemoMainWindow
-
-    win = DemoMainWindow()
-    assert win is not None

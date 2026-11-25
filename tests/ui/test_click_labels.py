@@ -11,7 +11,6 @@ from handcontrol.ui.viewmodel import (
     GESTURE_GUIDE_TR,
     UiBridge,
     format_action_tr,
-    format_gesture_guide_tr,
 )
 
 
@@ -28,7 +27,7 @@ from handcontrol.ui.viewmodel import (
 def test_click_action_labels_and_dry_run_text(kind: ActionKind, label: str) -> None:
     assert ACTION_KIND_LABELS_TR[kind] == label
     text = format_action_tr(Action(kind=kind, epoch=1, capture_ms=0.0, x=120, y=340))
-    assert text == f"Üretilecek komut: {label} | konum=(120, 340)"
+    assert text == f"{label} | konum=(120, 340)"
 
 
 def test_every_action_kind_has_turkish_label() -> None:
@@ -36,7 +35,7 @@ def test_every_action_kind_has_turkish_label() -> None:
 
 
 def test_gesture_guide_lists_new_click_gestures() -> None:
-    text = format_gesture_guide_tr()
+    text = "\n".join(f"{g} → {r}" for g, r in GESTURE_GUIDE_TR)
     for needle in ("Sol tık", "Çift tık", "Sürükle", "Sağ tık", "orta parmak", "küçült", "geri aç"):
         assert needle in text
     # The unreliable index push click is no longer advertised.

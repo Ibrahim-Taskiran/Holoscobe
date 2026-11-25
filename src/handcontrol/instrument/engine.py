@@ -187,6 +187,19 @@ def _scale_ok(hand: HandFeatures) -> bool:
     return isinstance(s, (int, float)) and math.isfinite(s) and s > 0.0
 
 
+def _usable(frame: FrameFeatures) -> tuple[list[HandFeatures], bool]:
+    """Hands that may play or edit, and whether their identity is uncertain."""
+    hands = [x for x in frame.hands if x.quality is Quality.USABLE and _scale_ok(x)
+             and _px(x, INDEX_TIP, frame.width, frame.height) is not None]
+    return hands, frame.identity_ambiguous or len({x.hand_id for x in hands}) != len(hands)
+
+
+def _pinch_point(hand: HandFeatures, w: int, h: int) -> Optional[Vec]:
+    """Midpoint of the thumb and index tips (camera px)."""
+    a, b = _px(hand, THUMB_TIP, w, h), _px(hand, INDEX_TIP, w, h)
+    return None if a is None or b is None else lerp(a, b, 0.5)
+
+
 class InstrumentEngine:
     def __init__(self, config: InstrumentConfig = InstrumentConfig()) -> None:
         self._next_id = 1
@@ -253,6 +266,7 @@ class InstrumentEngine:
         w, h = frame.width, frame.height
         events: list[InstrumentEvent] = []
         hits: list[HitView] = []
+        gap, duplicate = self._timing(t)
 
         pick_label = cfg.dominant
         string_label = Handedness.LEFT if pick_label is Handedness.RIGHT else Handedness.RIGHT
@@ -278,10 +292,6 @@ class InstrumentEngine:
         ids = (s_hand.hand_id, p_hand.hand_id) if roles_ok else None   # type: ignore[union-attr]
         swapped = ids is not None and self._ids is not None and ids != self._ids
         self._ids = ids
-        gap = self._last_t is not None and t - self._last_t > cfg.max_gap_ms
-        duplicate = self._last_t is not None and t <= self._last_t
-        if not duplicate:
-            self._last_t = t
         safe = (roles_ok and geometry and tip is not None and not frame.identity_ambiguous and not swapped
                 and not gap and s_hand.quality is Quality.USABLE and p_hand.quality is Quality.USABLE  # type: ignore[union-attr]
                 and _scale_ok(p_hand))  # type: ignore[arg-type]
@@ -348,8 +358,15 @@ class InstrumentEngine:
                 if st is not None:
                     strikes.append(st)
             self._prev = _Prev(t, tip, lines_now)  # type: ignore[arg-type]
-            if strikes:
-                self._emit_strikes(strikes, layout, string_pitch, smooth, t, events, hits)
+            solo = cfg.layout == "solo"
+            index_of = {ln.slot: ln.index for ln in layout.lines}
+            midi_of = {slot: string_pitch[0 if solo else i] for slot, i in index_of.items()}
+            notes = self._emit(strikes, midi_of, t, events, hits, index_of, layout.down_sign)
+            if notes:
+                self._note_bend = 0.0
+                if solo:
+                    last = notes[-1]
+                    self._voice = _Voice(last.note_id, smooth if smooth is not None else last.midi, t)
         elif not duplicate:
             # unsafe or inactive: forget sides, require a fresh observation; sounding notes decay on
             for det in self._detectors:
@@ -398,13 +415,8 @@ class InstrumentEngine:
         w, h = frame.width, frame.height
         events: list[InstrumentEvent] = []
         hits: list[HitView] = []
-        gap = self._last_t is not None and t - self._last_t > cfg.max_gap_ms
-        duplicate = self._last_t is not None and t <= self._last_t
-        if not duplicate:
-            self._last_t = t
-        usable = [x for x in frame.hands
-                  if x.quality is Quality.USABLE and _scale_ok(x) and _px(x, INDEX_TIP, w, h) is not None]
-        ambiguous = frame.identity_ambiguous or len({x.hand_id for x in usable}) != len(usable)
+        gap, duplicate = self._timing(t)
+        usable, ambiguous = _usable(frame)
 
         if not duplicate:
             self._step_adjust(usable, t, w, h, active and not ambiguous and not gap)
@@ -416,29 +428,7 @@ class InstrumentEngine:
         playing = bool(active and safe and usable)
 
         if active and safe and not duplicate:
-            strikes: list[Strike] = []
-            seen = set()
-            for hand in usable:
-                tip = _px(hand, INDEX_TIP, w, h)
-                assert tip is not None
-                seen.add(hand.hand_id)
-                pick = self._picks.get(hand.hand_id)
-                if pick is None:
-                    pick = _Pick([CrossingDetector(k) for k in range(len(lines))], tip, t)
-                    self._picks[hand.hand_id] = pick
-                p_scale = float(hand.palm_scale_px)
-                for det in pick.detectors:
-                    line = lines[det.slot]
-                    st = det.update(line, line, pick.tip, tip, pick.t_ms, t, band_px=cfg.band_pu * p_scale,
-                                    end_margin=cfg.end_margin, pick_scale_px=p_scale,
-                                    min_speed_pu_s=cfg.min_speed_pu_s, cooldown_ms=cfg.cooldown_ms)
-                    if st is not None:
-                        strikes.append(st)
-                pick.tip, pick.t_ms = tip, t
-            for hid in [k for k in self._picks if k not in seen]:
-                del self._picks[hid]
-            if strikes:
-                self._emit_fixed(strikes, t, events, hits)
+            self._emit(self._pick_strikes(usable, lines, t, w, h), dict(enumerate(self._fixed_pitches)), t, events, hits)
         elif not duplicate:
             self._picks.clear()
 
@@ -456,12 +446,11 @@ class InstrumentEngine:
         strings = tuple(
             StringView(k, a, b, self._amplitude(k, t), names[k] if k < len(names) else "", playing)
             for k, (a, b) in enumerate(lines))
-        tips = [x for x in usable if x.handedness is cfg.dominant] or usable
-        tip = _px(tips[0], INDEX_TIP, w, h) if tips else None
+        tip, pick_id = self._shown_tip(usable, w, h)
         view = InstrumentView(
             t_ms=t, width=w, height=h, layout="fixed", strings=strings, hits=tuple(hits),
             note_label=self._note_name, chord_label="", playing=playing, status=status, pick_tip=tip,
-            pick_hand_id=tips[0].hand_id if tips else None, fixed_rect=self._rect, adjusting=adjusting,
+            pick_hand_id=pick_id, fixed_rect=self._rect, adjusting=adjusting,
         )
         return events, view
 
@@ -471,23 +460,15 @@ class InstrumentEngine:
         w, h = frame.width, frame.height
         events: list[InstrumentEvent] = []
         hits: list[HitView] = []
-        gap = self._last_t is not None and t - self._last_t > cfg.max_gap_ms
-        duplicate = self._last_t is not None and t <= self._last_t
-        if not duplicate:
-            self._last_t = t
-        usable = [x for x in frame.hands
-                  if x.quality is Quality.USABLE and _scale_ok(x) and _px(x, INDEX_TIP, w, h) is not None]
-        ambiguous = frame.identity_ambiguous or len({x.hand_id for x in usable}) != len(usable)
+        gap, duplicate = self._timing(t)
+        usable, ambiguous = _usable(frame)
         aspect = w / h if w > 0 and h > 0 else 4.0 / 3.0
 
         if not duplicate:
             pinches = []
             for x in frame.hands:        # a shaky hand may keep its pinch, only a USABLE one starts it
-                if not _scale_ok(x):
-                    continue
-                a, b = _px(x, THUMB_TIP, w, h), _px(x, INDEX_TIP, w, h)
-                if a is not None and b is not None and w > 0 and h > 0:
-                    m = lerp(a, b, 0.5)
+                m = _pinch_point(x, w, h) if _scale_ok(x) and w > 0 and h > 0 else None
+                if m is not None:
                     pinches.append(HandPinch(x.hand_id, (m[0] / w, m[1] / h), float(x.pinch_distance),
                                              x.quality is Quality.USABLE))
             self._edit = self._editor.step(self._free, pinches, t, aspect, cfg.free_snap,
@@ -507,33 +488,10 @@ class InstrumentEngine:
         safe = not ambiguous and not gap and not editing
         playing = bool(active and safe and usable and lines)
         pinched = self._editor.pinched_ids()
+        free_hands = [x for x in usable if x.hand_id not in pinched]    # a pinching hand is grabbing, not playing
 
         if active and safe and not duplicate:
-            strikes: list[Strike] = []
-            seen = set()
-            for hand in usable:
-                tip = _px(hand, INDEX_TIP, w, h)
-                assert tip is not None
-                if hand.hand_id in pinched:      # a pinching hand is grabbing, not playing
-                    continue
-                seen.add(hand.hand_id)
-                pick = self._picks.get(hand.hand_id)
-                if pick is None or len(pick.detectors) != len(lines):
-                    pick = _Pick([CrossingDetector(k) for k in range(len(lines))], tip, t)
-                    self._picks[hand.hand_id] = pick
-                p_scale = float(hand.palm_scale_px)
-                for det in pick.detectors:
-                    line = lines[det.slot]
-                    st = det.update(line, line, pick.tip, tip, pick.t_ms, t, band_px=cfg.band_pu * p_scale,
-                                    end_margin=cfg.end_margin, pick_scale_px=p_scale,
-                                    min_speed_pu_s=cfg.min_speed_pu_s, cooldown_ms=cfg.cooldown_ms)
-                    if st is not None:
-                        strikes.append(st)
-                pick.tip, pick.t_ms = tip, t
-            for hid in [k for k in self._picks if k not in seen]:
-                del self._picks[hid]
-            if strikes:
-                self._emit_by_pitch(strikes, pitch_of, t, events, hits)
+            self._emit(self._pick_strikes(free_hands, lines, t, w, h), pitch_of, t, events, hits)
         elif not duplicate:
             self._picks.clear()
 
@@ -556,39 +514,79 @@ class InstrumentEngine:
             StringView(k, a, b, self._amplitude(k, t), music.midi_to_name(pitch_of[k]) if k in pitch_of else "",
                        playing or k == active_idx)
             for k, (a, b) in enumerate(lines))
-        free_hands = [x for x in usable if x.hand_id not in pinched]
-        tips = [x for x in free_hands if x.handedness is cfg.dominant] or free_hands
-        tip = _px(tips[0], INDEX_TIP, w, h) if tips else None
+        tip, pick_id = self._shown_tip(free_hands, w, h)
         view = InstrumentView(
             t_ms=t, width=w, height=h, layout="free", strings=strings, hits=tuple(hits),
             note_label=self._note_name, chord_label="", playing=playing, status=status, pick_tip=tip,
-            pick_hand_id=tips[0].hand_id if tips else None, adjusting=editing, free_strings=shown,
+            pick_hand_id=pick_id, adjusting=editing, free_strings=shown,
             free_active=active_idx, free_snapped=bool(edit is not None and edit.snapped),
             free_pending=edit.pending if edit is not None else (),
             free_full=bool(edit is not None and edit.full),
         )
         return events, view
 
-    def _emit_by_pitch(self, strikes: list[Strike], pitch_of: dict[int, float], t: float,
-                       events: list[InstrumentEvent], hits: list[HitView]) -> None:
+    def _timing(self, t: float) -> tuple[bool, bool]:
+        """(gap since the last frame too long, duplicate or older frame)."""
+        last = self._last_t
+        duplicate = last is not None and t <= last
+        if not duplicate:
+            self._last_t = t
+        return last is not None and t - last > self._cfg.max_gap_ms, duplicate
+
+    def _shown_tip(self, hands: list[HandFeatures], w: int, h: int) -> tuple[Optional[Vec], Optional[int]]:
+        """Index tip and id of the hand to mark as the player, the dominant one first."""
+        hand = next((x for x in hands if x.handedness is self._cfg.dominant), hands[0] if hands else None)
+        return (None, None) if hand is None else (_px(hand, INDEX_TIP, w, h), hand.hand_id)
+
+    def _pick_strikes(self, hands: list[HandFeatures], lines: tuple[tuple[Vec, Vec], ...], t: float,
+                      w: int, h: int) -> list[Strike]:
+        """Strings on the screen: every given hand plays with its index tip, with its own detectors."""
         cfg = self._cfg
-        strikes.sort(key=lambda s: (s.t_ms, s.slot))
+        strikes: list[Strike] = []
+        for hand in hands:
+            tip = _px(hand, INDEX_TIP, w, h)
+            assert tip is not None
+            pick = self._picks.get(hand.hand_id)
+            if pick is None or len(pick.detectors) != len(lines):
+                pick = self._picks[hand.hand_id] = _Pick([CrossingDetector(k) for k in range(len(lines))], tip, t)
+            scale = float(hand.palm_scale_px)
+            for det in pick.detectors:
+                line = lines[det.slot]
+                st = det.update(line, line, pick.tip, tip, pick.t_ms, t, band_px=cfg.band_pu * scale,
+                                end_margin=cfg.end_margin, pick_scale_px=scale,
+                                min_speed_pu_s=cfg.min_speed_pu_s, cooldown_ms=cfg.cooldown_ms)
+                if st is not None:
+                    strikes.append(st)
+            pick.tip, pick.t_ms = tip, t
+        seen = {x.hand_id for x in hands}
+        self._picks = {k: p for k, p in self._picks.items() if k in seen}
+        return strikes
+
+    def _emit(self, strikes: list[Strike], midi_of: dict[int, float], t: float, events: list[InstrumentEvent],
+              hits: list[HitView], index_of: Optional[dict[int, int]] = None, down_sign: int = 1) -> list[NoteOn]:
+        """Strikes of one frame -> notes spread like a strum. `midi_of` and `index_of` go by detector slot;
+        a slot without a pitch stays silent."""
+        cfg = self._cfg
+        notes: list[NoteOn] = []
         delay = 0.0
         prev_t: Optional[float] = None
-        for st in strikes:
-            midi = pitch_of.get(st.slot)
+        for st in sorted(strikes, key=lambda s: (s.t_ms, s.slot)):
+            midi = midi_of.get(st.slot)
             if midi is None:
                 continue
             if prev_t is not None:
                 delay += min(cfg.strum_max_ms, max(cfg.strum_min_ms, st.t_ms - prev_t))
             prev_t = st.t_ms
-            vel = self._velocity(st.speed_pu_s, st.direction)
-            nid = self._next_id
+            idx = st.slot if index_of is None else index_of[st.slot]
+            direction = st.direction * down_sign
+            vel = self._velocity(st.speed_pu_s, direction)
+            notes.append(NoteOn(string=idx, midi=midi, velocity=vel, note_id=self._next_id, t_ms=t, delay_ms=delay))
             self._next_id += 1
-            events.append(NoteOn(string=st.slot, midi=midi, velocity=vel, note_id=nid, t_ms=t, delay_ms=delay))
-            hits.append(HitView(st.slot, st.point[0], st.point[1], vel, st.direction, t))
-            self._amps[st.slot] = (vel, t + delay)
+            hits.append(HitView(idx, st.point[0], st.point[1], vel, direction, t))
+            self._amps[idx] = (vel, t + delay)
             self._note_name = music.midi_to_name(midi)
+        events.extend(notes)
+        return notes
 
     def _step_adjust(self, usable: list[HandFeatures], t: float, w: int, h: int, allowed: bool) -> None:
         """Two-hand pinch: hold to grab the string area, move both hands to place/resize it, release."""
@@ -606,35 +604,11 @@ class InstrumentEngine:
             self._picks.clear()
         if not adj.engaged:
             return
-        pts = []
-        for x in pinched:
-            a, b = _px(x, THUMB_TIP, w, h), _px(x, INDEX_TIP, w, h)
-            if a is None or b is None:
-                return
-            pts.append(lerp(a, b, 0.5))
-        (ax, ay), (bx, by) = pts
+        pts = [_pinch_point(x, w, h) for x in pinched]
+        if None in pts:
+            return
+        (ax, ay), (bx, by) = pts  # type: ignore[misc]
         self._rect = normalize_fixed_rect((ax / w, ay / h, bx / w, by / h), self._rect)
-
-    def _emit_fixed(self, strikes: list[Strike], t: float, events: list[InstrumentEvent],
-                    hits: list[HitView]) -> None:
-        cfg = self._cfg
-        strikes.sort(key=lambda s: (s.t_ms, s.slot))
-        delay = 0.0
-        prev_t: Optional[float] = None
-        for st in strikes:
-            if st.slot >= len(self._fixed_pitches):
-                continue
-            if prev_t is not None:
-                delay += min(cfg.strum_max_ms, max(cfg.strum_min_ms, st.t_ms - prev_t))
-            prev_t = st.t_ms
-            vel = self._velocity(st.speed_pu_s, st.direction)
-            midi = self._fixed_pitches[st.slot]
-            nid = self._next_id
-            self._next_id += 1
-            events.append(NoteOn(string=st.slot, midi=midi, velocity=vel, note_id=nid, t_ms=t, delay_ms=delay))
-            hits.append(HitView(st.slot, st.point[0], st.point[1], vel, st.direction, t))
-            self._amps[st.slot] = (vel, t + delay)
-            self._note_name = music.midi_to_name(midi)
 
     # ------------------------------------------------------------------ helpers
 
@@ -646,31 +620,6 @@ class InstrumentEngine:
         if direction < 0:
             v *= cfg.upstroke_gain
         return min(1.0, max(0.0, v))
-
-    def _emit_strikes(self, strikes: list[Strike], layout: Layout, string_pitch: dict[int, float],
-                      smooth: Optional[float], t: float, events: list[InstrumentEvent],
-                      hits: list[HitView]) -> None:
-        cfg = self._cfg
-        strikes.sort(key=lambda s: (s.t_ms, s.slot))
-        delay = 0.0
-        prev_t: Optional[float] = None
-        for st in strikes:
-            if prev_t is not None:
-                delay += min(cfg.strum_max_ms, max(cfg.strum_min_ms, st.t_ms - prev_t))
-            prev_t = st.t_ms
-            idx = layout.lines[st.slot].index
-            direction = st.direction * layout.down_sign
-            vel = self._velocity(st.speed_pu_s, direction)
-            midi = string_pitch[0] if cfg.layout == "solo" else string_pitch[idx]
-            nid = self._next_id
-            self._next_id += 1
-            events.append(NoteOn(string=idx, midi=midi, velocity=vel, note_id=nid, t_ms=t, delay_ms=delay))
-            hits.append(HitView(idx, st.point[0], st.point[1], vel, direction, t))
-            self._amps[idx] = (vel, t + delay)
-            self._note_name = music.midi_to_name(midi)
-            self._note_bend = 0.0
-            if cfg.layout == "solo":
-                self._voice = _Voice(nid, smooth if smooth is not None else midi, t)
 
     def _amplitude(self, idx: int, t: float) -> float:
         a = self._amps.get(idx)

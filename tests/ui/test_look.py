@@ -62,7 +62,7 @@ def test_bridge_mascot_request_and_visibility() -> None:
     bridge.mascot_toggle_requested.connect(asked.append)
     bridge.mascot_visible_changed.connect(shown.append)
     assert bridge.mascot_visible is True
-    bridge.request_mascot(False)
+    bridge.mascot_toggle_requested.emit(False)
     assert asked == [False] and shown == [] and bridge.mascot_visible is True
     bridge.set_mascot_visible(False)
     assert shown == [False] and bridge.mascot_visible is False and asked == [False]

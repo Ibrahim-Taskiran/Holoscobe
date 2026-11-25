@@ -68,6 +68,10 @@ class Mode(Enum):
     DRAWING = "drawing"       # rotating 3D ink over the camera picture; never any OS input
 
 
+# These modes never send OS input: the hands play or draw inside the app.
+CANVAS_MODES = (Mode.INSTRUMENT, Mode.DRAWING)
+
+
 class KeyCommand(Enum):
     """Named keyboard/media commands. Action.command carries the .value; the sink owns the key mapping."""
     NEXT = "next"                         # Right arrow (slides, PDF, photos)

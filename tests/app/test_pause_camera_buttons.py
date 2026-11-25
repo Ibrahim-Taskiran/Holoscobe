@@ -33,9 +33,9 @@ def test_resume_button_resumes_and_pause_button_pauses(runtime, mode):
     runtime.pipeline.set_camera_state(CameraState.RUNNING)
     runtime.pipeline.set_mode(mode)
     assert state(runtime) is ControlState.PAUSED
-    runtime.bridge.request_pause_resume()
+    runtime.bridge.pause_resume_requested.emit()
     assert state(runtime) is ControlState.ACTIVE
-    runtime.bridge.request_pause_resume()
+    runtime.bridge.pause_resume_requested.emit()
     assert state(runtime) is ControlState.PAUSED
 
 
@@ -44,16 +44,16 @@ def camera_state(r):
 
 
 def test_camera_button_starts_and_stops(runtime):
-    runtime.bridge.request_camera_toggle()
+    runtime.bridge.camera_toggle_requested.emit()
     assert camera_state(runtime) is CameraState.STARTING and runtime.camera is not None
-    runtime.bridge.request_camera_toggle()
+    runtime.bridge.camera_toggle_requested.emit()
     assert camera_state(runtime) is CameraState.OFF and runtime.camera is None
 
 
 def test_camera_button_restarts_after_an_error(runtime):
-    runtime.bridge.request_camera_toggle()
+    runtime.bridge.camera_toggle_requested.emit()
     runtime.pipeline.set_camera_state(CameraState.ERROR)
-    runtime.bridge.request_camera_toggle()
+    runtime.bridge.camera_toggle_requested.emit()
     assert camera_state(runtime) is CameraState.STARTING and len(runtime.cameras) == 2
 
 
@@ -68,7 +68,7 @@ def test_desktop_mode_waits_for_the_user_after_an_automatic_canvas_start(runtime
 
 def test_control_resumed_by_the_user_survives_a_visit_to_a_canvas(runtime):
     runtime.pipeline.set_camera_state(CameraState.RUNNING)
-    runtime.bridge.request_pause_resume()
+    runtime.bridge.pause_resume_requested.emit()
     runtime.bridge.select_mode(Mode.DRAWING)
     runtime.bridge.select_mode(Mode.SCROLL)
     assert state(runtime) is ControlState.ACTIVE

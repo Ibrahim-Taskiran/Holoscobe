@@ -157,8 +157,7 @@ def snapshot_to_viewmodel(snapshot, *, dry_run: bool = True, mirrored: bool = Tr
         overlay = OverlayState(visible=True, kind=OverlayMenuKind.MODE_MENU,
             cursor=VirtualCursorState(hold_progress=snapshot.menu_dwell))
     return UiState(control_state=snapshot.state, camera_state=snapshot.camera_state,
-        mode=snapshot.mode, menu_items=overlay.items, virtual_cursor=overlay.cursor,
-        hold_progress=menu.hold_progress if menu else 0, overlay=overlay,
+        mode=snapshot.mode, overlay=overlay,
         error_text=snapshot.last_fault_reason or snapshot.notice, dry_run=dry_run, mirrored=mirrored)
 
 
@@ -369,8 +368,6 @@ class Runtime(QObject):
 
     def _connect(self):
         b, p = self.bridge, self.pipeline
-        # One click emits a toggle signal and a state-dependent one; the first already changes the state, so
-        # only the toggle may be connected, or the second one undoes it.
         b.pause_resume_requested.connect(self.toggle_pause)
         b.mode_selected.connect(self.select_mode)
         b.camera_toggle_requested.connect(self.toggle_camera)
@@ -848,9 +845,8 @@ def main(argv=None) -> int:
             signal = getattr(dialog, name, None)
             if signal is not None:
                 signal.connect(slot)
-    # The tray click emits both its own signal and bridge.tutorial_requested; connect only the bridge one.
     bridge.tutorial_requested.connect(open_onboarding)
-    if runtime.instrument is not None and hasattr(bridge, 'instrument_window_requested'):
+    if runtime.instrument is not None:
         def open_instrument():
             bridge.select_mode(Mode.INSTRUMENT)
             window.bring_up()

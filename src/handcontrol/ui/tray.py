@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QRectF, Qt, Signal, Slot
+from PySide6.QtCore import QRectF, Qt, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QMenu, QSystemTrayIcon, QWidget, QWidgetAction
 
@@ -18,7 +18,6 @@ from handcontrol.ui.viewmodel import (
     COMMANDS_GUIDE_TR,
     GESTURE_GUIDE_TR,
     MODE_LABELS_TR,
-    TRAY_ICON_STATE_LABELS_TR,
     TrayIconState,
     UiBridge,
     UiState,
@@ -61,15 +60,6 @@ def create_tray_icon(state: TrayIconState, size: int = 64) -> QIcon:
     return QIcon(create_tray_pixmap(state, size=size))
 
 
-# One accent for every mode: the glyph tells them apart, not the hue.
-MODE_ICON_COLORS: dict[Mode, QColor] = {mode: QColor(theme.ACCENT) for mode in Mode}
-
-
-def create_mode_pixmap(mode: Mode, size: int = 32, color: QColor | str = theme.TEXT) -> QPixmap:
-    """Stroke glyph of a mode on a transparent background."""
-    return icons.pixmap(icons.MODE_ICONS.get(mode, "info"), size, color)
-
-
 def create_mode_icon(mode: Mode, size: int = 32) -> QIcon:
     """QIcon for a Mode (tray mode menu, settings default-mode list); accent colored while checked."""
     return icons.icon(icons.MODE_ICONS.get(mode, "info"), size=size)
@@ -107,17 +97,13 @@ def _guide_title(text: str, parent: QMenu) -> QWidgetAction:
 class HandControlTray(QSystemTrayIcon):
     """System tray icon controller bound to a UiBridge."""
 
-    # Tray-level request signal ("Eğitimi başlat"); the same click also calls bridge.request_tutorial().
-    tutorial_requested = Signal()
-
     def __init__(
         self,
         bridge: UiBridge,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._bridge = bridge
-        self._icon_state: TrayIconState = TrayIconState.CAMERA_UNAVAILABLE
+        self.icon_state = TrayIconState.CAMERA_UNAVAILABLE
         self._active = False
         self._icon_cache: dict[TrayIconState, QIcon] = {
             st: create_tray_icon(st) for st in TrayIconState
@@ -149,7 +135,7 @@ class HandControlTray(QSystemTrayIcon):
             act = QAction(create_mode_icon(mode), MODE_LABELS_TR[mode], self.mode_menu)
             act.setCheckable(True)
             act.setData(mode)
-            act.triggered.connect(self._make_mode_trigger(mode))
+            act.triggered.connect(lambda _=False, m=mode: bridge.select_mode(m))
             self.mode_action_group.addAction(act)
             self.mode_menu.addAction(act)
             self.mode_actions[mode] = act
@@ -164,63 +150,30 @@ class HandControlTray(QSystemTrayIcon):
         for gesture, result in COMMANDS_GUIDE_TR:
             self.guide_menu.addAction(_guide_entry(gesture, result, self.guide_menu))
 
-        self.menu.addAction(self.action_pause_resume)
-        self.menu.addAction(self.action_camera_toggle)
-        self.menu.addSeparator()
-        self.menu.addMenu(self.mode_menu)
-        self.menu.addMenu(self.guide_menu)
-        self.menu.addAction(self.action_instrument_window)
-        self.menu.addAction(self.action_mascot)
-        self.menu.addSeparator()
-        self.menu.addAction(self.action_settings)
-        self.menu.addAction(self.action_calibrate)
-        self.menu.addAction(self.action_tutorial)
-        self.menu.addSeparator()
-        self.menu.addAction(self.action_exit)
-
+        for entry in (self.action_pause_resume, self.action_camera_toggle, None, self.mode_menu.menuAction(),
+                      self.guide_menu.menuAction(), self.action_instrument_window, self.action_mascot, None,
+                      self.action_settings, self.action_calibrate, self.action_tutorial, None, self.action_exit):
+            self.menu.addAction(entry) if entry is not None else self.menu.addSeparator()
         self.setContextMenu(self.menu)
 
-        # Wire menu actions to UiBridge request emitters
-        self.action_pause_resume.triggered.connect(self._bridge.request_pause_resume)
-        self.action_camera_toggle.triggered.connect(self._bridge.request_camera_toggle)
-        self.action_settings.triggered.connect(self._bridge.request_settings)
-        self.action_calibrate.triggered.connect(self._bridge.request_calibration)
-        self.action_exit.triggered.connect(self._bridge.request_exit)
-        self.action_instrument_window.triggered.connect(self._bridge.request_instrument_window)
-        self.action_tutorial.triggered.connect(self._on_tutorial)
-        self.action_mascot.triggered.connect(self._bridge.request_mascot)      # user clicks only
-        self._bridge.mascot_visible_changed.connect(self.action_mascot.setChecked)
+        self.action_pause_resume.triggered.connect(bridge.pause_resume_requested)
+        self.action_camera_toggle.triggered.connect(bridge.camera_toggle_requested)
+        self.action_settings.triggered.connect(bridge.settings_requested)
+        self.action_calibrate.triggered.connect(bridge.calibration_requested)
+        self.action_exit.triggered.connect(bridge.exit_requested)
+        self.action_instrument_window.triggered.connect(bridge.instrument_window_requested)
+        self.action_tutorial.triggered.connect(bridge.tutorial_requested)
+        self.action_mascot.triggered.connect(bridge.mascot_toggle_requested)      # user clicks only
+        bridge.mascot_visible_changed.connect(self.action_mascot.setChecked)
 
-        self._bridge.state_changed.connect(self.apply_state)
-        self.apply_state(self._bridge.state)
-
-    @Slot()
-    def _on_tutorial(self) -> None:
-        self.tutorial_requested.emit()
-        self._bridge.request_tutorial()
-
-    def _make_mode_trigger(self, mode: Mode):
-        def _on_triggered() -> None:
-            self._bridge.select_mode(mode)
-
-        return _on_triggered
-
-    @property
-    def icon_state(self) -> TrayIconState:
-        """Current tray icon state."""
-        return self._icon_state
-
-    @property
-    def state_label_tr(self) -> str:
-        """Turkish label for the current tray icon state."""
-        return TRAY_ICON_STATE_LABELS_TR[self._icon_state]
+        bridge.state_changed.connect(self.apply_state)
+        self.apply_state(bridge.state)
 
     @Slot(object)
     def apply_state(self, state: UiState) -> None:
         """Synchronize icon, tooltip, and menu labels with the given UiState."""
-        new_icon_state = state.tray_icon_state
-        self._icon_state = new_icon_state
-        self.setIcon(self._icon_cache[new_icon_state])
+        self.icon_state = state.tray_icon_state
+        self.setIcon(self._icon_cache[self.icon_state])
         self.setToolTip(state.tooltip_text)
 
         active = state.control_state is ControlState.ACTIVE
@@ -233,8 +186,3 @@ class HandControlTray(QSystemTrayIcon):
         mode_act = self.mode_actions.get(state.mode)
         if mode_act is not None and not mode_act.isChecked():
             mode_act.setChecked(True)
-
-
-# Alias for convenience
-SystemTray = HandControlTray
-TrayController = HandControlTray

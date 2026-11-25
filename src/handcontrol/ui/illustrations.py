@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from handcontrol.contracts import Mode
 from handcontrol.ui import icons, theme
+from handcontrol.ui.preview import paint_viewfinder
 
 # An open right hand in a unit square (MediaPipe landmark order).
 OPEN_HAND: tuple[tuple[float, float], ...] = (
@@ -35,17 +36,6 @@ def paint_hand(p: QPainter, rect: QRectF, color: str = theme.HAND_RIGHT, mirror:
     for i, pt in enumerate(pts):
         r = (6.4 if i in (0, 4, 8, 12, 16, 20) else 4.6) * k
         p.drawEllipse(pt, r, r)
-
-
-def _viewfinder(p: QPainter, box: QRectF, color: QColor, arm: float = 22.0) -> None:
-    """Three camera frame corners; the cat sits on the fourth."""
-    pen = QPen(color, 2.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    for c, sx, sy in ((box.topLeft(), 1, 1), (box.topRight(), -1, 1), (box.bottomLeft(), 1, -1)):
-        p.drawPolyline([QPointF(c.x(), c.y() + sy * arm), c, QPointF(c.x() + sx * arm, c.y())])
 
 
 class Illustration(QWidget):
@@ -79,7 +69,7 @@ class Illustration(QWidget):
         s = min(r.width(), r.height() * 0.84)
         c = QPointF(r.center().x(), r.center().y() - r.height() * 0.05)
         frame = QRectF(c.x() - s * 0.37, c.y() - s * 0.40, s * 0.74, s * 0.74)
-        _viewfinder(p, frame, theme.color(theme.TEXT, 0.55))
+        paint_viewfinder(p, frame, theme.color(theme.TEXT, 0.55), 2.6, 22.0, corners=3)      # the cat sits on the fourth
         paint_hand(p, frame.adjusted(s * 0.10, s * 0.06, -s * 0.10, -s * 0.10))
         cat = s * 0.46
         box = QRectF(r.right() - cat - s * 0.05, r.bottom() - cat - s * 0.03, cat, cat)

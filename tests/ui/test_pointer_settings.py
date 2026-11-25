@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from handcontrol.ui.settings import POINTER_MODE_LABELS_TR, SettingsData, SettingsDialog
-from handcontrol.ui.viewmodel import format_gesture_guide_tr
+from handcontrol.ui.viewmodel import GESTURE_GUIDE_TR
 
 
 def test_defaults_relative_speed_one_and_new_pinch_thresholds() -> None:
@@ -65,7 +65,7 @@ def test_from_dict_rejects_unknown_pointer_mode() -> None:
 
 
 def test_gesture_guide_describes_relative_pointer_and_clutch() -> None:
-    text = format_gesture_guide_tr()
+    text = "\n".join(f"{g} → {r}" for g, r in GESTURE_GUIDE_TR)
     for needle in ("İşaret açık, diğer parmaklar kapalı", "hızlı hareket uzağa", "yavaş hareket hassas",
                    "Eli aç", "kaldığı yerden devam", "imleç pinch sırasında durur", "belirgin aç",
                    "0,8 sn", "Başparmak, işaret ve orta parmak uçlarını birleştir",

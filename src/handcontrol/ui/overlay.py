@@ -1,24 +1,16 @@
-"""Transparent, frameless, always-on-top, non-focus-stealing, click-through overlay
-for the Mode Menu and Window Action Menu.
-
-Features:
-- Custom virtual cursor rendered via QPainter.
-- 1-second (1,000 ms) visible progress ring for the Close ("Kapat") action.
-- 5-second (5,000 ms) inactivity closing animation driven by external timing.
-"""
+"""Click-through windows over the desktop: mode wheel and window menu, status pill, cursor ring and command toast."""
 from __future__ import annotations
 
 import math
-from dataclasses import replace
 from typing import Callable, Optional
 
 from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Slot
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
-from handcontrol.contracts import Mode
 from handcontrol.ui import icons, theme
 from handcontrol.ui.dpi import physical_to_logical
+from handcontrol.ui.painted import ClickThroughWindow
 from handcontrol.ui.viewmodel import (
     COMMAND_TOAST_MS,
     CursorFeedbackState,
@@ -30,91 +22,7 @@ from handcontrol.ui.viewmodel import (
     OverlayState,
     UiBridge,
     VirtualCursorState,
-    WindowActionKind,
-    create_mode_menu_items,
-    create_window_action_menu_items,
 )
-
-CLOSE_HOLD_DURATION_MS: float = 1000.0
-INACTIVITY_TIMEOUT_MS: float = 5000.0
-CLOSING_ANIMATION_SPAN_MS: float = 1000.0
-
-
-def compute_closing_progress(
-    inactivity_ms: float,
-    timeout_ms: float = INACTIVITY_TIMEOUT_MS,
-    animation_span_ms: float = CLOSING_ANIMATION_SPAN_MS,
-) -> float:
-    """Compute [0.0, 1.0] closing animation progress from external inactivity timing.
-
-    Animation begins during the final `animation_span_ms` before `timeout_ms`
-    (e.g., from 4,000 ms to 5,000 ms for a 5-second timeout).
-    """
-    if timeout_ms <= 0.0:
-        return 1.0
-    if inactivity_ms >= timeout_ms:
-        return 1.0
-    start_ms = max(0.0, timeout_ms - max(1.0, animation_span_ms))
-    if inactivity_ms <= start_ms:
-        return 0.0
-    return max(0.0, min(1.0, (inactivity_ms - start_ms) / (timeout_ms - start_ms)))
-
-
-def build_mode_overlay_state(
-    active_mode: Mode = Mode.POINTER,
-    hovered_mode: Optional[Mode] = None,
-    hold_progress: float = 0.0,
-    cursor: Optional[VirtualCursorState] = None,
-    inactivity_ms: float = 0.0,
-    timeout_ms: float = INACTIVITY_TIMEOUT_MS,
-) -> OverlayState:
-    """Construct an OverlayState for the Mode Menu."""
-    closing = compute_closing_progress(inactivity_ms, timeout_ms)
-    return OverlayState(
-        visible=closing < 1.0,
-        kind=OverlayMenuKind.MODE_MENU,
-        title="Mod Seçimi Menüsü",
-        items=create_mode_menu_items(
-            active_mode=active_mode,
-            hovered_mode=hovered_mode,
-            hold_progress=hold_progress,
-        ),
-        cursor=cursor or VirtualCursorState(x=0.5, y=0.5, visible=True),
-        inactivity_ms=float(inactivity_ms),
-        timeout_ms=float(timeout_ms),
-        closing_progress=closing,
-    )
-
-
-def build_window_action_overlay_state(
-    hovered_action: Optional[WindowActionKind] = None,
-    close_armed: bool = False,
-    close_hold_progress: float = 0.0,
-    multi_monitor: bool = True,
-    cursor: Optional[VirtualCursorState] = None,
-    inactivity_ms: float = 0.0,
-    timeout_ms: float = INACTIVITY_TIMEOUT_MS,
-    target_window_title: str = "",
-) -> OverlayState:
-    """Construct an OverlayState for the Window Action Menu."""
-    closing = compute_closing_progress(inactivity_ms, timeout_ms)
-    return OverlayState(
-        visible=closing < 1.0,
-        kind=OverlayMenuKind.WINDOW_ACTION_MENU,
-        title="Pencere Eylemleri",
-        items=create_window_action_menu_items(
-            hovered_action=hovered_action,
-            close_armed=close_armed,
-            close_hold_progress=close_hold_progress,
-            multi_monitor=multi_monitor,
-        ),
-        cursor=cursor or VirtualCursorState(x=0.5, y=0.5, visible=True),
-        inactivity_ms=float(inactivity_ms),
-        timeout_ms=float(timeout_ms),
-        closing_progress=closing,
-        target_window_title=target_window_title,
-    )
-
 
 _INDICATOR_COLORS: dict[IndicatorKind, QColor] = {
     IndicatorKind.PAUSED: QColor(theme.WARNING),
@@ -131,10 +39,10 @@ _INDICATOR_ICONS: dict[IndicatorKind, str] = {
     IndicatorKind.PARKED: "hand",
 }
 _WINDOW_ICONS: dict[str, str] = {
-    WindowActionKind.MINIMIZE.value: "minimize",
-    WindowActionKind.MAXIMIZE_RESTORE.value: "maximize",
-    WindowActionKind.MOVE_OTHER_MONITOR.value: "move_monitor",
-    WindowActionKind.CLOSE.value: "close",
+    "minimize": "minimize",
+    "maximize": "maximize",
+    "other_monitor": "move_monitor",
+    "close": "close",
 }
 _LEFT = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 _CENTER = int(Qt.AlignmentFlag.AlignCenter)
@@ -142,7 +50,7 @@ _WHEEL_ICONS: dict[str, str] = {**{m.value: name for m, name in icons.MODE_ICONS
 ANIM_TICK_MS = 16
 
 
-class StatusIndicator(QWidget):
+class StatusIndicator(ClickThroughWindow):
     """Small always-on-top, click-through pill showing the one current pointer status."""
 
     def __init__(
@@ -152,22 +60,10 @@ class StatusIndicator(QWidget):
         auto_show_window: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-            | Qt.WindowType.WindowTransparentForInput
-        )
-        super().__init__(parent, flags)
+        super().__init__(300, 36, parent)
         self._enabled_fn = enabled_fn
         self._auto_show_window = bool(auto_show_window)
         self._state = IndicatorState()
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.resize(300, 36)
         if bridge is not None:
             bridge.indicator_updated.connect(self.apply_indicator)
 
@@ -194,22 +90,8 @@ class StatusIndicator(QWidget):
         self._state = state
         self.update()
 
-    def render_to_image(self) -> QImage:
-        image = QImage(self.width(), self.height(), QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(0)
-        painter = QPainter(image)
-        self._paint(painter)
-        painter.end()
-        return image
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        self._paint(painter)
-        painter.end()
-
-    def _paint(self, painter: QPainter) -> None:
+    def _paint(self, painter: QPainter, rect: QRectF) -> None:
         """Pill as wide as its text, flush with the right edge (the widget sits in the top right corner)."""
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         accent = self.color
         painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
         w = min(self.width() - 2.0, painter.fontMetrics().horizontalAdvance(self._state.text) + 54.0)
@@ -224,7 +106,7 @@ class StatusIndicator(QWidget):
         painter.drawText(box.adjusted(tile.width() + 12.0, 0, -8.0, 0), _LEFT, self._state.text)
 
 
-class OverlayWindow(QWidget):
+class OverlayWindow(ClickThroughWindow):
     """Frameless, transparent, always-on-top, non-focus, click-through overlay widget."""
 
     def __init__(
@@ -232,25 +114,8 @@ class OverlayWindow(QWidget):
         bridge: Optional[UiBridge] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-            | Qt.WindowType.WindowTransparentForInput
-        )
-        super().__init__(parent, flags)
-        self._bridge = bridge
-
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.resize(480, 460)
-
-        self._overlay_state: OverlayState = build_mode_overlay_state()
-        self._last_drawn_close_progress: float = 0.0
-        self._last_drawn_cursor_visible: bool = False
+        super().__init__(480, 460, parent)
+        self._overlay_state = OverlayState()
         self._hover: dict[str, float] = {}       # eased hover amount per item
         self._appear = 1.0
         self._still = False                      # render_to_image: no animation, final look
@@ -261,48 +126,12 @@ class OverlayWindow(QWidget):
         self._timer.setInterval(ANIM_TICK_MS)
         self._timer.timeout.connect(self._tick)
 
-        if self._bridge is not None:
-            self._bridge.overlay_updated.connect(self.apply_overlay_state)
+        if bridge is not None:
+            bridge.overlay_updated.connect(self.apply_overlay_state)
 
     @property
     def overlay_state(self) -> OverlayState:
         return self._overlay_state
-
-    @property
-    def virtual_cursor(self) -> VirtualCursorState:
-        return self._overlay_state.cursor
-
-    @property
-    def inactivity_ms(self) -> float:
-        return self._overlay_state.inactivity_ms
-
-    @property
-    def timeout_ms(self) -> float:
-        return self._overlay_state.timeout_ms
-
-    @property
-    def closing_progress(self) -> float:
-        return self._overlay_state.closing_progress
-
-    @property
-    def is_expired(self) -> bool:
-        return self._overlay_state.is_expired
-
-    @property
-    def effective_opacity(self) -> float:
-        return max(0.0, min(1.0, 1.0 - self._overlay_state.closing_progress))
-
-    @property
-    def effective_scale(self) -> float:
-        return max(0.80, min(1.0, 1.0 - 0.15 * self._overlay_state.closing_progress))
-
-    @property
-    def close_hold_progress(self) -> float:
-        """Return [0.0, 1.0] 1-second hold progress for the Close item."""
-        for item in self._overlay_state.items:
-            if item.item_id == WindowActionKind.CLOSE.value:
-                return item.hold_progress
-        return 0.0
 
     @Slot(object)
     def apply_overlay_state(self, state: OverlayState) -> None:
@@ -350,154 +179,16 @@ class OverlayWindow(QWidget):
         self._hover = {i.item_id: float(i.hovered) for i in self._overlay_state.items}
         self._animate(True)
 
-    def configure_mode_menu(
-        self,
-        active_mode: Mode = Mode.POINTER,
-        hovered_mode: Optional[Mode] = None,
-        hold_progress: float = 0.0,
-        cursor: Optional[VirtualCursorState] = None,
-        inactivity_ms: float = 0.0,
-        timeout_ms: float = INACTIVITY_TIMEOUT_MS,
-    ) -> OverlayState:
-        """Configure the overlay to display the Mode Menu."""
-        state = build_mode_overlay_state(
-            active_mode=active_mode,
-            hovered_mode=hovered_mode,
-            hold_progress=hold_progress,
-            cursor=cursor or self._overlay_state.cursor,
-            inactivity_ms=inactivity_ms,
-            timeout_ms=timeout_ms,
-        )
-        self.apply_overlay_state(state)
-        return state
-
-    def configure_window_action_menu(
-        self,
-        hovered_action: Optional[WindowActionKind] = None,
-        close_armed: bool = False,
-        close_hold_progress: float = 0.0,
-        multi_monitor: bool = True,
-        cursor: Optional[VirtualCursorState] = None,
-        inactivity_ms: float = 0.0,
-        timeout_ms: float = INACTIVITY_TIMEOUT_MS,
-        target_window_title: str = "",
-    ) -> OverlayState:
-        """Configure the overlay to display the Window Action Menu."""
-        state = build_window_action_overlay_state(
-            hovered_action=hovered_action,
-            close_armed=close_armed,
-            close_hold_progress=close_hold_progress,
-            multi_monitor=multi_monitor,
-            cursor=cursor or self._overlay_state.cursor,
-            inactivity_ms=inactivity_ms,
-            timeout_ms=timeout_ms,
-            target_window_title=target_window_title,
-        )
-        self.apply_overlay_state(state)
-        return state
-
-    def set_virtual_cursor(
-        self,
-        x: float,
-        y: float,
-        visible: bool = True,
-        pinching: bool = False,
-        hold_progress: float = 0.0,
-    ) -> None:
-        """Set virtual cursor coordinates (normalized [0, 1]) and state."""
-        cursor = VirtualCursorState(
-            x=max(0.0, min(1.0, float(x))),
-            y=max(0.0, min(1.0, float(y))),
-            visible=bool(visible),
-            pinching=bool(pinching),
-            hold_progress=max(0.0, min(1.0, float(hold_progress))),
-        )
-        self._overlay_state = replace(self._overlay_state, cursor=cursor)
-        self.update()
-
-    def set_close_hold_progress(
-        self,
-        progress: float,
-        armed: bool = True,
-    ) -> None:
-        """Update the 1-second Close confirmation ring progress in [0.0, 1.0]."""
-        clamped = max(0.0, min(1.0, float(progress)))
-        new_items: list[OverlayMenuItem] = []
-        for item in self._overlay_state.items:
-            if item.item_id == WindowActionKind.CLOSE.value:
-                label = "Kapat (1 sn Basılı Tutun)" if armed else "Kapat"
-                new_items.append(
-                    replace(
-                        item,
-                        label=label,
-                        armed=armed,
-                        hovered=True if clamped > 0.0 else item.hovered,
-                        hold_progress=clamped,
-                    )
-                )
-            else:
-                new_items.append(item)
-        self._overlay_state = replace(self._overlay_state, items=tuple(new_items))
-        self.update()
-
-    def set_close_hold_ms(
-        self,
-        elapsed_ms: float,
-        total_ms: float = CLOSE_HOLD_DURATION_MS,
-        armed: bool = True,
-    ) -> None:
-        """Update Close confirmation ring progress from elapsed milliseconds (1,000 ms default)."""
-        ratio = 1.0 if total_ms <= 0.0 else max(0.0, min(1.0, elapsed_ms / total_ms))
-        self.set_close_hold_progress(ratio, armed=armed)
-
-    def set_inactivity_time(
-        self,
-        inactivity_ms: float,
-        timeout_ms: float = INACTIVITY_TIMEOUT_MS,
-    ) -> None:
-        """Update inactivity elapsed time from external clock and compute closing animation."""
-        closing = compute_closing_progress(inactivity_ms, timeout_ms)
-        self._overlay_state = replace(
-            self._overlay_state,
-            inactivity_ms=max(0.0, float(inactivity_ms)),
-            timeout_ms=max(1.0, float(timeout_ms)),
-            closing_progress=closing,
-            visible=(closing < 1.0),
-        )
-        self.update()
-
     def render_to_image(self, width: int = 480, height: int = 360) -> QImage:
-        """Render the overlay into an offscreen ARGB32 QImage for verification."""
-        self.resize(width, height)
-        image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(image)
         self._still = True
-        self._paint_overlay(painter, QRectF(0.0, 0.0, float(width), float(height)))
+        image = super().render_to_image(width, height)
         self._still = False
-        painter.end()
         return image
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        self._paint_overlay(
-            painter,
-            QRectF(0.0, 0.0, float(self.width()), float(self.height())),
-        )
-        painter.end()
-
-    def _paint_overlay(self, painter: QPainter, rect: QRectF) -> None:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self._last_drawn_close_progress = 0.0
-        self._last_drawn_cursor_visible = False
-
-        opacity = self.effective_opacity
-        if opacity <= 0.001:
-            return
-
+    def _paint(self, painter: QPainter, rect: QRectF) -> None:
         appear = 1.0 if self._still or not self.isVisible() else 1.0 - (1.0 - self._appear) ** 3
-        painter.setOpacity(opacity * appear)
-        scale = self.effective_scale * (0.94 + 0.06 * appear)
+        painter.setOpacity(appear)
+        scale = 0.94 + 0.06 * appear
         if scale < 0.999:
             cx, cy = rect.center().x(), rect.center().y()
             painter.translate(cx, cy)
@@ -508,76 +199,30 @@ class OverlayWindow(QWidget):
             self._paint_wheel(painter, rect)
             return
 
-        panel_rect = rect.adjusted(16.0, 16.0, -16.0, -16.0)
-        theme.paint_glass(painter, panel_rect, 18.0, alpha=0.93, blur=14)
+        state = self._overlay_state
+        panel = rect.adjusted(16.0, 16.0, -16.0, -16.0)
+        theme.paint_glass(painter, panel, 18.0, alpha=0.93, blur=14)
 
-        # Header
         painter.setFont(theme.bold(15, True))
         painter.setPen(QColor(theme.TEXT))
-        title = self._overlay_state.title or "Menü Katmanı"
-        header_rect = QRectF(panel_rect.left() + 18.0, panel_rect.top() + 10.0, panel_rect.width() - 36.0, 26.0)
-        painter.drawText(header_rect, _LEFT, title)
-        if self._overlay_state.target_window_title:
-            x = painter.fontMetrics().horizontalAdvance(title) + 10.0
-            painter.setFont(theme.font(theme.TEXT_PX["body"]))
-            painter.setPen(QColor(theme.MUTED))
-            room = int(header_rect.width() - x - 110.0)
-            painter.drawText(header_rect.adjusted(x, 1.0, 0, 0), _LEFT, painter.fontMetrics().elidedText(
-                self._overlay_state.target_window_title, Qt.TextElideMode.ElideRight, room))
-
-        # Remaining time indicator (5-second timeout bar)
-        rem_ratio = max(
-            0.0,
-            min(
-                1.0,
-                1.0 - (self._overlay_state.inactivity_ms / max(1.0, self._overlay_state.timeout_ms)),
-            ),
-        )
-        rem_sec = max(0.0, (self._overlay_state.timeout_ms - self._overlay_state.inactivity_ms) / 1000.0)
+        header = QRectF(panel.left() + 18.0, panel.top() + 10.0, panel.width() - 36.0, 26.0)
+        painter.drawText(header, _LEFT, state.title or "Menü Katmanı")
+        left_ms = state.timeout_ms - state.inactivity_ms
         painter.setFont(theme.font(11))
         painter.setPen(QColor(theme.MUTED))
-        painter.drawText(
-            header_rect,
-            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-            f"Kapanma: {rem_sec:.1f} sn",
-        )
+        painter.drawText(header, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                         f"Kapanma: {max(0.0, left_ms / 1000.0):.1f} sn")
 
-        # Menu Items
-        items = self._overlay_state.items
-        if items:
-            top_y = header_rect.bottom() + 10.0
-            bottom_limit = panel_rect.bottom() - 26.0
-            avail_h = max(60.0, bottom_limit - top_y)
-            row_h = avail_h / len(items)
-            item_h = max(1.0, row_h - 8.0)
-
-            for idx, item in enumerate(items):
-                iy = top_y + idx * row_h
-                item_rect = QRectF(
-                    panel_rect.left() + 16.0,
-                    iy,
-                    panel_rect.width() - 32.0,
-                    item_h,
-                )
-                self._draw_menu_item(painter, item_rect, item)
-
-        # Bottom timeout bar
-        bar_rect = QRectF(
-            panel_rect.left() + 16.0,
-            panel_rect.bottom() - 15.0,
-            panel_rect.width() - 32.0,
-            4.0,
-        )
-        theme.paint_bar(painter, bar_rect, rem_ratio,
-                        theme.DANGER if self._overlay_state.closing_progress > 0.0 else theme.ACCENT)
-
-        # Draw custom virtual cursor on top
-        cursor = self._overlay_state.cursor
-        if cursor.visible:
-            self._last_drawn_cursor_visible = True
-            cursor_bounds = QRectF(panel_rect.left() + 16.0, top_y,
-                                   panel_rect.width() - 32.0, avail_h) if items else panel_rect
-            self._draw_virtual_cursor(painter, cursor_bounds, cursor)
+        rows = QRectF(panel.left() + 16.0, header.bottom() + 10.0, panel.width() - 32.0, 0.0)
+        rows.setHeight(max(60.0, panel.bottom() - 26.0 - rows.top()))
+        row_h = rows.height() / max(1, len(state.items))
+        for i, item in enumerate(state.items):
+            self._draw_menu_item(painter, QRectF(rows.left(), rows.top() + i * row_h, rows.width(),
+                                                 max(1.0, row_h - 8.0)), item)
+        theme.paint_bar(painter, QRectF(rows.left(), panel.bottom() - 15.0, rows.width(), 4.0),
+                        max(0.0, min(1.0, left_ms / max(1.0, state.timeout_ms))), theme.ACCENT)
+        if state.cursor.visible:
+            self._draw_virtual_cursor(painter, rows if state.items else panel, state.cursor)
 
     def _paint_wheel(self, painter: QPainter, rect: QRectF) -> None:
         """Mode wheel: slice i is centred i/n of a turn clockwise from the top (mode_wheel.py)."""
@@ -663,7 +308,6 @@ class OverlayWindow(QWidget):
                              "Elini bir dilime götür")
         cursor = state.cursor
         if cursor.visible:
-            self._last_drawn_cursor_visible = True
             at = QPointF(c.x() + (cursor.x - 0.5) * 2 * outer, c.y() + (cursor.y - 0.5) * 2 * outer)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(theme.color(theme.INK, 0.45))
@@ -678,66 +322,38 @@ class OverlayWindow(QWidget):
         item_rect: QRectF,
         item: OverlayMenuItem,
     ) -> None:
-        is_close = item.item_id == WindowActionKind.CLOSE.value
+        is_close = item.item_id == "close"
         hot = self._hover_of(item) if item.enabled else 0.0
         danger = is_close and (item.armed or item.hold_progress > 0.0)
         tone = theme.DANGER if danger else theme.ACCENT
         level = 1.0 if danger else hot
-        fill = theme.mix(theme.color(theme.WHITE, 0.05 if item.enabled else 0.02), theme.color(tone, 0.20), level)
-        edge = theme.mix(theme.color(theme.WHITE, 0.08), theme.color(tone, 0.85), level)
-        if item.active and not danger:
-            fill = theme.color(theme.ACCENT, 0.16)
-        painter.setPen(QPen(edge, 1.0 + 0.4 * level))
-        painter.setBrush(fill)
+        painter.setPen(QPen(theme.mix(theme.color(theme.WHITE, 0.08), theme.color(tone, 0.85), level), 1.0 + 0.4 * level))
+        painter.setBrush(theme.mix(theme.color(theme.WHITE, 0.05 if item.enabled else 0.02), theme.color(tone, 0.20),
+                                   level))
         painter.drawRoundedRect(item_rect, theme.RADIUS_L, theme.RADIUS_L)
 
-        text_color = QColor(theme.FAINT if not item.enabled else theme.TEXT)
-        mark = theme.mix(QColor(theme.FAINT if not item.enabled else theme.TEXT_SOFT), tone, level)
+        mark = theme.mix(QColor(theme.TEXT_SOFT if item.enabled else theme.FAINT), tone, level)
         icons.paint(painter, _WINDOW_ICONS.get(item.item_id, "windows"),
                     QRectF(item_rect.left() + 16.0, item_rect.center().y() - 11.0, 22.0, 22.0), mark)
-        strong = item.hovered or item.active or item.armed
+        strong = item.hovered or item.armed
         painter.setFont(theme.bold(theme.TEXT_PX["section"]) if strong else theme.font(theme.TEXT_PX["section"]))
-        painter.setPen(text_color)
-        label_text = f"{item.label} (Etkin)" if item.active and not is_close else item.label
-        painter.drawText(item_rect.adjusted(52.0, 0.0, -54.0, 0.0), _LEFT, label_text)
+        painter.setPen(QColor(theme.TEXT if item.enabled else theme.FAINT))
+        painter.drawText(item_rect.adjusted(52.0, 0.0, -54.0, 0.0), _LEFT, item.label)
+        if is_close:                                     # fills while the pinch confirms the close
+            theme.paint_ring(painter, QPointF(item_rect.right() - 28.0, item_rect.center().y()),
+                             min(13.0, item_rect.height() * 0.34), item.hold_progress, theme.DANGER, 3.0)
 
-        # 1-second visible progress ring for Close ("Kapat") or item hold progress
-        if is_close or item.hold_progress > 0.0 or item.armed:
-            prog = max(0.0, min(1.0, item.hold_progress))
-            if is_close:
-                self._last_drawn_close_progress = prog
-            ring_r = min(13.0, item_rect.height() * 0.34)
-            theme.paint_ring(painter, QPointF(item_rect.right() - 28.0, item_rect.center().y()), ring_r, prog,
-                             theme.DANGER if is_close else theme.ACCENT, 3.0)
-
-    def _draw_virtual_cursor(
-        self,
-        painter: QPainter,
-        bounds: QRectF,
-        cursor: VirtualCursorState,
-    ) -> None:
-        cx = bounds.left() + max(0.0, min(1.0, cursor.x)) * bounds.width()
-        cy = bounds.top() + max(0.0, min(1.0, cursor.y)) * bounds.height()
-        pt = QPointF(cx, cy)
-
-        outer_r = 13.0 if cursor.pinching else 16.0
-        ring_color = QColor(theme.ACCENT if cursor.pinching else theme.WHITE)
-        painter.setPen(QPen(theme.color(theme.INK, 0.5), 4.5))       # readable on light rows too
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(pt, outer_r, outer_r)
-        painter.setPen(QPen(ring_color, 2.2))
-        painter.setBrush(theme.color(ring_color.name(), 0.16))
-        painter.drawEllipse(pt, outer_r, outer_r)
-
-        # Center dot
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(theme.WHITE))
-        painter.drawEllipse(pt, 3.5, 3.5)
-
-        # Optional hold progress arc around virtual cursor
+    def _draw_virtual_cursor(self, painter: QPainter, bounds: QRectF, cursor: VirtualCursorState) -> None:
+        at = QPointF(bounds.left() + cursor.x * bounds.width(), bounds.top() + cursor.y * bounds.height())
+        ring = QColor(theme.WHITE)
+        for pen, brush, r in ((QPen(theme.color(theme.INK, 0.5), 4.5), Qt.BrushStyle.NoBrush, 16.0),    # readable on light rows too
+                              (QPen(ring, 2.2), theme.color(ring.name(), 0.16), 16.0),
+                              (Qt.PenStyle.NoPen, ring, 3.5)):
+            painter.setPen(pen)
+            painter.setBrush(brush)
+            painter.drawEllipse(at, r, r)
         if cursor.hold_progress > 0.0:
-            theme.paint_ring(painter, pt, outer_r + 5.0, cursor.hold_progress, theme.WARNING, 2.8,
-                             theme.color(theme.WHITE, 0.0))
+            theme.paint_ring(painter, at, 21.0, cursor.hold_progress, theme.WARNING, 2.8, theme.color(theme.WHITE, 0.0))
 
 
 HOLD_KIND_COLORS: dict[str, QColor] = {
@@ -756,7 +372,7 @@ RING_FADE_MS = 180.0         # fade-out after the hold ends
 TOAST_FADE_MS = 200.0
 
 
-class CursorFeedbackOverlay(QWidget):
+class CursorFeedbackOverlay(ClickThroughWindow):
     """Click-through window that follows the cursor: hold progress ring + command toast.
 
     Feed it via UiBridge (cursor_feedback_updated / command_triggered) or call
@@ -780,20 +396,7 @@ class CursorFeedbackOverlay(QWidget):
         toast_ms: int = COMMAND_TOAST_MS,
         parent: Optional[QWidget] = None,
     ) -> None:
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-            | Qt.WindowType.WindowTransparentForInput
-        )
-        super().__init__(parent, flags)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.resize(self.WIDTH, self.HEIGHT)
-
+        super().__init__(self.WIDTH, self.HEIGHT, parent)
         self._enabled_fn = enabled_fn
         self._follow_os_cursor = bool(follow_os_cursor)
         self._auto_show_window = bool(auto_show_window)
@@ -825,10 +428,6 @@ class CursorFeedbackOverlay(QWidget):
     @property
     def hold_kind(self) -> str:
         return self._kind
-
-    @property
-    def target_progress(self) -> float:
-        return self._target
 
     @property
     def displayed_progress(self) -> float:
@@ -929,15 +528,12 @@ class CursorFeedbackOverlay(QWidget):
             if self._target >= 1.0 and self._display > 0.98:
                 self._display = 1.0
         elif self._ring_opacity > 0.0:
-            if now - self._last_active_ms < RING_GRACE_MS:
-                pass                                      # brief dropout: hold the ring as is
-            else:
+            if now - self._last_active_ms >= RING_GRACE_MS:   # a brief dropout holds the ring as is
                 if self._fade_start_ms is None:
                     self._fade_start_ms = now
                     if self._display >= 0.9:
                         self._display = 1.0               # completed hold: finish the circle
-                k = (now - self._fade_start_ms) / RING_FADE_MS
-                self._ring_opacity = max(0.0, 1.0 - k)
+                self._ring_opacity = max(0.0, 1.0 - (now - self._fade_start_ms) / RING_FADE_MS)
                 if self._ring_opacity <= 0.0:
                     self._display = 0.0
                     self._kind = ""
@@ -954,21 +550,7 @@ class CursorFeedbackOverlay(QWidget):
 
     # ---------- painting ----------
 
-    def render_to_image(self) -> QImage:
-        image = QImage(self.width(), self.height(), QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(image)
-        self._paint(painter)
-        painter.end()
-        return image
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        self._paint(painter)
-        painter.end()
-
-    def _paint(self, painter: QPainter) -> None:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    def _paint(self, painter: QPainter, rect: QRectF) -> None:
         if self.ring_visible and self._display > 0.0:
             self._paint_ring(painter)
         if self.toast_visible:
@@ -998,6 +580,3 @@ class CursorFeedbackOverlay(QWidget):
         painter.drawText(box, _CENTER, self._toast_text)
         painter.setOpacity(1.0)
 
-
-# Alias for convenience
-OverlayWidget = OverlayWindow

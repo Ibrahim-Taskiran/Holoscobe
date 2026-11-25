@@ -13,12 +13,14 @@ import math
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Optional, Protocol, Sequence
+from functools import wraps
+from typing import Any, Callable, Optional, Protocol, Sequence
 
 from handcontrol.contracts import (
     Action,
     ActionKind,
     ActionSink,
+    CANVAS_MODES,
     CameraState,
     Clock,
     ControlState,
@@ -106,7 +108,6 @@ class ControllerConfig:
     # A motion drag starts on palm travel only, never on time (session 2026-11-14: 5 of 14 hold-time
     # drags were still-hand pinches of 531-1938 ms, real drags travelled 1.37-3.30 palm units, still
     # holds drifted up to 0.39).
-    tap_max_ms: float = 1500.0              # round 6 only; the pinch mouse long press replaced it (unused)
     # Round 7 gesture set (user decision 2026-11-14). A still thumb+index pinch released before
     # right_long_press_ms is a left click; held that long it right-clicks at once (the release adds
     # nothing). Grab: the thumb tip with the index AND middle tips together, held grab_confirm_ms,
@@ -368,7 +369,6 @@ class _Menu:
     kind: MenuKind
     items: list[MenuItem]
     target: Optional[WindowTarget]
-    opened_ms: float
     last_interaction_ms: float
     armed: bool
     anchor: Optional[tuple[float, float]] = None
@@ -397,6 +397,11 @@ _WINDOW_ACTIONS = {
     "maximize": ActionKind.WINDOW_TOGGLE_MAXIMIZE,
     "other_monitor": ActionKind.WINDOW_MOVE_TO_OTHER_MONITOR,
 }
+_REFUSED_TEXT = {
+    ActionKind.LEFT_CLICK: "Tıklama iptal: komut reddedildi",
+    ActionKind.RIGHT_CLICK: "Sağ tık iptal: komut reddedildi",
+    ActionKind.LEFT_DOWN: "Sürükleme iptal: komut reddedildi",
+}
 CLOSE_LABEL = "Kapat"
 CLOSE_CONFIRM_LABEL = "Kapatmayı onayla (1 sn basılı tut)"
 
@@ -412,11 +417,12 @@ def _steps(d: float, dead: float, step: float) -> int:
     return n if d > 0 else -n
 
 
+def _states(h: HandFeatures) -> dict[FingerName, FingerState]:
+    return {f.name: f.state for f in h.fingers}
+
+
 def _index_extended(h: HandFeatures) -> bool:
-    for f in h.fingers:
-        if f.name is FingerName.INDEX:
-            return f.state is FingerState.EXTENDED
-    return False
+    return _states(h).get(FingerName.INDEX) is FingerState.EXTENDED
 
 
 def _outer_curled(h: HandFeatures) -> bool:
@@ -424,7 +430,7 @@ def _outer_curled(h: HandFeatures) -> bool:
     the thumb tip next to the middle tip, recorded thumb-middle median 0.33 pu, minimum 0.02) or a
     fist. Never a right click. The user's real right pinch keeps ring and little EXTENDED; the index
     may read BENT there (recording 2026-11-12, right repeat 6), so the index does not veto."""
-    s = {f.name: f.state for f in h.fingers}
+    s = _states(h)
     return s.get(FingerName.RING) is FingerState.BENT and s.get(FingerName.LITTLE) is FingerState.BENT
 
 
@@ -432,7 +438,7 @@ def _state_vote(h: HandFeatures) -> Optional[str]:
     """Left/right from finger states alone, or None. Right: middle BENT, index EXTENDED and ring or
     little EXTENDED (index EXTENDED + middle BENT alone is also the pointing pose, which the state
     latch still reports for 100-300 ms after the hand changes). Left: index BENT, middle EXTENDED."""
-    s = {f.name: f.state for f in h.fingers}
+    s = _states(h)
     idx, mid = s.get(FingerName.INDEX), s.get(FingerName.MIDDLE)
     if (mid is FingerState.BENT and idx is FingerState.EXTENDED
             and FingerState.EXTENDED in (s.get(FingerName.RING), s.get(FingerName.LITTLE))):
@@ -444,23 +450,49 @@ def _state_vote(h: HandFeatures) -> Optional[str]:
 
 def _pointing_pose(h: HandFeatures) -> bool:
     """Relative pointer engage pose: index EXTENDED and at least two of middle/ring/little BENT."""
-    s = {f.name: f.state for f in h.fingers}
+    s = _states(h)
     bent = sum(s.get(n) is FingerState.BENT for n in (FingerName.MIDDLE, FingerName.RING, FingerName.LITTLE))
     return s.get(FingerName.INDEX) is FingerState.EXTENDED and bent >= 2
 
 
 def _open_hand(h: HandFeatures) -> bool:
     """Index, middle, ring and little all EXTENDED (thumb ignored)."""
-    s = {f.name: f.state for f in h.fingers}
+    s = _states(h)
     return all(s.get(n) is FingerState.EXTENDED
                for n in (FingerName.INDEX, FingerName.MIDDLE, FingerName.RING, FingerName.LITTLE))
 
 
 def _release_pose(h: HandFeatures) -> bool:
     """Clear clutch pose of an engaged pointer: open hand, or index BENT (fist-like)."""
-    if _open_hand(h):
-        return True
-    return any(f.name is FingerName.INDEX and f.state is FingerState.BENT for f in h.fingers)
+    return _open_hand(h) or _states(h).get(FingerName.INDEX) is FingerState.BENT
+
+
+def _palm_travel(h: HandFeatures, start: Optional[tuple[float, float]]) -> float:
+    """Palm distance from `start` in palm units; 0 without a start."""
+    return 0.0 if start is None else math.dist(h.palm_center_px, start) / h.palm_scale_px
+
+
+def _usable(frame: FrameFeatures) -> list[HandFeatures]:
+    return [h for h in frame.hands if h.quality is Quality.USABLE and h.palm_scale_px > 0]
+
+
+def _quiet(read: Callable[[], Any], default: Any = None) -> Any:
+    """An OS lookup must never raise into the frame loop."""
+    try:
+        return read()
+    except Exception:
+        return default
+
+
+def _public(method):
+    """Entry point: run under the lock, then tell the listeners."""
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            result = method(self, *args, **kwargs)
+        self._notify()
+        return result
+    return call
 
 
 def _cancel_prefix(kind: Optional[_EngKind]) -> str:
@@ -580,125 +612,102 @@ class Controller:
     def config(self) -> ControllerConfig:
         return self._cfg
 
+    @_public
     def on_frame(self, frame: FrameFeatures, events: Sequence[GestureEvent]) -> None:
-        with self._lock:
-            self._in_call += 1
-            self._rel_used = False
-            self._swipe_fed = self._dwell_fed = False
-            try:
-                self._frame(frame, tuple(events))
-            except Exception as exc:  # never let a bug keep input owned
-                self._enter_fault(f"Denetleyici hatası: {type(exc).__name__}: {exc}")
-            finally:
-                if not self._rel_used:   # any frame without relative motion is a clutch: re-anchor later
-                    self._rel.reset()
-                if not self._swipe_fed:  # gap, ambiguity, pinch, menu, clap candidate, other mode
-                    self._swipe.reset()
-                if not self._dwell_fed:  # disengaged, pinched, gap, menu, other mode
-                    self._dwell.cancel()
-                self._in_call -= 1
-        self._notify()
+        self._in_call += 1
+        self._rel_used = False
+        self._swipe_fed = self._dwell_fed = False
+        try:
+            self._frame(frame, tuple(events))
+        except Exception as exc:  # never let a bug keep input owned
+            self._enter_fault(f"Denetleyici hatası: {type(exc).__name__}: {exc}")
+        finally:
+            if not self._rel_used:   # any frame without relative motion is a clutch: re-anchor later
+                self._rel.reset()
+            if not self._swipe_fed:  # gap, ambiguity, pinch, menu, clap candidate, other mode
+                self._swipe.reset()
+            if not self._dwell_fed:  # disengaged, pinched, gap, menu, other mode
+                self._dwell.cancel()
+            self._in_call -= 1
 
+    @_public
     def tick(self) -> None:
         """Time-based expiry without a frame (menu timeout, watchdog). Safe to call from a UI timer."""
-        with self._lock:
-            self._in_call += 1
-            try:
-                now = self._clock.now_ms()
-                self.watchdog.check(now)
-                if self._state is ControlState.ACTIVE and not self._auto_pause_check(now):
-                    self._expire_menu(now)
-            finally:
-                self._in_call -= 1
-        self._notify()
+        self._in_call += 1
+        try:
+            now = self._clock.now_ms()
+            self.watchdog.check(now)
+            if self._state is ControlState.ACTIVE and not self._auto_pause_check(now):
+                self._expire_menu(now)
+        finally:
+            self._in_call -= 1
 
+    @_public
     def pause(self, reason: str = "") -> None:
-        with self._lock:
-            self._do_pause(reason or "Duraklatıldı")
-        self._notify()
+        self._do_pause(reason or "Duraklatıldı")
 
+    @_public
     def resume(self) -> bool:
-        with self._lock:
-            ok = self._state is ControlState.PAUSED and self._camera is CameraState.RUNNING
-            if ok:
-                self._activate("Etkinleştirildi")
-            else:
-                self._notice = "Etkinleştirilemedi: kamera çalışmıyor" if self._camera is not CameraState.RUNNING \
-                    else "Etkinleştirilemedi"
-        self._notify()
+        running = self._camera is CameraState.RUNNING
+        ok = running and self._state is ControlState.PAUSED
+        if ok:
+            self._activate("Etkinleştirildi")
+        else:
+            self._notice = "Etkinleştirilemedi" if running else "Etkinleştirilemedi: kamera çalışmıyor"
         return ok
 
+    @_public
     def emergency_stop(self) -> None:
-        with self._lock:
-            if self._state is not ControlState.FAULT:
-                self._state = ControlState.PAUSED
-            self._hard_reset("Acil durdurma")
-        self._notify()
+        self._do_pause("Acil durdurma")
 
+    @_public
     def set_mode(self, mode: Mode) -> None:
-        with self._lock:
-            self._set_mode(mode)
-        self._notify()
+        self._set_mode(mode)
 
+    @_public
     def set_camera_state(self, state: CameraState) -> None:
-        with self._lock:
-            prev, self._camera = self._camera, state
-            if state is not prev:
-                if state is CameraState.ERROR:
-                    if self._cfg.camera_error_paused:
-                        self._state = ControlState.PAUSED
-                        self._hard_reset("Kamera hatası: duraklatıldı")
-                    elif self._state is not ControlState.FAULT:
-                        self._enter_fault("Kamera hatası", camera=True)
-                elif state is CameraState.RUNNING:
-                    if self._state is ControlState.FAULT and self._fault_from_camera:
-                        self._state = ControlState.PAUSED
-                        self._fault_from_camera = False
-                        self._hard_reset("Kamera yeniden hazır: duraklatıldı")
-                else:  # OFF / STARTING
-                    if self._state is ControlState.FAULT and self._fault_from_camera:
-                        self._state = ControlState.PAUSED
-                        self._fault_from_camera = False
-                        self._hard_reset("Kamera kapalı")
-                    elif self._state in (ControlState.ACTIVE, ControlState.CALIBRATING):
-                        self._state = ControlState.PAUSED
-                        self._hard_reset("Kamera kapalı")
-        self._notify()
+        prev, self._camera = self._camera, state
+        if state is prev:
+            return
+        running = state is CameraState.RUNNING
+        if state is CameraState.ERROR:
+            if self._cfg.camera_error_paused:
+                self._state = ControlState.PAUSED
+                self._hard_reset("Kamera hatası: duraklatıldı")
+            elif self._state is not ControlState.FAULT:
+                self._enter_fault("Kamera hatası", camera=True)
+        elif self._state is ControlState.FAULT and self._fault_from_camera:
+            self._leave_fault("Kamera yeniden hazır: duraklatıldı" if running else "Kamera kapalı")
+        elif not running and self._state in (ControlState.ACTIVE, ControlState.CALIBRATING):
+            self._do_pause("Kamera kapalı")
 
+    @_public
     def begin_calibration(self) -> bool:
-        with self._lock:
-            ok = self._state is not ControlState.FAULT and self._camera is CameraState.RUNNING
-            if ok:
-                self._state = ControlState.CALIBRATING
-                self._hard_reset("Kalibrasyon")
-        self._notify()
+        ok = self._state is not ControlState.FAULT and self._camera is CameraState.RUNNING
+        if ok:
+            self._state = ControlState.CALIBRATING
+            self._hard_reset("Kalibrasyon")
         return ok
 
+    @_public
     def end_calibration(self, calibration: Optional[CalibrationRect] = None) -> None:
-        with self._lock:
-            if self._state is ControlState.CALIBRATING:
-                if calibration is not None:
-                    self._calib = calibration
-                self._state = ControlState.PAUSED
-                self._hard_reset("Kalibrasyon bitti: duraklatıldı")
-        self._notify()
+        if self._state is ControlState.CALIBRATING:
+            if calibration is not None:
+                self._calib = calibration
+            self._do_pause("Kalibrasyon bitti: duraklatıldı")
 
+    @_public
     def set_calibration(self, calibration: CalibrationRect) -> None:
-        with self._lock:
-            self._calib = calibration
-            self._hard_reset("Kalibrasyon güncellendi")
-        self._notify()
+        self._calib = calibration
+        self._hard_reset("Kalibrasyon güncellendi")
 
+    @_public
     def clear_fault(self) -> None:
         """Acknowledge a non-camera fault; lands in Paused (never auto-activates)."""
-        with self._lock:
-            if self._state is ControlState.FAULT and not (
-                self._fault_from_camera and self._camera is CameraState.ERROR
-            ):
-                self._state = ControlState.PAUSED
-                self._fault_from_camera = False
-                self._hard_reset("Hata onaylandı: duraklatıldı")
-        self._notify()
+        if self._state is ControlState.FAULT and not (
+            self._fault_from_camera and self._camera is CameraState.ERROR
+        ):
+            self._leave_fault("Hata onaylandı: duraklatıldı")
 
     def on_session_lock(self) -> None:
         self.pause("Oturum kilitlendi")
@@ -706,11 +715,10 @@ class Controller:
     def on_suspend(self) -> None:
         self.pause("Sistem uykuya geçiyor")
 
+    @_public
     def on_display_change(self) -> None:
-        with self._lock:
-            self._monitors = self._read_monitors()
-            self._hard_reset("Ekran düzeni değişti")
-        self._notify()
+        self._monitors = self._read_monitors()
+        self._hard_reset("Ekran düzeni değişti")
 
     def start_watchdog(self) -> None:
         self.watchdog.start()
@@ -723,11 +731,6 @@ class Controller:
         block; UI code should marshal to its own thread."""
         with self._lock:
             self._listeners.append(callback)
-
-    def remove_listener(self, callback: Callable[[ControllerSnapshot], None]) -> None:
-        with self._lock:
-            if callback in self._listeners:
-                self._listeners.remove(callback)
 
     def snapshot(self) -> ControllerSnapshot:
         with self._lock:
@@ -788,10 +791,7 @@ class Controller:
     # ------------------------------------------------------------ state transitions
 
     def _read_monitors(self) -> tuple[Monitor, ...]:
-        try:
-            return tuple(self._displays.monitors())
-        except Exception:
-            return ()
+        return _quiet(lambda: tuple(self._displays.monitors()), ())
 
     def _mapping_monitors(self) -> tuple[Monitor, ...]:
         """Monitors the pointer maps onto (settings monitor_mapping); all monitors as fallback."""
@@ -811,6 +811,12 @@ class Controller:
         self._guard.dispatch(Action(ActionKind.RELEASE_ALL, self._epoch, self._clock.now_ms()))
         self._dirty = False
 
+    def _require_neutral(self) -> None:
+        """Nothing acts until the hands were still and unpinched for neutral_ms."""
+        self._need_neutral = True
+        self._neutral_since = None
+        self._smoother.reset()
+
     def _clear_transient(self) -> None:
         self._index_tap.reset()
         self._reset_mouse_memory()
@@ -819,10 +825,8 @@ class Controller:
         self._eng = None   # a held left button is released by the caller's RELEASE_ALL
         self._tracking_ok = True
         self._menu = None
-        self._need_neutral = True
-        self._neutral_since = None
         self._clap_pending = False
-        self._smoother.reset()
+        self._require_neutral()
         self._swipe.reset()
         self._dwell.cancel()
 
@@ -860,6 +864,11 @@ class Controller:
         self._notice = ""
         self._hand_seen_ms = self._clock.now_ms()
 
+    def _leave_fault(self, reason: str) -> None:
+        self._state = ControlState.PAUSED
+        self._fault_from_camera = False
+        self._hard_reset(reason)
+
     def _enter_fault(self, reason: str, camera: bool = False) -> None:
         self._state = ControlState.FAULT
         self._fault_reason = reason
@@ -874,14 +883,12 @@ class Controller:
         self._bump()
         self._cancel_engagement(release=True, why="kip değişti")
         self._menu = None
-        self._need_neutral = True
-        self._neutral_since = None
-        self._smoother.reset()
+        self._require_neutral()
         self._swipe.reset()
         self._dwell.cancel()
         if mode is Mode.COMMANDS:
             self._profile_active = self._command_profile()
-        if mode in (Mode.INSTRUMENT, Mode.DRAWING):
+        if mode in CANVAS_MODES:
             # no-OS-input mode: free every app-owned input on entry, held or not
             self._index_tap.reset()
             self._reset_mouse_memory()
@@ -928,13 +935,11 @@ class Controller:
     def _read_cursor(self) -> Optional[tuple[int, int]]:
         if self._cursor_source is None:
             return None
-        try:
+
+        def read() -> Optional[tuple[int, int]]:
             p = self._cursor_source()
-            if p is None:
-                return None
-            return project_to_monitors(float(p[0]), float(p[1]), self._mapping_monitors())
-        except Exception:
-            return None
+            return p and project_to_monitors(float(p[0]), float(p[1]), self._mapping_monitors())
+        return _quiet(read)
 
     def _initial_pointer(self) -> Optional[tuple[int, int]]:
         """Real cursor when a source is wired, else the centre of the primary monitor."""
@@ -1067,7 +1072,7 @@ class Controller:
         """Thumb+middle pose. Never the pointing pose or a fist (ring and little curled). Index
         EXTENDED or BENT with ring or little EXTENDED passes; unsure fingers pass when the hand was
         fully open just before."""
-        s = {f.name: f.state for f in dom.fingers}
+        s = _states(dom)
         idx, ring, lit = s.get(FingerName.INDEX), s.get(FingerName.RING), s.get(FingerName.LITTLE)
         if _outer_curled(dom):
             return False
@@ -1097,9 +1102,7 @@ class Controller:
         self._cancel_engagement(release=True, why=why)
         if cancel_menu_hold and self._menu is not None:
             self._cancel_confirmation(self._menu)
-        self._need_neutral = True
-        self._neutral_since = None
-        self._smoother.reset()
+        self._require_neutral()
         if had:
             self._bump()
 
@@ -1133,45 +1136,36 @@ class Controller:
     def _dispatch(self, kind: ActionKind, capture_ms: float, *, x: Optional[int] = None, y: Optional[int] = None,
                   steps: int = 0, value: float = 0.0, target: Optional[WindowTarget] = None,
                   command: str = "") -> bool:
-        if self._mode in (Mode.INSTRUMENT, Mode.DRAWING):
+        if self._mode in CANVAS_MODES:
             return False   # defence in depth: these modes never send OS input (RELEASE_ALL uses _release)
         ok = self._guard.dispatch(Action(kind, self._epoch, capture_ms, x=x, y=y, steps=steps, value=value,
                                          target=target, command=command))
         if ok:
-            if kind is ActionKind.WINDOW_MINIMIZE and target is not None:
-                self._minimized_history = [t for t in self._minimized_history if t != target]
-                self._minimized_history.append(target)
-                self._minimized_history = self._minimized_history[-32:]
-            elif kind is ActionKind.WINDOW_RESTORE and target is not None:
-                self._minimized_history = [t for t in self._minimized_history if t != target]
+            if target is not None and kind in (ActionKind.WINDOW_MINIMIZE, ActionKind.WINDOW_RESTORE):
+                history = [t for t in self._minimized_history if t != target]
+                self._minimized_history = (history + [target])[-32:] if kind is ActionKind.WINDOW_MINIMIZE else history
             self._dirty = True
             if self._eng is not None:
                 self._eng.dispatched += 1
-            if kind in (ActionKind.LEFT_CLICK, ActionKind.RIGHT_CLICK, ActionKind.LEFT_DOWN):
-                self._last_cancel = ""
-        elif kind in (ActionKind.LEFT_CLICK, ActionKind.RIGHT_CLICK, ActionKind.LEFT_DOWN):
-            self._last_cancel = {ActionKind.LEFT_CLICK: "Tıklama iptal: komut reddedildi",
-                                 ActionKind.RIGHT_CLICK: "Sağ tık iptal: komut reddedildi",
-                                 ActionKind.LEFT_DOWN: "Sürükleme iptal: komut reddedildi"}[kind]
+        if kind in _REFUSED_TEXT:
+            self._last_cancel = "" if ok else _REFUSED_TEXT[kind]
+        return ok
+
+    def _dispatch_at(self, kind: ActionKind, t: float, p: tuple[int, int]) -> bool:
+        """A button action at a point the pointer then stands on."""
+        ok = self._dispatch(kind, t, x=p[0], y=p[1])
+        if ok:
+            self._set_pointer(p)
         return ok
 
     def _target_ok(self, target: Optional[WindowTarget], pos: Optional[tuple[int, int]]) -> bool:
-        if target is None or pos is None:
-            return False
-        try:
-            return (self._windows.is_valid(target)
-                    and self._windows.foreground_window() == target
-                    and self._windows.eligible_window_at(pos[0], pos[1]) == target)
-        except Exception:
-            return False
+        w = self._windows
+        return target is not None and pos is not None and _quiet(
+            lambda: w.is_valid(target) and w.foreground_window() == target
+            and w.eligible_window_at(pos[0], pos[1]) == target, False)
 
     def _valid(self, target: Optional[WindowTarget]) -> bool:
-        if target is None:
-            return False
-        try:
-            return bool(self._windows.is_valid(target))
-        except Exception:
-            return False
+        return target is not None and _quiet(lambda: bool(self._windows.is_valid(target)), False)
 
     # ------------------------------------------------------------ frame processing
 
@@ -1227,7 +1221,7 @@ class Controller:
             return
         self._expire_menu(now)
 
-        if self._mode in (Mode.INSTRUMENT, Mode.DRAWING):   # explicit early branch: no other mode's code runs here
+        if self._mode in CANVAS_MODES:   # explicit early branch: no other mode's code runs here
             self._canvas_frame(frame, events, kinds, stale, now)
             return
 
@@ -1237,7 +1231,7 @@ class Controller:
         if certain and self._mouse_gap_frame(frame, events, now):
             self._tracking_ok = True
             return
-        hands = [h for h in frame.hands if h.quality is Quality.USABLE and h.palm_scale_px > 0]
+        hands = _usable(frame)
         if stale or frame.identity_ambiguous or not hands:
             if certain and self._pointer_gap_frame(frame, events, now):
                 return
@@ -1250,21 +1244,7 @@ class Controller:
             self._dom_ok_ms, self._dom_ok_id = frame.capture_ms, first.hand_id
         self._tracking_ok = first is not None or dom_gap
 
-        present = {h.hand_id for h in hands}
-        for hid in [h for h in self._pinched if h not in present]:
-            del self._pinched[hid]
-        if not self._pinched:
-            self._zoom_needs_release = False
-
-        # neutral: usable, nothing pinched, no pending clap, for neutral_ms
-        if self._pinched or self._clap_pending:
-            self._neutral_since = None
-        else:
-            if self._neutral_since is None:
-                self._neutral_since = frame.capture_ms
-            if frame.capture_ms - self._neutral_since >= self._cfg.neutral_ms or GestureKind.NEUTRAL in kinds:
-                self._need_neutral = False
-
+        present = self._update_presence(frame, hands, kinds)
         if self._clap_pending:
             return
 
@@ -1396,6 +1376,24 @@ class Controller:
             if not self._middle.pinched and self._middle.distance >= open_pu:
                 self._open_ptr["middle"] = (frame.capture_ms, self._pointer)
 
+    def _update_presence(self, frame: FrameFeatures, hands: Sequence[HandFeatures],
+                         kinds: set[GestureKind]) -> set[int]:
+        """Ids of the usable hands. Forgets the pinches of hands that left and runs the neutral timer:
+        usable, nothing pinched, no pending clap, for neutral_ms."""
+        present = {h.hand_id for h in hands}
+        for hid in [h for h in self._pinched if h not in present]:
+            del self._pinched[hid]
+        if not self._pinched:
+            self._zoom_needs_release = False
+        if self._pinched or self._clap_pending:
+            self._neutral_since = None
+        else:
+            if self._neutral_since is None:
+                self._neutral_since = frame.capture_ms
+            if frame.capture_ms - self._neutral_since >= self._cfg.neutral_ms or GestureKind.NEUTRAL in kinds:
+                self._need_neutral = False
+        return present
+
     def _canvas_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], kinds: set[GestureKind],
                       stale: bool, now: float) -> None:
         """INSTRUMENT and DRAWING (ACTIVE): a separate engine turns the frames into sound or ink. The
@@ -1410,24 +1408,13 @@ class Controller:
             self._release()
         if self._menu is not None and self._menu.kind is not MenuKind.MODE:
             self._close_menu()
-        hands = [h for h in frame.hands if h.quality is Quality.USABLE and h.palm_scale_px > 0]
+        hands = _usable(frame)
         if stale or frame.identity_ambiguous or not hands:
             self._tracking_lost()
             return
         self.watchdog.feed(frame.capture_ms)
         self._tracking_ok = True
-        present = {h.hand_id for h in hands}
-        for hid in [h for h in self._pinched if h not in present]:
-            del self._pinched[hid]
-        if not self._pinched:
-            self._zoom_needs_release = False
-        if self._pinched or self._clap_pending:
-            self._neutral_since = None
-        else:
-            if self._neutral_since is None:
-                self._neutral_since = frame.capture_ms
-            if frame.capture_ms - self._neutral_since >= self._cfg.neutral_ms or GestureKind.NEUTRAL in kinds:
-                self._need_neutral = False
+        self._update_presence(frame, hands, kinds)
         if self._clap_pending:
             return
         dom = self._dominant(hands)
@@ -1450,9 +1437,7 @@ class Controller:
                 or self._eng is not None or self._menu is not None or self._need_neutral
                 or self._clap_pending or self._release_since is not None or self._pinched or events):
             return False
-        last = self.watchdog.last_usable_ms
-        if (last is None or not self.watchdog.armed
-                or not 0.0 <= now - last < self._cfg.loss_timeout_ms):
+        if not self._watchdog_holds(now):
             return False
         dom = self._dominant(frame.hands)
         if (dom is None or dom.hand_id != self._clutch_hand or dom.quality is not Quality.DEGRADED
@@ -1472,6 +1457,20 @@ class Controller:
         self._rel_move_cursor(frame.capture_ms)
         return True
 
+    def _watchdog_holds(self, now: float) -> bool:
+        """The last fully usable capture is less than loss_timeout_ms old."""
+        last = self.watchdog.last_usable_ms
+        return last is not None and self.watchdog.armed and now - last < self._cfg.loss_timeout_ms
+
+    @staticmethod
+    def _only_degraded(frame: FrameFeatures, events: tuple[GestureEvent, ...], hid: int) -> bool:
+        """Hand `hid` is present as a DEGRADED right hand, with no other right / unknown hand and no event
+        of its own."""
+        mine = [h for h in frame.hands if h.hand_id == hid]
+        return (len(mine) == 1 and mine[0].quality is Quality.DEGRADED and mine[0].handedness is Handedness.RIGHT
+                and not any(h.hand_id != hid and h.handedness is not Handedness.LEFT for h in frame.hands)
+                and not any(ev.hand_id == hid for ev in events))
+
     def _dom_gap(self, frame: FrameFeatures, events: tuple[GestureEvent, ...]) -> bool:
         """The engaged dominant hand is present with the same id but DEGRADED, its last usable frame
         is less than loss_timeout_ms old, no other right / unknown hand, no event of that hand, and
@@ -1482,12 +1481,7 @@ class Controller:
                 or self._eng is not None or self._menu is not None
                 or not 0.0 <= frame.capture_ms - last < self._cfg.loss_timeout_ms):
             return False
-        mine = [h for h in frame.hands if h.hand_id == hid]
-        if len(mine) != 1 or mine[0].quality is not Quality.DEGRADED or mine[0].handedness is not Handedness.RIGHT:
-            return False
-        if any(h.hand_id != hid and h.handedness is not Handedness.LEFT for h in frame.hands):
-            return False
-        return not any(ev.hand_id == hid for ev in events)
+        return self._only_degraded(frame, events, hid)
 
     def _idle_gap(self, frame: FrameFeatures, events: tuple[GestureEvent, ...]) -> bool:
         """POINTER pinch mouse, nothing running (no engagement, no menu): the last usable dominant hand
@@ -1499,18 +1493,12 @@ class Controller:
         if (self._eng is not None or self._menu is not None or not self._mouse_on() or hid is None
                 or last is None or not 0.0 <= frame.capture_ms - last < self._cfg.loss_timeout_ms):
             return False
-        mine = [h for h in frame.hands if h.hand_id == hid]
-        if len(mine) != 1 or mine[0].quality is not Quality.DEGRADED or mine[0].handedness is not Handedness.RIGHT:
-            return False
-        if any(h.hand_id != hid and h.handedness is not Handedness.LEFT for h in frame.hands):
-            return False
-        return not any(ev.hand_id == hid for ev in events)
+        return self._only_degraded(frame, events, hid)
 
     def _pointer_gap_frame(self, frame: FrameFeatures, events: tuple[GestureEvent, ...], now: float) -> bool:
         """True: no usable hand, but this is a tolerated short gap of the engaged pointer hand; the
         frame is skipped (identity certain, checked by the caller; the watchdog still bounds it)."""
-        last = self.watchdog.last_usable_ms
-        if last is None or not self.watchdog.armed or now - last >= self._cfg.loss_timeout_ms:
+        if not self._watchdog_holds(now):
             return False
         if not (self._dom_gap(frame, events) or self._idle_gap(frame, events)):
             return False
@@ -1551,7 +1539,7 @@ class Controller:
         self._fist_open = {k: v for k, v in self._fist_open.items() if k in present}
         fists = []
         for hand in hands:
-            states = {f.name: f.state for f in hand.fingers}
+            states = _states(hand)
             if hand.handedness is Handedness.UNKNOWN or len(states) != 5:
                 self._fist_ready.discard(hand.hand_id)
                 continue
@@ -1638,15 +1626,12 @@ class Controller:
     def _command_profile(self) -> str:
         """Concrete swipe profile: the configured one, or for "auto" the foreground process's."""
         setting = self._cfg.swipe_profile
-        name: Optional[str] = None
-        if setting not in PROFILES and self._process_names is not None:
-            try:
-                fg = self._windows.foreground_window()
-                if fg is not None:
-                    name = self._process_names.process_name(fg.pid)
-            except Exception:
-                name = None
-        return resolve_profile(setting, name)
+
+        def foreground_name() -> Optional[str]:
+            fg = self._windows.foreground_window()
+            return fg and self._process_names.process_name(fg.pid)
+        automatic = setting not in PROFILES and self._process_names is not None
+        return resolve_profile(setting, _quiet(foreground_name) if automatic else None)
 
     def _send_command(self, cmd: KeyCommand, t: float, profile: str) -> None:
         self._profile_active = profile
@@ -1678,8 +1663,8 @@ class Controller:
     def _cmd_pinch_frame(self, e: _Eng, ends: list[GestureEvent], hand: Optional[HandFeatures],
                          t: float) -> None:
         cfg = self._cfg
-        moved = (hand is not None and e.palm0 is not None and hand.palm_scale_px > 0
-                 and math.dist(hand.palm_center_px, e.palm0) / hand.palm_scale_px > cfg.mouse_drag_move_palm)
+        moved = (hand is not None and hand.palm_scale_px > 0
+                 and _palm_travel(hand, e.palm0) > cfg.mouse_drag_move_palm)
         if ends:
             self._eng = None
             if moved:
@@ -1703,8 +1688,7 @@ class Controller:
         hit = self._dwell.update(t, self._pointer, cfg.dwell_ms)
         if hit is None:
             return
-        if self._dispatch(ActionKind.LEFT_CLICK, t, x=hit[0], y=hit[1]):
-            self._set_pointer(hit)
+        if self._dispatch_at(ActionKind.LEFT_CLICK, t, hit):
             self._notice = "Bekleme tıklaması: sol tık"
 
     # ------------------------------------------------------------ pinch mouse (POINTER)
@@ -1719,7 +1703,7 @@ class Controller:
         cfg = self._cfg
         lt = self._last_tap
         if (left and lt is not None and 0.0 <= t - lt[0] <= cfg.double_click_window_ms
-                and math.dist(dom.palm_center_px, lt[2]) / dom.palm_scale_px <= cfg.mouse_drag_move_palm):
+                and _palm_travel(dom, lt[2]) <= cfg.mouse_drag_move_palm):
             return lt[1]
         if not cfg.pointer_relative:   # relative: the cursor was clutched while the pinch closed
             op = self._open_ptr.get("index" if left else "middle")
@@ -1736,7 +1720,7 @@ class Controller:
         lt, r, cfg = self._last_tap, self._rearm.get("index"), self._cfg
         return (lt is not None and r is not None and r[0] == dom.hand_id
                 and cfg.double_tap_min_gap_ms <= t - lt[0] <= cfg.double_click_window_ms
-                and math.dist(dom.palm_center_px, lt[2]) / dom.palm_scale_px <= cfg.mouse_drag_move_palm)
+                and _palm_travel(dom, lt[2]) <= cfg.mouse_drag_move_palm)
 
     def _start_pending(self, dom: HandFeatures, t: float, pos: tuple[int, int]) -> None:
         """Pinch onset (thumb+index or thumb+middle start): hold the pointer, decide left/right."""
@@ -1803,9 +1787,8 @@ class Controller:
     def _long_press(self, e: _Eng, dom: HandFeatures, t: float) -> None:
         """Still thumb+index pinch held right_long_press_ms: RIGHT_CLICK now, the release adds nothing."""
         assert e.latched is not None
-        ok = self._dispatch(ActionKind.RIGHT_CLICK, t, x=e.latched[0], y=e.latched[1])
+        ok = self._dispatch_at(ActionKind.RIGHT_CLICK, t, e.latched)
         if ok:
-            self._set_pointer(e.latched)
             self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
         self._last_tap = None
         self._eng = _Eng(_EngKind.BLOCKED, e.hand_id, e.t0, middle=True, text="Sağ tık" if ok else "")
@@ -1877,15 +1860,9 @@ class Controller:
         e = self._eng
         if e is None or not (e.kind in _MOUSE_KINDS or (e.kind is _EngKind.BLOCKED and e.middle)):
             return False
-        last = self.watchdog.last_usable_ms
-        if last is None or not self.watchdog.armed or now - last >= self._cfg.loss_timeout_ms:
+        if not self._watchdog_holds(now):
             return False
-        mine = [h for h in frame.hands if h.hand_id == e.hand_id]
-        if len(mine) != 1 or mine[0].quality is not Quality.DEGRADED or mine[0].handedness is not Handedness.RIGHT:
-            return False
-        if any(h.hand_id != e.hand_id and h.handedness is not Handedness.LEFT for h in frame.hands):
-            return False
-        if any(ev.hand_id == e.hand_id for ev in events):
+        if not self._only_degraded(frame, events, e.hand_id):
             return False
         self._smoother.reset()
         self._rel.reset()   # re-anchor on recovery; never replay movement across an invisible interval
@@ -1913,11 +1890,17 @@ class Controller:
         e.kind = _EngKind.MOUSE_DRAG   # set first: any failure below takes the release path
         e.last_pos = e.latched
         self._last_tap = None
-        if self._dispatch(ActionKind.LEFT_DOWN, t, x=e.latched[0], y=e.latched[1]):
-            self._set_pointer(e.latched)
+        if self._dispatch_at(ActionKind.LEFT_DOWN, t, e.latched):
             self._notice = "Sürükleme: sol tuş basılı"
         else:
             self._mouse_interrupt("Sürükleme başlatılamadı", "komut reddedildi")
+
+    def _begin_motion_drag(self, e: _Eng, t: float) -> None:
+        """Start the drag and keep the travel made during the candidate."""
+        self._begin_drag(e, t)
+        if self._cfg.pointer_relative and self._eng is e and e.anchor0 is not None:
+            self._rel.anchor(max(e.t0, t - 200.0), e.anchor0[0], e.anchor0[1])
+            self._rel_drag_step(e, t)
 
     def _rel_drag_step(self, e: _Eng, t: float) -> None:
         moved = self._rel_move_cursor(t)
@@ -1943,8 +1926,8 @@ class Controller:
             self._mouse_interrupt("İşaretçi eli belirsiz: tıklama iptal", "işaretçi eli belirsiz")
             return
         assert dom is not None
-        moved = (e.palm0 is not None
-                 and math.dist(dom.palm_center_px, e.palm0) / dom.palm_scale_px > cfg.mouse_drag_move_palm)
+        travel = _palm_travel(dom, e.palm0)
+        moved = travel > cfg.mouse_drag_move_palm
         ends = [ev for ev in events if ev.kind is GestureKind.PINCH_END and ev.hand_id == e.hand_id]
 
         # the second fingertip joining soon after the onset makes it a grab, before any click
@@ -1961,10 +1944,7 @@ class Controller:
             if (e.grab_since is not None and t - e.grab_since >= cfg.grab_confirm_ms
                     and e.open_since is None and self._grab_contact(dom)):
                 e.grab = True
-                self._begin_drag(e, t)
-                if cfg.pointer_relative and self._eng is e and e.anchor0 is not None:
-                    self._rel.anchor(max(e.t0, t - 200.0), e.anchor0[0], e.anchor0[1])
-                    self._rel_drag_step(e, t)
+                self._begin_motion_drag(e, t)
             return
 
         if e.kind is _EngKind.MOUSE_PENDING:
@@ -1975,8 +1955,7 @@ class Controller:
 
         if e.kind is _EngKind.RIGHT_TAP:
             # decided: the thumb+index pinch is ignored until release
-            right_moved = (e.palm0 is not None and math.dist(dom.palm_center_px, e.palm0)
-                           / dom.palm_scale_px > cfg.right_cancel_move_palm)
+            right_moved = travel > cfg.right_cancel_move_palm
             # Ring+little curled: the hand is going into the pointing pose (every such cancel of the
             # 2026-11-14 session was followed by an engaged, moving pointer within 125-140 ms) or a
             # fist. A curl shorter than right_curl_cancel_ms is state flicker during contact; the
@@ -1993,8 +1972,7 @@ class Controller:
             elif mid_ev == MID_END:
                 self._eng = None
                 if not right_moved and t - e.t0 <= cfg.right_hold_max_ms and e.latched is not None:
-                    if self._dispatch(ActionKind.RIGHT_CLICK, t, x=e.latched[0], y=e.latched[1]):
-                        self._set_pointer(e.latched)
+                    if self._dispatch_at(ActionKind.RIGHT_CLICK, t, e.latched):
                         self._rearm["middle"] = [float(e.hand_id), t, self._middle.distance]
                     self._notice = "Sağ tık"
                 else:
@@ -2021,8 +1999,7 @@ class Controller:
                     self._notice = "Tıklama iptal edildi"
                     self._last_cancel = "Tıklama iptal: tıklama noktası yok"
                 elif ends[0].t_ms - e.t0 < cfg.right_long_press_ms:
-                    if self._dispatch(ActionKind.LEFT_CLICK, t, x=e.latched[0], y=e.latched[1]):
-                        self._set_pointer(e.latched)
+                    if self._dispatch_at(ActionKind.LEFT_CLICK, t, e.latched):
                         self._last_tap = (ends[0].t_ms, e.latched, e.palm0 or dom.palm_center_px)
                         self._rearm["index"] = [float(e.hand_id), t, dom.pinch_distance]
                     self._notice = "Sol tık"
@@ -2034,10 +2011,7 @@ class Controller:
                     self._session_block(e, self._notice)
             elif moved:
                 # motion drag: palm travel while pinched, before the long press fired
-                self._begin_drag(e, t)          # keep the travel made during the candidate
-                if cfg.pointer_relative and self._eng is e and e.anchor0 is not None:
-                    self._rel.anchor(max(e.t0, t - 200.0), e.anchor0[0], e.anchor0[1])
-                    self._rel_drag_step(e, t)
+                self._begin_motion_drag(e, t)
             elif t - e.t0 >= cfg.right_long_press_ms and e.latched is not None:
                 self._long_press(e, dom, t)     # still hand held long enough: right click now
             return
@@ -2099,10 +2073,7 @@ class Controller:
                 self._block(e, "Ses düzeyi okunamadı")
             self._eng = e
         elif mode is Mode.WINDOWS:
-            try:
-                target = self._windows.eligible_window_at(latched[0], latched[1])
-            except Exception:
-                target = None
+            target = _quiet(lambda: self._windows.eligible_window_at(latched[0], latched[1]))
             self._eng = _Eng(_EngKind.WIN_PINCH, dom.hand_id, ev.t_ms, latched=latched, raw_start=raw,
                              target=target)
         elif mode is Mode.ZOOM:
@@ -2119,11 +2090,8 @@ class Controller:
     def _latch_foreground(self, pos: Optional[tuple[int, int]]) -> Optional[WindowTarget]:
         if pos is None:
             return None
-        try:
-            fg = self._windows.foreground_window()
-            under = self._windows.eligible_window_at(pos[0], pos[1])
-        except Exception:
-            return None
+        w = self._windows
+        fg, under = _quiet(lambda: (w.foreground_window(), w.eligible_window_at(pos[0], pos[1])), (None, None))
         return fg if fg is not None and under == fg else None
 
     def _try_zoom_pair(self, ev: GestureEvent, frame: FrameFeatures, hands: Sequence[HandFeatures]) -> None:
@@ -2335,7 +2303,7 @@ class Controller:
         hand = next((h for h in hands if h.hand_id in ids), None)
         if hand is None or not self._wheel_allowed():
             return False
-        self._menu = _Menu(MenuKind.MODE, [], None, now, now, True, wheel=ModeWheel(hand, now, self._cfg.mirror))
+        self._menu = _Menu(MenuKind.MODE, [], None, now, True, wheel=ModeWheel(hand, now, self._cfg.mirror))
         self._wheel_items(self._menu)
         self._notice = ""
         return True
@@ -2374,14 +2342,12 @@ class Controller:
                           now: float) -> None:
         uv = self._palm_uv(dom, frame) if dom is not None else None
         armed = dom is not None and dom.hand_id not in self._pinched
-        self._menu = _Menu(MenuKind.WINDOW, self._window_items(False), target, now, now, armed, anchor=uv)
+        self._menu = _Menu(MenuKind.WINDOW, self._window_items(False), target, now, armed, anchor=uv)
 
     def _close_menu(self, notice: str = "") -> None:
         # release before reuse: OS output resumes only after a fresh neutral
         self._menu = None
-        self._need_neutral = True
-        self._neutral_since = None
-        self._smoother.reset()
+        self._require_neutral()
         if notice:
             self._notice = notice
 
@@ -2487,9 +2453,8 @@ class Controller:
         m = self._menu
         if m is None:
             return None
-        prog = 0.0
-        if m.hold_t0 is not None and self._cfg.close_hold_ms > 0:
-            prog = _clamp((max(now, m.hold_now) - m.hold_t0) / self._cfg.close_hold_ms, 0.0, 1.0)
+        hold = self._cfg.close_hold_ms if m.hold_t0 is not None else 0.0
+        prog = _clamp((max(now, m.hold_now) - m.hold_t0) / hold, 0.0, 1.0) if hold > 0 else 0.0
         return MenuSnapshot(
             kind=m.kind,
             items=tuple(m.items),

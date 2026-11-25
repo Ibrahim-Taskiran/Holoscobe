@@ -94,7 +94,7 @@ def swipe_left(r: Rig, dt: float, px: float = 160.0, ms: float = 200.0, y: float
 def test_defaults_are_relative_with_new_click_timings():
     c = ControllerConfig()
     assert c.pointer_relative is True and c.pointer_speed == 1.0 and c.monitor_mode == "virtual_desktop"
-    assert c.tap_max_ms == 1500.0 and c.clutch_debounce_ms == 100.0
+    assert c.clutch_debounce_ms == 100.0
     assert c.rel_min_gain < c.rel_max_gain and c.rel_dead_zone > 0
 
 

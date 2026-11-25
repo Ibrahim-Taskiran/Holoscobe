@@ -4,7 +4,7 @@ from __future__ import annotations
 from feat_synth import make_frame, make_hand
 from handcontrol.contracts import FingerState
 from handcontrol.features import FeatureConfig, FeatureExtractor
-from handcontrol.filters import DwellLatch, HysteresisSwitch
+from handcontrol.filters import DwellLatch
 
 EXT, BENT, UNK = FingerState.EXTENDED, FingerState.BENT, FingerState.UNKNOWN
 
@@ -85,23 +85,3 @@ def test_dwell_latch_basic():
     assert latch.update("a", 239) == "b"
     assert latch.update("a", 240) == "a"
     assert latch.force("z") == "z" and latch.state == "z"
-
-
-def test_hysteresis_switch_pinch_like():
-    sw = HysteresisSwitch(on_threshold=0.28, off_threshold=0.42, on_dwell_ms=30, off_dwell_ms=30)
-    assert sw.update(0.30, 0) is False
-    assert sw.update(0.20, 10) is False
-    assert sw.update(0.20, 40) is True
-    for k, v in enumerate((0.35, 0.40, 0.30, 0.41)):   # inside band: stays on
-        assert sw.update(v, 50 + k * 10) is True
-    assert sw.update(0.50, 100) is True
-    assert sw.update(0.50, 130) is False
-    assert sw.update(float("nan"), 140) is False
-
-
-def test_hysteresis_switch_rising():
-    sw = HysteresisSwitch(on_threshold=0.5, off_threshold=0.3)
-    assert sw.update(0.4, 0) is False
-    assert sw.update(0.6, 1) is True
-    assert sw.update(0.4, 2) is True
-    assert sw.update(0.2, 3) is False

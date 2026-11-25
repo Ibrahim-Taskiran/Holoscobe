@@ -20,7 +20,6 @@ from handcontrol.ui.viewmodel import (
     MODE_LABELS_TR,
     CursorFeedbackState,
     UiBridge,
-    create_mode_menu_items,
 )
 
 
@@ -38,7 +37,6 @@ class FakeSnapshot:
 def test_commands_mode_labels_everywhere() -> None:
     assert MODE_LABELS_TR[Mode.COMMANDS] == "Komutlar"
     assert set(MODE_LABELS_TR) == set(Mode)
-    assert "Komutlar" in [i.label for i in create_mode_menu_items()]
     tray = HandControlTray(UiBridge())
     assert tray.mode_actions[Mode.COMMANDS].text() == "Komutlar"
     assert not tray.mode_actions[Mode.COMMANDS].icon().isNull()
@@ -68,7 +66,6 @@ def test_ring_progress_kind_color_and_smoothing() -> None:
     assert not ring.ring_visible
     bridge.update_snapshot(FakeSnapshot(hold_kind="right_click", hold_progress=0.5))
     assert ring.ring_visible and ring.hold_kind == "right_click"
-    assert ring.target_progress == pytest.approx(0.5)
     assert ring.ring_color == HOLD_KIND_COLORS["right_click"]
     QTest.qWait(150)
     assert 0.3 < ring.displayed_progress <= 0.5          # eased toward target, no jump
@@ -195,14 +192,12 @@ def test_settings_tool_signals(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_tray_tutorial_entry_emits() -> None:
     bridge = UiBridge()
     tray = HandControlTray(bridge)
-    tray_hits: list[int] = []
     bridge_hits: list[int] = []
-    tray.tutorial_requested.connect(lambda: tray_hits.append(1))
     bridge.tutorial_requested.connect(lambda: bridge_hits.append(1))
     assert tray.action_tutorial.text() == "Eğitimi başlat"
     assert tray.action_tutorial in tray.menu.actions()
     tray.action_tutorial.trigger()
-    assert tray_hits == [1] and bridge_hits == [1]
+    assert bridge_hits == [1]
 
 
 # ---------- onboarding ----------

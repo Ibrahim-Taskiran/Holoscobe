@@ -20,9 +20,7 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 from handcontrol.contracts import FrameFeatures
 from handcontrol.instrument.engine import STATUS_PAUSED
 from handcontrol.instrument.events import HitView, InstrumentView, StringView
-from handcontrol.instrument.freeform import (
-    MAX_STRINGS, MIN_LENGTH, Seg, clamp_seg, ends, hit_test, seg_length, snap_segment,
-)
+from handcontrol.instrument.freeform import MAX_STRINGS, Seg, drop_short, fit_seg, hit_test, move_seg, put_seg
 from handcontrol.instrument.geometry import Rect, normalize_fixed_rect
 from handcontrol.ui import theme
 from handcontrol.ui.preview import CameraPreviewWidget, paint_stage_card
@@ -305,27 +303,12 @@ class InstrumentCanvas(CameraPreviewWidget):
             seg: Seg = (*start, *p)  # type: ignore[assignment]
         else:
             assert idx is not None
-            a, b = ends(base[idx])
+            x0, y0, x1, y1 = base[idx]
             dx, dy = p[0] - start[0], p[1] - start[1]
-            if kind == "body":
-                dx = min(1.0 - max(a[0], b[0]), max(-min(a[0], b[0]), dx))
-                dy = min(1.0 - max(a[1], b[1]), max(-min(a[1], b[1]), dy))
-                a, b = (a[0] + dx, a[1] + dy), (b[0] + dx, b[1] + dy)
-            elif kind == "p0":
-                a = (a[0] + dx, a[1] + dy)
-            else:
-                b = (b[0] + dx, b[1] + dy)
-            seg = (*a, *b)  # type: ignore[assignment]
-        seg = clamp_seg(seg)
-        snapped = False
-        aspect = self._aspect()
-        if self._free_snap and seg_length(seg, aspect) >= MIN_LENGTH:
-            seg, snapped = snap_segment(seg, [s for i, s in enumerate(base) if i != idx], aspect)
-        if idx is None:
-            self._fdraft, self._fdraft_index = base + (seg,), len(base)
-        else:
-            self._fdraft, self._fdraft_index = base[:idx] + (seg,) + base[idx + 1:], idx
-        self._fdraft_snapped = snapped
+            seg = (move_seg(base[idx], dx, dy) if kind == "body" else (x0 + dx, y0 + dy, x1, y1) if kind == "p0"
+                   else (x0, y0, x1 + dx, y1 + dy))
+        seg, self._fdraft_snapped = fit_seg(seg, base, idx, self._aspect(), self._free_snap)
+        self._fdraft, self._fdraft_index = put_seg(base, idx, seg)
         self.update()
 
     def _free_release(self) -> None:
@@ -335,9 +318,8 @@ class InstrumentCanvas(CameraPreviewWidget):
         self._fdrag = self._fdraft = self._fdraft_index = None
         self._fdraft_snapped = False
         self.unsetCursor()
-        if draft is not None and idx is not None:
-            if seg_length(draft[idx], self._aspect()) < MIN_LENGTH:      # squeezed: remove
-                draft = draft[:idx] + draft[idx + 1:]
+        if draft is not None:
+            draft = drop_short(draft, idx, self._aspect())
             if draft != base:
                 self.free_strings_edited.emit(draft)
         self.update()
@@ -420,8 +402,8 @@ class InstrumentCanvas(CameraPreviewWidget):
         """Per-finger cards are hidden here: the corner HUD owns that space."""
         return
 
-    def _paint_contents(self, painter: QPainter, full_rect: QRectF) -> None:
-        super()._paint_contents(painter, full_rect)
+    def _paint(self, painter: QPainter, full_rect: QRectF) -> None:
+        super()._paint(painter, full_rect)
         canvas = self.canvas_rect_for(full_rect)
         now = self._clock()
         painter.save()

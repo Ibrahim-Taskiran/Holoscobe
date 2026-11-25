@@ -32,7 +32,9 @@ from handcontrol.contracts import (
     Landmark,
     Quality,
 )
+from handcontrol.features import FINGER_CHAINS
 from handcontrol.ui import icons, theme
+from handcontrol.ui.painted import PaintedWidget
 from handcontrol.ui.viewmodel import (
     FINGER_NAME_LABELS_TR,
     FINGER_STATE_LABELS_TR,
@@ -47,36 +49,10 @@ from handcontrol.ui.viewmodel import (
 WRIST_LANDMARK: int = 0
 
 FINGER_LANDMARK_CHAINS: dict[FingerName, tuple[tuple[int, int], ...]] = {
-    FingerName.THUMB: ((0, 1), (1, 2), (2, 3), (3, 4)),
-    FingerName.INDEX: ((5, 6), (6, 7), (7, 8)),
-    FingerName.MIDDLE: ((9, 10), (10, 11), (11, 12)),
-    FingerName.RING: ((13, 14), (14, 15), (15, 16)),
-    FingerName.LITTLE: ((17, 18), (18, 19), (19, 20)),
-}
+    name: tuple(zip(ids, ids[1:])) for name, ids in FINGER_CHAINS.items()}
+FINGER_LANDMARK_CHAINS[FingerName.THUMB] = ((0, 1), *FINGER_LANDMARK_CHAINS[FingerName.THUMB])
 
-FINGER_LANDMARK_INDICES: dict[FingerName, tuple[int, ...]] = {
-    FingerName.THUMB: (1, 2, 3, 4),
-    FingerName.INDEX: (5, 6, 7, 8),
-    FingerName.MIDDLE: (9, 10, 11, 12),
-    FingerName.RING: (13, 14, 15, 16),
-    FingerName.LITTLE: (17, 18, 19, 20),
-}
-
-PALM_CONNECTIONS: tuple[tuple[int, int], ...] = (
-    (0, 5),
-    (5, 9),
-    (9, 13),
-    (13, 17),
-    (17, 0),
-)
-
-FINGER_ORDER: tuple[FingerName, ...] = (
-    FingerName.THUMB,
-    FingerName.INDEX,
-    FingerName.MIDDLE,
-    FingerName.RING,
-    FingerName.LITTLE,
-)
+PALM_CONNECTIONS: tuple[tuple[int, int], ...] = ((0, 5), (5, 9), (9, 13), (13, 17), (17, 0))
 
 
 STAGE_RADIUS = 14.0
@@ -117,19 +93,24 @@ def paint_stage_card(p: QPainter, canvas: QRectF, title: str, text: str, icon: s
     p.drawText(QRectF(left, box.top() + 13, box.right() - left - 14, 24), int(Qt.AlignmentFlag.AlignVCenter), title)
 
 
+def paint_viewfinder(p: QPainter, box: QRectF, color: QColor, width: float, arm: float, corners: int = 4) -> None:
+    """Camera frame corners (the bottom right one is the fourth)."""
+    pen = QPen(color, width)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    for c, sx, sy in ((box.topLeft(), 1, 1), (box.topRight(), -1, 1), (box.bottomLeft(), 1, -1),
+                      (box.bottomRight(), -1, -1))[:corners]:
+        p.drawPolyline([QPointF(c.x(), c.y() + sy * arm), c, QPointF(c.x() + sx * arm, c.y())])
+
+
 def paint_empty_stage(p: QPainter, canvas: QRectF) -> None:
     """Stage without a camera picture: quiet surface with viewfinder marks."""
     p.setPen(QPen(QColor(theme.HAIRLINE), 1.0))
     p.setBrush(QColor(theme.SURFACE))
     p.drawRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), STAGE_RADIUS, STAGE_RADIUS)
-    pen = QPen(QColor(theme.STROKE), 2.0)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    p.setPen(pen)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    box, arm = canvas.adjusted(28, 28, -28, -28), 26.0
-    for corner, sx, sy in ((box.topLeft(), 1, 1), (box.topRight(), -1, 1), (box.bottomLeft(), 1, -1),
-                           (box.bottomRight(), -1, -1)):
-        p.drawPolyline([QPointF(corner.x(), corner.y() + sy * arm), corner, QPointF(corner.x() + sx * arm, corner.y())])
+    paint_viewfinder(p, canvas.adjusted(28, 28, -28, -28), QColor(theme.STROKE), 2.0, 26.0)
 
 
 def paint_stage_pill(p: QPainter, at: QPointF, text: str, icon: str = "", tone: str = theme.ACCENT,
@@ -162,7 +143,7 @@ def paint_stage_corners(p: QPainter, canvas: QRectF, backdrop: QColor, radius: f
     p.drawRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
 
 
-class CameraPreviewWidget(QWidget):
+class CameraPreviewWidget(PaintedWidget):
     """Widget that visualizes FrameFeatures without opening any hardware camera."""
 
     def __init__(
@@ -223,10 +204,6 @@ class CameraPreviewWidget(QWidget):
     @property
     def last_had_uncertain_elements(self) -> bool:
         return self._last_had_uncertain_elements
-
-    @property
-    def show_details(self) -> bool:
-        return self._show_details
 
     @Slot(bool)
     def set_show_details(self, enabled: bool) -> None:
@@ -316,26 +293,7 @@ class CameraPreviewWidget(QWidget):
         return self.canvas_rect_for(QRectF(0.0, 0.0, max(100.0, float(self.width())),
                                            max(100.0, float(self.height()))))
 
-    def render_to_image(self, width: int = 640, height: int = 480) -> QImage:
-        """Render the preview directly into an offscreen QImage (useful for tests)."""
-        self.resize(width, height)
-        image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(QColor(theme.BG))
-        painter = QPainter(image)
-        self._paint_contents(painter, QRectF(0.0, 0.0, float(width), float(height)))
-        painter.end()
-        return image
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        self._paint_contents(
-            painter,
-            QRectF(0.0, 0.0, float(self.width()), float(self.height())),
-        )
-        painter.end()
-
-    def _paint_contents(self, painter: QPainter, full_rect: QRectF) -> None:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    def _paint(self, painter: QPainter, full_rect: QRectF) -> None:
         painter.fillRect(full_rect, QColor(theme.BG))
 
         self._last_rendered_hand_count = 0
@@ -472,39 +430,28 @@ class CameraPreviewWidget(QWidget):
             base_color = QColor(theme.HAND_LEFT)
         else:
             base_color = QColor(theme.HAND_RIGHT)
-
-        # Map FingerName -> FingerInfo
+        line = Qt.PenStyle.DashLine if hand_uncertain else Qt.PenStyle.SolidLine
         finger_map: dict[FingerName, FingerInfo] = {f.name: f for f in hand.fingers}
 
-        # Draw palm connections
-        palm_pen = QPen(
-            base_color,
-            2.2,
-            Qt.PenStyle.DashLine if hand_uncertain else Qt.PenStyle.SolidLine,
-        )
-        painter.setPen(palm_pen)
+        painter.setPen(QPen(base_color, 2.2, line))
         for i_start, i_end in PALM_CONNECTIONS:
             if i_start < len(points) and i_end < len(points):
                 painter.drawLine(points[i_start], points[i_end])
 
         # Draw each finger chain with explicit uncertainty differentiation
-        for finger_name in FINGER_ORDER:
+        for finger_name in FingerName:
             f_info = finger_map.get(finger_name)
             finger_uncertain = (
                 hand_uncertain
                 or f_info is None
                 or f_info.state == FingerState.UNKNOWN
             )
+            pen_style = Qt.PenStyle.DashLine if finger_uncertain else Qt.PenStyle.SolidLine
             if finger_uncertain:
                 self._last_had_uncertain_elements = True
                 chain_color = QColor(theme.HAND_UNCERTAIN)
-                pen_style = Qt.PenStyle.DashLine
-            elif f_info is not None and f_info.state == FingerState.BENT:
-                chain_color = base_color.darker(125)
-                pen_style = Qt.PenStyle.SolidLine
             else:
-                chain_color = base_color
-                pen_style = Qt.PenStyle.SolidLine
+                chain_color = base_color.darker(125) if f_info.state == FingerState.BENT else base_color
 
             painter.setPen(QPen(chain_color, 2.4, pen_style))
             for idx_a, idx_b in FINGER_LANDMARK_CHAINS[finger_name]:
@@ -512,7 +459,7 @@ class CameraPreviewWidget(QWidget):
                     painter.drawLine(points[idx_a], points[idx_b])
 
             # Draw finger landmarks (hollow dashed ring when uncertain, solid dot when certain)
-            for lm_idx in FINGER_LANDMARK_INDICES[finger_name]:
+            for lm_idx in FINGER_CHAINS[finger_name]:
                 if lm_idx < len(points):
                     pt = points[lm_idx]
                     if finger_uncertain:
@@ -527,20 +474,14 @@ class CameraPreviewWidget(QWidget):
         # Draw wrist landmark (index 0)
         if len(points) > WRIST_LANDMARK:
             wrist_pt = points[WRIST_LANDMARK]
-            painter.setPen(
-                QPen(
-                    base_color,
-                    1.8,
-                    Qt.PenStyle.DashLine if hand_uncertain else Qt.PenStyle.SolidLine,
-                )
-            )
+            painter.setPen(QPen(base_color, 1.8, line))
             painter.setBrush(Qt.BrushStyle.NoBrush if hand_uncertain else base_color)
             painter.drawEllipse(wrist_pt, 5.5, 5.5)
 
             # Label above wrist/palm
-            hand_label = HANDEDNESS_LABELS_TR.get(hand.handedness, "Belirsiz El")
-            qual_label = QUALITY_LABELS_TR.get(hand.quality, "Belirsiz")
-            tag_text = f"{hand_label} (#{hand.hand_id}) [{qual_label}]" if self._show_details else hand_label
+            tag_text = HANDEDNESS_LABELS_TR[hand.handedness]
+            if self._show_details:
+                tag_text += f" (#{hand.hand_id}) [{QUALITY_LABELS_TR[hand.quality]}]"
             painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
             w = painter.fontMetrics().horizontalAdvance(tag_text) + 20.0
             tag = QRectF(wrist_pt.x() - w / 2, wrist_pt.y() + 12.0, w, 24.0)
@@ -559,36 +500,19 @@ class CameraPreviewWidget(QWidget):
         identity_ambiguous: bool,
     ) -> None:
         card_w = min(230.0, canvas.width() * 0.44)
-        card_h = 156.0
-        margin = 14.0
-        card_x = (
-            canvas.left() + margin
-            if slot_index == 0
-            else canvas.right() - card_w - margin
-        )
-        card_y = canvas.top() + margin
-        card_rect = QRectF(card_x, card_y, card_w, card_h)
+        card_x = canvas.left() + 14.0 if slot_index == 0 else canvas.right() - card_w - 14.0
+        card_y = canvas.top() + 14.0
 
         hand_uncertain = self._is_hand_uncertain(hand, identity_ambiguous)
-        border_pen = QPen(
-            QColor(theme.HAND_UNCERTAIN) if hand_uncertain else theme.color(theme.WHITE, 0.13),
-            1.2,
-            Qt.PenStyle.DashLine if hand_uncertain else Qt.PenStyle.SolidLine,
-        )
-        painter.setPen(border_pen)
+        left = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        painter.setPen(QPen(QColor(theme.HAND_UNCERTAIN) if hand_uncertain else theme.color(theme.WHITE, 0.13), 1.2,
+                            Qt.PenStyle.DashLine if hand_uncertain else Qt.PenStyle.SolidLine))
         painter.setBrush(theme.color(theme.SURFACE, 0.88))
-        painter.drawRoundedRect(card_rect, theme.RADIUS_L, theme.RADIUS_L)
+        painter.drawRoundedRect(QRectF(card_x, card_y, card_w, 156.0), theme.RADIUS_L, theme.RADIUS_L)
         painter.setFont(theme.bold(theme.TEXT_PX["caption"]))
-
-        hand_label = HANDEDNESS_LABELS_TR.get(hand.handedness, "Belirsiz El")
-        qual_label = QUALITY_LABELS_TR.get(hand.quality, "Belirsiz")
-        header_text = f"{hand_label} — {qual_label}"
         painter.setPen(QColor(theme.HAND_UNCERTAIN if hand_uncertain else theme.TEXT))
-        painter.drawText(
-            QRectF(card_x + 14.0, card_y + 10.0, card_w - 28.0, 18.0),
-            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            header_text,
-        )
+        painter.drawText(QRectF(card_x + 14.0, card_y + 10.0, card_w - 28.0, 18.0), left,
+                         f"{HANDEDNESS_LABELS_TR[hand.handedness]} — {QUALITY_LABELS_TR[hand.quality]}")
 
         # Finger rows: name + state (Açık / Bükülü / Belirsiz) + curl bar
         painter.setFont(theme.font(11))
@@ -596,61 +520,34 @@ class CameraPreviewWidget(QWidget):
 
         y_cursor = card_y + 34.0
         row_h = 22.0
-        for finger_name in FINGER_ORDER:
+        for finger_name in FingerName:
             f_info = finger_map.get(
                 finger_name,
                 FingerInfo(name=finger_name, state=FingerState.UNKNOWN, curl=0.0),
             )
-            f_name_tr = FINGER_NAME_LABELS_TR[finger_name]
-            f_state_tr = FINGER_STATE_LABELS_TR.get(f_info.state, "Belirsiz")
-            curl_val = max(0.0, min(1.0, float(f_info.curl)))
             is_unknown = f_info.state == FingerState.UNKNOWN or hand_uncertain
 
+            bar_pen = QPen(Qt.PenStyle.NoPen)
             if is_unknown:
                 self._last_had_uncertain_elements = True
-                text_color = QColor(theme.HAND_UNCERTAIN)
-                bar_color = theme.color(theme.HAND_UNCERTAIN, 0.6)
+                text_color, bar_color = QColor(theme.HAND_UNCERTAIN), theme.color(theme.HAND_UNCERTAIN, 0.6)
                 bar_pen = QPen(QColor(theme.HAND_UNCERTAIN), 1.0, Qt.PenStyle.DashLine)
             elif f_info.state == FingerState.EXTENDED:
-                text_color = QColor(theme.TEXT)
-                bar_color = QColor(theme.SUCCESS)
-                bar_pen = QPen(Qt.PenStyle.NoPen)
+                text_color, bar_color = QColor(theme.TEXT), QColor(theme.SUCCESS)
             else:
-                text_color = QColor(theme.TEXT_SOFT)
-                bar_color = QColor(theme.ACCENT)
-                bar_pen = QPen(Qt.PenStyle.NoPen)
+                text_color, bar_color = QColor(theme.TEXT_SOFT), QColor(theme.ACCENT)
 
             painter.setPen(text_color)
-            label_rect = QRectF(card_x + 14.0, y_cursor, card_w * 0.56, row_h)
-            painter.drawText(
-                label_rect,
-                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                f"{f_name_tr}: {f_state_tr}",
-            )
-
-            # Curl bar
-            bar_x = card_x + card_w * 0.62
-            bar_w = card_w * 0.38 - 14.0
-            bar_h = 6.0
-            bar_y = y_cursor + (row_h - bar_h) * 0.5
-            bar_bg_rect = QRectF(bar_x, bar_y, bar_w, bar_h)
-
+            painter.drawText(QRectF(card_x + 14.0, y_cursor, card_w * 0.56, row_h), left,
+                             f"{FINGER_NAME_LABELS_TR[finger_name]}: {FINGER_STATE_LABELS_TR[f_info.state]}")
+            bar = QRectF(card_x + card_w * 0.62, y_cursor + (row_h - 6.0) * 0.5, card_w * 0.38 - 14.0, 6.0)
             painter.setPen(bar_pen)
             painter.setBrush(theme.color(theme.WHITE, 0.12))
-            painter.drawRoundedRect(bar_bg_rect, 3.0, 3.0)
-
-            fill_w = bar_w * curl_val
-            if fill_w > 1.0:
+            painter.drawRoundedRect(bar, 3.0, 3.0)
+            bar.setWidth(bar.width() * max(0.0, min(1.0, float(f_info.curl))))
+            if bar.width() > 1.0:
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(bar_color)
-                painter.drawRoundedRect(
-                    QRectF(bar_x, bar_y, fill_w, bar_h),
-                    3.0,
-                    3.0,
-                )
-
+                painter.drawRoundedRect(bar, 3.0, 3.0)
             y_cursor += row_h
 
-
-# Alias for convenience
-PreviewWidget = CameraPreviewWidget

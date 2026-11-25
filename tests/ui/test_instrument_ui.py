@@ -16,12 +16,11 @@ from handcontrol.instrument.events import (
     StringView,
 )
 from handcontrol.ui import InstrumentWindow, SparkSystem
-from handcontrol.ui.demo import build_synthetic_frame
+from ui_synth import build_synthetic_frame
 from handcontrol.ui.instrument_view import INSTRUMENT_WINDOW_TITLE_TR
-from handcontrol.ui.overlay import build_mode_overlay_state
 from handcontrol.ui.settings import INSTRUMENT_SCALE_LABELS_TR, SettingsData, SettingsDialog
-from handcontrol.ui.tray import HandControlTray, create_mode_pixmap
-from handcontrol.ui.viewmodel import MODE_LABELS_TR, UiBridge, UiState, create_mode_menu_items
+from handcontrol.ui.tray import HandControlTray, create_mode_icon
+from handcontrol.ui.viewmodel import MODE_LABELS_TR, UiBridge, UiState
 
 W, H = 640, 480
 
@@ -307,12 +306,9 @@ def test_settings_default_mode_combo_has_instrument() -> None:
 def test_mode_labels_and_icon_for_instrument() -> None:
     assert MODE_LABELS_TR[Mode.INSTRUMENT] == "Enstrüman"
     assert set(MODE_LABELS_TR) == set(Mode)
-    pix = create_mode_pixmap(Mode.INSTRUMENT, 32)
+    pix = create_mode_icon(Mode.INSTRUMENT, 32).pixmap(32)
     assert not pix.isNull()
-    assert pix.toImage() != create_mode_pixmap(Mode.COMMANDS, 32).toImage()
-    items = create_mode_menu_items(active_mode=Mode.INSTRUMENT)
-    assert [i.label for i in items if i.active] == ["Enstrüman"]
-    assert any(i.item_id == "instrument" for i in build_mode_overlay_state(active_mode=Mode.INSTRUMENT).items)
+    assert pix.toImage() != create_mode_icon(Mode.COMMANDS, 32).pixmap(32).toImage()
     assert UiState(mode=Mode.INSTRUMENT).mode_label_tr == "Enstrüman"
 
 

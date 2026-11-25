@@ -230,8 +230,8 @@ class CalibrationPreviewCanvas(CameraPreviewWidget):
             self._corner_points = list(corner_points)
         self.update()
 
-    def _paint_contents(self, painter: QPainter, full_rect: QRectF) -> None:
-        super()._paint_contents(painter, full_rect)
+    def _paint(self, painter: QPainter, full_rect: QRectF) -> None:
+        super()._paint(painter, full_rect)
         canvas = self._canvas_rect()
         self._draw_guide_marks(painter, canvas)
 

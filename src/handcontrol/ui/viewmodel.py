@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from functools import partial, wraps
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -46,23 +47,9 @@ class OverlayMenuKind(Enum):
     WINDOW_ACTION_MENU = "window_action_menu"
 
 
-class WindowActionKind(Enum):
-    """Actions available in the window action overlay menu."""
-
-    MINIMIZE = "minimize"
-    MAXIMIZE_RESTORE = "maximize_restore"
-    MOVE_OTHER_MONITOR = "move_other_monitor"
-    CLOSE = "close"
-
-
 class FeedbackKind(Enum):
-    """Short notification types displayed by the feedback OSD."""
+    """Looks of the short notifications."""
 
-    ACTIVATED = "activated"
-    PAUSED = "paused"
-    MODE_CHANGED = "mode_changed"
-    VOLUME = "volume"
-    CLOSE_CONFIRM = "close_confirm"
     INFO = "info"
     WARNING = "warning"
 
@@ -95,7 +82,6 @@ COMMAND_LABELS_TR: dict[str, str] = {
     "media_previous": "Önceki parça",
     "volume_mute": "Sesi kapat/aç",
 }
-COMMAND_LABELS = COMMAND_LABELS_TR
 
 # Settings swipe_profile values (config.SWIPE_PROFILES) -> Turkish labels.
 SWIPE_PROFILE_LABELS_TR: dict[str, str] = {
@@ -104,15 +90,6 @@ SWIPE_PROFILE_LABELS_TR: dict[str, str] = {
     "browser": "Tarayıcı",
     "media": "Medya",
     "desktops": "Sanal masaüstleri",
-}
-
-# ControllerSnapshot.hold_kind values -> Turkish labels (cursor hold ring).
-HOLD_KIND_LABELS_TR: dict[str, str] = {
-    "right_click": "Sağ tık",
-    "grab": "Sürükle",
-    "fist": "Yumruk",
-    "dwell": "Bekleyerek tıkla",
-    "window_drag": "Pencere taşı",
 }
 
 COMMAND_TOAST_MS = 900
@@ -168,13 +145,6 @@ QUALITY_LABELS_TR: dict[Quality, str] = {
     Quality.USABLE: "Kullanılabilir",
     Quality.DEGRADED: "Düşük Kalite",
     Quality.UNKNOWN: "Belirsiz",
-}
-
-WINDOW_ACTION_LABELS_TR: dict[WindowActionKind, str] = {
-    WindowActionKind.MINIMIZE: "Küçült",
-    WindowActionKind.MAXIMIZE_RESTORE: "Büyüt / Geri Yükle",
-    WindowActionKind.MOVE_OTHER_MONITOR: "Diğer Ekrana Taşı",
-    WindowActionKind.CLOSE: "Kapat",
 }
 
 ACTION_KIND_LABELS_TR: dict[ActionKind, str] = {
@@ -282,16 +252,6 @@ def resolve_indicator(snapshot: Any) -> IndicatorState:
     return IndicatorState(IndicatorKind.PARKED, INDICATOR_TEXT_TR[IndicatorKind.PARKED])
 
 
-def format_gesture_guide_tr() -> str:
-    """Return the gesture guide as plain Turkish text lines ("gesture → result")."""
-    return "\n".join(f"{gesture} → {result}" for gesture, result in GESTURE_GUIDE_TR)
-
-
-def format_commands_guide_tr() -> str:
-    """Return the Komutlar mode guide as plain Turkish text lines ("gesture → result")."""
-    return "\n".join(f"{gesture} → {result}" for gesture, result in COMMANDS_GUIDE_TR)
-
-
 def resolve_tray_icon_state(
     control_state: ControlState,
     camera_state: CameraState,
@@ -322,7 +282,7 @@ def format_action_tr(action: Action) -> str:
     command = str(getattr(action, "command", "") or "")
     if command:
         parts.append(f"komut={command_label_tr(command)}")
-    return f"Üretilecek komut: {' | '.join(parts)}"
+    return " | ".join(parts)
 
 
 # ---------- ViewModel state dataclasses ----------
@@ -334,8 +294,7 @@ class VirtualCursorState:
     x: float = 0.5                  # Normalized [0.0, 1.0] within the overlay
     y: float = 0.5                  # Normalized [0.0, 1.0] within the overlay
     visible: bool = False
-    pinching: bool = False
-    hold_progress: float = 0.0      # [0.0, 1.0] dwell/hold progress
+    hold_progress: float = 0.0      # [0.0, 1.0] ring that fills while the V is held
 
 
 @dataclass(frozen=True)
@@ -362,12 +321,6 @@ class OverlayState:
     cursor: VirtualCursorState = field(default_factory=VirtualCursorState)
     inactivity_ms: float = 0.0
     timeout_ms: float = 5000.0
-    closing_progress: float = 0.0   # [0.0, 1.0] closing animation progress
-    target_window_title: str = ""
-
-    @property
-    def is_expired(self) -> bool:
-        return self.inactivity_ms >= self.timeout_ms or self.closing_progress >= 1.0
 
 
 @dataclass(frozen=True)
@@ -412,8 +365,6 @@ class FeedbackMessage:
 
     kind: FeedbackKind
     text: str
-    volume_percent: Optional[int] = None
-    hold_progress: Optional[float] = None
     duration_ms: int = 1800
 
 
@@ -424,9 +375,6 @@ class UiState:
     control_state: ControlState = ControlState.PAUSED
     camera_state: CameraState = CameraState.OFF
     mode: Mode = Mode.POINTER
-    menu_items: tuple[OverlayMenuItem, ...] = ()
-    virtual_cursor: VirtualCursorState = field(default_factory=VirtualCursorState)
-    hold_progress: float = 0.0
     fps: float = 0.0
     sample_age_ms: float = 0.0
     error_text: str = ""
@@ -478,57 +426,15 @@ class UiState:
         return "Kamerayı Başlat"
 
 
-def create_mode_menu_items(
-    active_mode: Mode = Mode.POINTER,
-    hovered_mode: Optional[Mode] = None,
-    hold_progress: float = 0.0,
-) -> tuple[OverlayMenuItem, ...]:
-    """Create one mode menu item per Mode (7 with Komutlar and Enstrüman) in Turkish."""
-    items: list[OverlayMenuItem] = []
-    for mode in Mode:
-        is_hovered = mode == hovered_mode
-        items.append(
-            OverlayMenuItem(
-                item_id=mode.value,
-                label=MODE_LABELS_TR[mode],
-                enabled=True,
-                active=(mode == active_mode),
-                hovered=is_hovered,
-                armed=False,
-                hold_progress=max(0.0, min(1.0, hold_progress)) if is_hovered else 0.0,
-            )
-        )
-    return tuple(items)
-
-
-def create_window_action_menu_items(
-    hovered_action: Optional[WindowActionKind] = None,
-    close_armed: bool = False,
-    close_hold_progress: float = 0.0,
-    multi_monitor: bool = True,
-) -> tuple[OverlayMenuItem, ...]:
-    """Create the 4 standard window action menu items in Turkish."""
-    clamped_close = max(0.0, min(1.0, close_hold_progress))
-    items: list[OverlayMenuItem] = []
-    for action_kind in WindowActionKind:
-        is_hovered = action_kind == hovered_action
-        is_close = action_kind == WindowActionKind.CLOSE
-        enabled = multi_monitor if action_kind == WindowActionKind.MOVE_OTHER_MONITOR else True
-        label = WINDOW_ACTION_LABELS_TR[action_kind]
-        if is_close and close_armed:
-            label = "Kapat (1 sn Basılı Tutun)"
-        items.append(
-            OverlayMenuItem(
-                item_id=action_kind.value,
-                label=label,
-                enabled=enabled,
-                active=False,
-                hovered=is_hovered,
-                armed=close_armed if is_close else False,
-                hold_progress=clamped_close if is_close else 0.0,
-            )
-        )
-    return tuple(items)
+def _on_gui(method):
+    """Callable from any thread; runs on the thread of the bridge (GUI)."""
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        if QThread.currentThread() == self.thread():
+            method(self, *args, **kwargs)
+        else:
+            self._queued.emit(partial(method, self, *args, **kwargs))
+    return call
 
 
 class UiBridge(QObject):
@@ -550,13 +456,9 @@ class UiBridge(QObject):
     command_triggered = Signal(str)             # KeyCommand value, once per command_seq change
     mascot_visible_changed = Signal(bool)       # the cat was shown or hidden (button and tray mirror it)
 
-    # User request signals (controller / application coordinator subscribes to these)
+    # User request signals: buttons and menus connect to or emit them, the application listens
     pause_resume_requested = Signal()
-    pause_requested = Signal()
-    resume_requested = Signal()
     camera_toggle_requested = Signal()
-    camera_start_requested = Signal()
-    camera_stop_requested = Signal()
     settings_requested = Signal()
     calibration_requested = Signal()
     tutorial_requested = Signal()
@@ -564,19 +466,11 @@ class UiBridge(QObject):
     instrument_window_requested = Signal()      # tray "Enstrüman penceresi"
     mascot_toggle_requested = Signal(bool)      # user asked to show / hide the cat
     mode_selected = Signal(object)              # Mode
-    window_action_selected = Signal(str)        # WindowActionKind.value
     settings_saved = Signal(object)             # SettingsData or dict
     calibration_completed = Signal(object)      # CalibrationResult
     calibration_cancelled = Signal()
 
-    # Internal cross-thread marshalling signals
-    _marshal_state = Signal(object)
-    _marshal_patch = Signal(object)
-    _marshal_frame = Signal(object, object, object)
-    _marshal_overlay = Signal(object)
-    _marshal_feedback = Signal(object)
-    _marshal_dry_run = Signal(str)
-    _marshal_snapshot = Signal(object)
+    _queued = Signal(object)                    # calls from other threads
 
     def __init__(
         self,
@@ -590,135 +484,47 @@ class UiBridge(QObject):
         self._cursor_feedback: CursorFeedbackState = CursorFeedbackState()
         self._command_seq: Optional[int] = None
         self._mascot_visible: bool = True
+        self._queued.connect(self._run)
 
-        self._marshal_snapshot.connect(self._apply_snapshot_on_gui_thread)
-        self._marshal_state.connect(self._apply_state_on_gui_thread)
-        self._marshal_patch.connect(self._apply_patch_on_gui_thread)
-        self._marshal_frame.connect(self._apply_frame_on_gui_thread)
-        self._marshal_overlay.connect(self._apply_overlay_on_gui_thread)
-        self._marshal_feedback.connect(self._apply_feedback_on_gui_thread)
-        self._marshal_dry_run.connect(self._apply_dry_run_on_gui_thread)
+    @Slot(object)
+    def _run(self, job) -> None:
+        job()
 
     @property
     def state(self) -> UiState:
         """Return the latest immutable UiState snapshot."""
         return self._state
 
-    def _is_gui_thread(self) -> bool:
-        return QThread.currentThread() == self.thread()
+    # ---------- updates (safe from any thread) ----------
 
-    # ---------- State update slots ----------
+    def _change(self, **fields: Any) -> None:
+        self._state = replace(self._state, **fields)
+        self.state_changed.emit(self._state)
 
-    @Slot(object)
+    @_on_gui
     def update_state(self, new_state: UiState) -> None:
-        """Replace the entire UiState safely from any thread."""
-        if self._is_gui_thread():
-            self._apply_state_on_gui_thread(new_state)
-        else:
-            self._marshal_state.emit(new_state)
-
-    @Slot(object)
-    def _apply_state_on_gui_thread(self, new_state: UiState) -> None:
+        """Replace the entire UiState."""
         self._state = new_state
-        self.state_changed.emit(self._state)
+        self.state_changed.emit(new_state)
 
-    def update_status(
-        self,
-        *,
-        control_state: Optional[ControlState] = None,
-        camera_state: Optional[CameraState] = None,
-        mode: Optional[Mode] = None,
-        menu_items: Optional[tuple[OverlayMenuItem, ...]] = None,
-        virtual_cursor: Optional[VirtualCursorState] = None,
-        hold_progress: Optional[float] = None,
-        fps: Optional[float] = None,
-        sample_age_ms: Optional[float] = None,
-        error_text: Optional[str] = None,
-        mirrored: Optional[bool] = None,
-        dry_run: Optional[bool] = None,
-        dry_run_command_text: Optional[str] = None,
-    ) -> None:
-        """Partially update fields of UiState safely from any thread."""
-        changes: dict[str, Any] = {}
-        if control_state is not None:
-            changes["control_state"] = control_state
-        if camera_state is not None:
-            changes["camera_state"] = camera_state
-        if mode is not None:
-            changes["mode"] = mode
-        if menu_items is not None:
-            changes["menu_items"] = tuple(menu_items)
-        if virtual_cursor is not None:
-            changes["virtual_cursor"] = virtual_cursor
-        if hold_progress is not None:
-            changes["hold_progress"] = max(0.0, min(1.0, float(hold_progress)))
-        if fps is not None:
-            changes["fps"] = float(fps)
-        if sample_age_ms is not None:
-            changes["sample_age_ms"] = float(sample_age_ms)
-        if error_text is not None:
-            changes["error_text"] = str(error_text)
-        if mirrored is not None:
-            changes["mirrored"] = bool(mirrored)
-        if dry_run is not None:
-            changes["dry_run"] = bool(dry_run)
-        if dry_run_command_text is not None:
-            changes["dry_run_command_text"] = str(dry_run_command_text)
+    @_on_gui
+    def update_status(self, **fields: Any) -> None:
+        """Change single UiState fields."""
+        self._change(**fields)
 
-        if not changes:
-            return
-
-        if self._is_gui_thread():
-            self._apply_patch_on_gui_thread(changes)
-        else:
-            self._marshal_patch.emit(changes)
-
-    @Slot(object)
-    def _apply_patch_on_gui_thread(self, changes: dict[str, Any]) -> None:
-        self._state = replace(self._state, **changes)
-        self.state_changed.emit(self._state)
-
-    @Slot(object)
-    def update_frame(
-        self,
-        frame: Optional[FrameFeatures],
-        fps: Optional[float] = None,
-        sample_age_ms: Optional[float] = None,
-    ) -> None:
-        """Update the latest camera/tracking FrameFeatures safely from any thread."""
-        if self._is_gui_thread():
-            self._apply_frame_on_gui_thread(frame, fps, sample_age_ms)
-        else:
-            self._marshal_frame.emit(frame, fps, sample_age_ms)
-
-    @Slot(object, object, object)
-    def _apply_frame_on_gui_thread(
-        self,
-        frame: Optional[FrameFeatures],
-        fps: Optional[float],
-        sample_age_ms: Optional[float],
-    ) -> None:
-        changes: dict[str, Any] = {"latest_frame": frame}
-        if fps is not None:
-            changes["fps"] = float(fps)
-        if sample_age_ms is not None:
-            changes["sample_age_ms"] = float(sample_age_ms)
-        elif frame is not None and frame.inference_done_ms >= frame.capture_ms:
-            changes["sample_age_ms"] = float(frame.inference_done_ms - frame.capture_ms)
-        self._state = replace(self._state, **changes)
+    @_on_gui
+    def update_frame(self, frame: Optional[FrameFeatures]) -> None:
+        """Latest tracking result."""
+        age = {}
+        if frame is not None and frame.inference_done_ms >= frame.capture_ms:
+            age = {"sample_age_ms": float(frame.inference_done_ms - frame.capture_ms)}
+        self._state = replace(self._state, latest_frame=frame, **age)
         self.frame_updated.emit(frame)
         self.state_changed.emit(self._state)
 
-    @Slot(object)
+    @_on_gui
     def update_snapshot(self, snapshot: Any) -> None:
-        """Feed a ControllerSnapshot: refreshes the status indicator and cancel toast."""
-        if self._is_gui_thread():
-            self._apply_snapshot_on_gui_thread(snapshot)
-        else:
-            self._marshal_snapshot.emit(snapshot)
-
-    @Slot(object)
-    def _apply_snapshot_on_gui_thread(self, snapshot: Any) -> None:
+        """Feed a ControllerSnapshot: refreshes the status indicator, cursor ring and toasts."""
         indicator = resolve_indicator(snapshot)
         if indicator != self._indicator:
             self._indicator = indicator
@@ -727,9 +533,8 @@ class UiBridge(QObject):
         if cancel != self._last_cancel:
             self._last_cancel = cancel
             if cancel:
-                self._apply_feedback_on_gui_thread(
-                    FeedbackMessage(FeedbackKind.WARNING, cancel, duration_ms=CANCEL_TOAST_MS)
-                )
+                self.feedback_triggered.emit(
+                    FeedbackMessage(FeedbackKind.WARNING, cancel, duration_ms=CANCEL_TOAST_MS))
         feedback = resolve_cursor_feedback(snapshot)
         if feedback != self._cursor_feedback:
             self._cursor_feedback = feedback
@@ -747,10 +552,6 @@ class UiBridge(QObject):
                 self.command_triggered.emit(command)
 
     @property
-    def cursor_feedback(self) -> CursorFeedbackState:
-        return self._cursor_feedback
-
-    @property
     def mascot_visible(self) -> bool:
         return self._mascot_visible
 
@@ -760,152 +561,26 @@ class UiBridge(QObject):
         self._mascot_visible = bool(on)
         self.mascot_visible_changed.emit(self._mascot_visible)
 
-    @Slot(object)
+    @_on_gui
     def update_overlay(self, overlay: OverlayState) -> None:
-        """Update overlay state (mode menu or window action menu) safely."""
-        if self._is_gui_thread():
-            self._apply_overlay_on_gui_thread(overlay)
-        else:
-            self._marshal_overlay.emit(overlay)
-
-    @Slot(object)
-    def _apply_overlay_on_gui_thread(self, overlay: OverlayState) -> None:
-        self._state = replace(
-            self._state,
-            overlay=overlay,
-            menu_items=overlay.items,
-            virtual_cursor=overlay.cursor,
-        )
+        """Mode wheel or window action menu."""
+        self._state = replace(self._state, overlay=overlay)
         self.overlay_updated.emit(overlay)
         self.state_changed.emit(self._state)
 
-    @Slot(float, float, bool, bool, float)
-    def update_virtual_cursor(
-        self,
-        x: float,
-        y: float,
-        visible: bool = True,
-        pinching: bool = False,
-        hold_progress: float = 0.0,
-    ) -> None:
-        """Update the virtual cursor position and hold progress."""
-        cursor = VirtualCursorState(
-            x=max(0.0, min(1.0, float(x))),
-            y=max(0.0, min(1.0, float(y))),
-            visible=bool(visible),
-            pinching=bool(pinching),
-            hold_progress=max(0.0, min(1.0, float(hold_progress))),
-        )
-        overlay = replace(self._state.overlay, cursor=cursor)
-        self.update_overlay(overlay)
+    @_on_gui
+    def show_feedback(self, message: str) -> None:
+        """Short notification that never takes the focus."""
+        self.feedback_triggered.emit(FeedbackMessage(FeedbackKind.INFO, str(message)))
 
-    @Slot(object)
-    def show_feedback(
-        self,
-        message: FeedbackMessage | str,
-        kind: FeedbackKind = FeedbackKind.INFO,
-        volume_percent: Optional[int] = None,
-        hold_progress: Optional[float] = None,
-        duration_ms: int = 1800,
-    ) -> None:
-        """Trigger a short non-focus-stealing notification."""
-        if isinstance(message, FeedbackMessage):
-            msg = message
-        else:
-            msg = FeedbackMessage(
-                kind=kind,
-                text=str(message),
-                volume_percent=volume_percent,
-                hold_progress=hold_progress,
-                duration_ms=duration_ms,
-            )
-        if self._is_gui_thread():
-            self._apply_feedback_on_gui_thread(msg)
-        else:
-            self._marshal_feedback.emit(msg)
-
-    @Slot(object)
-    def _apply_feedback_on_gui_thread(self, msg: FeedbackMessage) -> None:
-        self.feedback_triggered.emit(msg)
-
-    @Slot(object)
+    @_on_gui
     def record_dry_run_action(self, action: Action | str) -> None:
-        """Format and publish a dry-run action string."""
-        if isinstance(action, Action):
-            text = format_action_tr(action)
-        else:
-            raw = str(action).strip()
-            text = raw if raw.startswith("Üretilecek komut:") else f"Üretilecek komut: {raw}"
-        if self._is_gui_thread():
-            self._apply_dry_run_on_gui_thread(text)
-        else:
-            self._marshal_dry_run.emit(text)
-
-    @Slot(str)
-    def _apply_dry_run_on_gui_thread(self, text: str) -> None:
+        """Publish the command a dry run would have sent."""
+        text = format_action_tr(action) if isinstance(action, Action) else str(action).strip()
         self._state = replace(self._state, dry_run=True, dry_run_command_text=text)
         self.dry_run_updated.emit(text)
         self.state_changed.emit(self._state)
 
-    # ---------- User request emitters (called by GUI widgets) ----------
-
-    @Slot()
-    def request_pause_resume(self) -> None:
-        """Emit pause/resume request signals based on current control state."""
-        active = self._state.control_state == ControlState.ACTIVE      # before a toggle listener changes it
-        self.pause_resume_requested.emit()
-        if active:
-            self.pause_requested.emit()
-        else:
-            self.resume_requested.emit()
-
-    @Slot()
-    def request_camera_toggle(self) -> None:
-        """Emit camera start/stop request signals based on current camera state."""
-        running = self._state.camera_state in (CameraState.RUNNING, CameraState.STARTING)
-        self.camera_toggle_requested.emit()
-        if running:
-            self.camera_stop_requested.emit()
-        else:
-            self.camera_start_requested.emit()
-
-    @Slot()
-    def request_settings(self) -> None:
-        """Emit settings dialog request."""
-        self.settings_requested.emit()
-
-    @Slot()
-    def request_calibration(self) -> None:
-        """Emit calibration wizard request."""
-        self.calibration_requested.emit()
-
-    @Slot()
-    def request_tutorial(self) -> None:
-        """Emit first-run tutorial (onboarding) request."""
-        self.tutorial_requested.emit()
-
-    @Slot()
-    def request_instrument_window(self) -> None:
-        """Emit the request to show the instrument (Enstrüman) window."""
-        self.instrument_window_requested.emit()
-
-    @Slot(bool)
-    def request_mascot(self, on: bool) -> None:
-        """Emit the request to show or hide the cat."""
-        self.mascot_toggle_requested.emit(bool(on))
-
-    @Slot()
-    def request_exit(self) -> None:
-        """Emit application exit request."""
-        self.exit_requested.emit()
-
-    @Slot(object)
     def select_mode(self, mode: Mode | str) -> None:
         """Emit mode selection request."""
-        resolved = Mode(mode) if isinstance(mode, str) else mode
-        self.mode_selected.emit(resolved)
-
-    @Slot(str)
-    def select_window_action(self, action_id: str) -> None:
-        """Emit window action selection request."""
-        self.window_action_selected.emit(str(action_id))
+        self.mode_selected.emit(Mode(mode))

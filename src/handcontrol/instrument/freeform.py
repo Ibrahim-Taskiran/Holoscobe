@@ -80,6 +80,36 @@ def normalize_free_strings(raw: object, aspect: float = 4.0 / 3.0) -> tuple[Seg,
     return tuple(out)
 
 
+def move_seg(seg: Seg, dx: float, dy: float) -> Seg:
+    """Shifted copy that stays whole inside the frame."""
+    x0, y0, x1, y1 = seg
+    dx = min(1.0 - max(x0, x1), max(-min(x0, x1), dx))
+    dy = min(1.0 - max(y0, y1), max(-min(y0, y1), dy))
+    return (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+
+
+def fit_seg(seg: Seg, strings: tuple[Seg, ...], index: Optional[int], aspect: float, snap: bool) -> tuple[Seg, bool]:
+    """Edited string `index` clamped into the frame and, with `snap`, aligned to the other strings."""
+    seg = clamp_seg(seg)
+    if not snap or seg_length(seg, aspect) < MIN_LENGTH:
+        return seg, False
+    return snap_segment(seg, [s for i, s in enumerate(strings) if i != index], aspect)
+
+
+def put_seg(strings: tuple[Seg, ...], index: Optional[int], seg: Seg) -> tuple[tuple[Seg, ...], int]:
+    """Strings with `seg` at `index` (None: appended), and its index."""
+    if index is None:
+        return strings + (seg,), len(strings)
+    return strings[:index] + (seg,) + strings[index + 1:], index
+
+
+def drop_short(strings: tuple[Seg, ...], index: Optional[int], aspect: float) -> tuple[Seg, ...]:
+    """Strings without `index` when it was squeezed below the minimum length."""
+    if index is None or seg_length(strings[index], aspect) >= MIN_LENGTH:
+        return strings
+    return strings[:index] + strings[index + 1:]
+
+
 def pitch_order(strings: Iterable[Seg]) -> list[int]:
     """Indices sorted top to bottom (midpoint y, then x): the top string plays the lowest note."""
     segs = list(strings)
@@ -110,6 +140,11 @@ def hit_test(strings: Iterable[Seg], p: Vec, aspect: float, *, end_radius: float
 
 def _angle(a: Vec, b: Vec) -> float:
     return math.atan2(b[1] - a[1], b[0] - a[0])
+
+
+def _offset(pa: Vec, pb: Vec, ra: Vec, rb: Vec, n: Vec) -> float:
+    """Distance of the midpoint of p from the midpoint of r along n."""
+    return ((pa[0] + pb[0]) / 2.0 - (ra[0] + rb[0]) / 2.0) * n[0] + ((pa[1] + pb[1]) / 2.0 - (ra[1] + rb[1]) / 2.0) * n[1]
 
 
 def _line_diff(t1: float, t2: float) -> float:
@@ -152,7 +187,7 @@ def snap_segment(seg: Seg, others: Iterable[Seg], aspect: float) -> tuple[Seg, b
         nx, ny = -uy, ux
         # map seg ends onto r's ends in the matching order
         pa, pb = (a, b) if (a[0] - b[0]) * ux + (a[1] - b[1]) * uy <= 0 else (b, a)
-        off = ((pa[0] + pb[0]) / 2.0 - (ra[0] + rb[0]) / 2.0) * nx + ((pa[1] + pb[1]) / 2.0 - (ra[1] + rb[1]) / 2.0) * ny
+        off = _offset(pa, pb, ra, rb, (nx, ny))
         if abs(off) > SNAP_REACH or abs(off) < 1e-6:
             continue
         ta = (ra[0] + nx * off, ra[1] + ny * off)
@@ -176,15 +211,13 @@ def _stack_gap(ra: Vec, rb: Vec, rest: list) -> Optional[float]:
     """Smallest perpendicular gap between string r and the strings already stacked on it (ends aligned)."""
     r_theta = _angle(ra, rb)
     ux, uy = math.cos(r_theta), math.sin(r_theta)
-    nx, ny = -uy, ux
     gaps = []
     for qa, qb in rest:
         if (qa, qb) == (ra, rb) or _line_diff(_angle(qa, qb), r_theta) > 1e-3:
             continue
-        off = ((qa[0] + qb[0]) / 2.0 - (ra[0] + rb[0]) / 2.0) * nx + ((qa[1] + qb[1]) / 2.0 - (ra[1] + rb[1]) / 2.0) * ny
-        along = [(q[0] - r[0]) * ux + (q[1] - r[1]) * uy for q, r in ((qa, ra), (qb, rb))]
-        along_swap = [(q[0] - r[0]) * ux + (q[1] - r[1]) * uy for q, r in ((qb, ra), (qa, rb))]
-        aligned = max(abs(v) for v in along) < 1e-3 or max(abs(v) for v in along_swap) < 1e-3
+        off = _offset(qa, qb, ra, rb, (-uy, ux))
+        aligned = any(max(abs((q[0] - r[0]) * ux + (q[1] - r[1]) * uy) for q, r in pairs) < 1e-3
+                      for pairs in (((qa, ra), (qb, rb)), ((qb, ra), (qa, rb))))
         if aligned and abs(off) > 1e-3:
             gaps.append(abs(off))
     return min(gaps) if gaps else None
@@ -276,7 +309,7 @@ class FreeEditor:
                 return self._commit(strings, aspect, t)
             if all(h in by_id for h in grab.hands):
                 self._move(grab, by_id, strings, aspect, snap)
-            return self._state(strings, grab, committed=False, t=t)
+            return self._state(strings, grab)
 
         ready = [h for h, (t0, _) in self._since.items() if t - t0 >= self.hold_ms and h in by_id]
         if ready and allowed:
@@ -287,7 +320,7 @@ class FreeEditor:
             if grab is not None:
                 self._grab = grab
                 self._move(grab, by_id, strings, aspect, snap)
-                return self._state(strings, grab, committed=False, t=t)
+                return self._state(strings, grab)
         pending = tuple((pt, min(1.0, (t - t0) / self.hold_ms)) for t0, pt in self._since.values())
         return EditState(strings, None, False, False, False, pending, t < self._full_until)
 
@@ -316,46 +349,25 @@ class FreeEditor:
     def _start(self, strings: tuple[Seg, ...], hands: tuple[int, ...], by_id: dict[int, HandPinch],
                aspect: float, t: float) -> Optional[_Grab]:
         pts = [by_id[h].point for h in hands]
-        if len(hands) == 2:
-            h0 = hit_test(strings, pts[0], aspect)
-            h1 = hit_test(strings, pts[1], aspect)
-            if h0 is not None and h1 is not None and h0[0] == h1[0]:
-                i = h0[0]
-                e0, e1 = ends(strings[i])
-                # each hand drives its nearer end (no crossing)
-                direct = dist(_iso(pts[0], aspect), _iso(e0, aspect)) + dist(_iso(pts[1], aspect), _iso(e1, aspect))
-                swapped = dist(_iso(pts[0], aspect), _iso(e1, aspect)) + dist(_iso(pts[1], aspect), _iso(e0, aspect))
-                order = (0, 1) if direct <= swapped else (1, 0)
-                g = _Grab(hands, i)
-                for h, p, end in zip(hands, pts, order):
-                    e = (e0, e1)[end]
-                    g.links[h] = (end, p, (e[0] - p[0], e[1] - p[1]))
-                return g
+        hits = [hit_test(strings, p, aspect) for p in pts]
+        if None in hits or len({hit[0] for hit in hits}) > 1:      # new string  # type: ignore[index]
             if len(strings) >= MAX_STRINGS:
                 self._full_until = t + 1500.0
                 return None
-            g = _Grab(hands, None)
-            for h, p, end in zip(hands, pts, (0, 1)):
-                g.links[h] = (end, p, (0.0, 0.0))
-            return g
-        h, p = hands[0], pts[0]
-        hit = hit_test(strings, p, aspect)
-        if hit is None:
-            if len(strings) >= MAX_STRINGS:
-                self._full_until = t + 1500.0
-                return None
-            g = _Grab(hands, None)
-            g.links[h] = ("draw", p, (0.0, 0.0))
-            return g
-        i, part = hit
-        g = _Grab(hands, i)
-        e0, e1 = ends(strings[i])
-        if part == "body":
-            g.links[h] = ("both", p, (0.0, 0.0))
+            parts = ("draw",) if len(hands) == 1 else (0, 1)
+            return _Grab(hands, None, {h: (part, p, (0.0, 0.0)) for h, p, part in zip(hands, pts, parts)})
+        i, part = hits[0]  # type: ignore[misc]
+        e = ends(strings[i])
+        if len(hands) == 2:                      # each hand drives its nearer end (no crossing)
+            def way(a: int, b: int) -> float:
+                return sum(dist(_iso(p, aspect), _iso(e[k], aspect)) for p, k in zip(pts, (a, b)))
+            order = (0, 1) if way(0, 1) <= way(1, 0) else (1, 0)
+        elif part == "body":
+            return _Grab(hands, i, {hands[0]: ("both", pts[0], (0.0, 0.0))})
         else:
-            e = e0 if part == "p0" else e1
-            g.links[h] = (0 if part == "p0" else 1, p, (e[0] - p[0], e[1] - p[1]))
-        return g
+            order = (0 if part == "p0" else 1,)
+        return _Grab(hands, i, {h: (end, p, (e[end][0] - p[0], e[end][1] - p[1]))
+                                for h, p, end in zip(hands, pts, order)})
 
     def _move(self, g: _Grab, by_id: dict[int, HandPinch], strings: tuple[Seg, ...], aspect: float,
               snap: bool) -> None:
@@ -367,32 +379,17 @@ class FreeEditor:
                 e = [p0, p]
             elif end == "both":
                 assert base is not None
-                dx, dy = p[0] - p0[0], p[1] - p0[1]
-                a, b = ends(base)
-                dx = min(1.0 - max(a[0], b[0]), max(-min(a[0], b[0]), dx))
-                dy = min(1.0 - max(a[1], b[1]), max(-min(a[1], b[1]), dy))
-                e = [(a[0] + dx, a[1] + dy), (b[0] + dx, b[1] + dy)]
+                e = list(ends(move_seg(base, p[0] - p0[0], p[1] - p0[1])))
             else:
                 e[end] = (p[0] + off[0], p[1] + off[1])  # type: ignore[index]
-        draft = clamp_seg((*e[0], *e[1]))  # type: ignore[misc]
-        g.snapped = False
-        if snap and seg_length(draft, aspect) >= MIN_LENGTH:
-            others = [s for i, s in enumerate(strings) if i != g.index]
-            draft, g.snapped = snap_segment(draft, others, aspect)
-        g.draft = draft
+        g.draft, g.snapped = fit_seg((*e[0], *e[1]), strings, g.index, aspect, snap)  # type: ignore[misc]
 
     def _apply(self, strings: tuple[Seg, ...], g: _Grab) -> tuple[tuple[Seg, ...], Optional[int]]:
-        if g.draft is None:
-            return strings, g.index
-        if g.index is None:
-            return strings + (g.draft,), len(strings)
-        out = list(strings)
-        out[g.index] = g.draft
-        return tuple(out), g.index
+        return (strings, g.index) if g.draft is None else put_seg(strings, g.index, g.draft)
 
-    def _state(self, strings: tuple[Seg, ...], g: _Grab, committed: bool, t: float) -> EditState:
+    def _state(self, strings: tuple[Seg, ...], g: _Grab) -> EditState:
         shown, idx = self._apply(strings, g)
-        return EditState(shown, idx, True, g.snapped, committed)
+        return EditState(shown, idx, True, g.snapped, False)
 
     def _commit(self, strings: tuple[Seg, ...], aspect: float, t: float) -> EditState:
         g, self._grab = self._grab, None
@@ -400,14 +397,12 @@ class FreeEditor:
         # the hands that are still pinching must start a new hold before grabbing again
         for h in list(self._since):
             self._since[h] = (t, self._since[h][1])
-        out, idx = self._apply(strings, g)
-        if idx is not None and seg_length(out[idx], aspect) < MIN_LENGTH:
-            out = out[:idx] + out[idx + 1:]
-        changed = out != strings
-        return EditState(out, None, False, False, changed)
+        out = drop_short(*self._apply(strings, g), aspect)
+        return EditState(out, None, False, False, out != strings)
 
 
 __all__ = [
     "END_RADIUS", "EditState", "FreeEditor", "GRAB_RADIUS", "HandPinch", "MAX_STRINGS", "MIN_LENGTH", "REID_RADIUS", "Seg",
-    "clamp_seg", "ends", "hit_test", "normalize_free_strings", "pitch_order", "seg_length", "snap_segment",
+    "clamp_seg", "drop_short", "ends", "fit_seg", "hit_test", "move_seg", "normalize_free_strings", "pitch_order",
+    "put_seg", "seg_length", "snap_segment",
 ]

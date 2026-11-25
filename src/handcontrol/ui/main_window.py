@@ -166,7 +166,7 @@ class MainWindow(QMainWindow):
         column.addStretch(1)
         self.settings_button = NavButton("Ayarlar", "settings")
         self.settings_button.setCheckable(False)
-        self.settings_button.clicked.connect(self._bridge.request_settings)
+        self.settings_button.clicked.connect(self._bridge.settings_requested)
         column.addWidget(self.settings_button)
         return self._rail
 
@@ -191,7 +191,7 @@ class MainWindow(QMainWindow):
         self.mascot_button.setCheckable(True)
         self.mascot_button.setChecked(self._bridge.mascot_visible)
         self.mascot_button.setToolTip("Sağ alttaki kediyi gösterir ya da gizler")
-        self.mascot_button.clicked.connect(self._bridge.request_mascot)      # user clicks only, not setChecked
+        self.mascot_button.clicked.connect(self._bridge.mascot_toggle_requested)      # user clicks only, not setChecked
         row.addWidget(self.mascot_button)
         row.addSpacing(4)
         self.start_button = QPushButton("Sürdür")
@@ -199,7 +199,7 @@ class MainWindow(QMainWindow):
         self.start_button.setProperty("kind", "primary")
         self.start_button.setMinimumSize(132, 40)
         self.start_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.start_button.clicked.connect(self._bridge.request_pause_resume)
+        self.start_button.clicked.connect(self._bridge.pause_resume_requested)
         row.addWidget(self.start_button)
         return row
 
