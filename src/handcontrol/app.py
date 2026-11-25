@@ -368,12 +368,10 @@ class Runtime(QObject):
 
     def _connect(self):
         b, p = self.bridge, self.pipeline
-        b.pause_requested.connect(p.pause)
-        b.resume_requested.connect(p.resume)
+        # One click emits a toggle signal and a state-dependent one; the first already changes the state, so
+        # only the toggle may be connected, or the second one undoes it.
         b.pause_resume_requested.connect(self.toggle_pause)
         b.mode_selected.connect(self.select_mode)
-        b.camera_start_requested.connect(self.start_camera)
-        b.camera_stop_requested.connect(self.stop_camera)
         b.camera_toggle_requested.connect(self.toggle_camera)
         b.settings_saved.connect(self.save_settings)
         b.calibration_completed.connect(self.calibrated)
@@ -467,7 +465,10 @@ class Runtime(QObject):
             self.pipeline.resume()
 
     def toggle_camera(self):
-        self.stop_camera() if self.camera else self.start_camera()
+        running = self.pipeline.controller.snapshot().camera_state in (CameraState.RUNNING, CameraState.STARTING)
+        self.stop_camera()                     # also drops a handle left behind by a camera error
+        if not running:
+            self.start_camera()
 
     def start_camera(self):
         if self.camera or self.closed:

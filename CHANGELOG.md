@@ -34,6 +34,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Maskot modeli değişti: Fripouille (CC BY 4.0) yerine proje sahibinin gri kedisi. Kabuk kürk yerine gerçek tüy geometrisi, göz küresi etrafında dönen kapaklar; uygulama simgesi (`assets/icon.ico`) ve arayüz kedisi aynı renklere geçti.
 
 ### Fixed
+- "Sürdür" düğmesi ve tepsi öğesi tek tıkta hem sürdürüp hem duraklatıyordu (kontrol duraklatılmış kalıyor, pencere yine de küçülüyordu); kamera düğmesi de açtığı kamerayı hemen kapatıyordu.
 - Maskot: kol kalkınca dirsek ve bilekte oluşan boğum giderildi; kol mesh'i yarı açık pozda üretiliyor.
 - Masaüstü kısayolu yeni simgeye geçmiyordu (Windows simge önbelleği); `update_shortcuts.ps1` her simgeye ayrı yol veriyor.
 - Kamera ilk açılışta ve ayar kaydında ~11 saniye bekletiyordu (MSMF donanım dönüşümleri); 0,6 saniyeye indi. Bu sürede teller görünmüyordu.

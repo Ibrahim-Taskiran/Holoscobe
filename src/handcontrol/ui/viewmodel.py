@@ -852,8 +852,9 @@ class UiBridge(QObject):
     @Slot()
     def request_pause_resume(self) -> None:
         """Emit pause/resume request signals based on current control state."""
+        active = self._state.control_state == ControlState.ACTIVE      # before a toggle listener changes it
         self.pause_resume_requested.emit()
-        if self._state.control_state == ControlState.ACTIVE:
+        if active:
             self.pause_requested.emit()
         else:
             self.resume_requested.emit()
@@ -861,8 +862,9 @@ class UiBridge(QObject):
     @Slot()
     def request_camera_toggle(self) -> None:
         """Emit camera start/stop request signals based on current camera state."""
+        running = self._state.camera_state in (CameraState.RUNNING, CameraState.STARTING)
         self.camera_toggle_requested.emit()
-        if self._state.camera_state in (CameraState.RUNNING, CameraState.STARTING):
+        if running:
             self.camera_stop_requested.emit()
         else:
             self.camera_start_requested.emit()
