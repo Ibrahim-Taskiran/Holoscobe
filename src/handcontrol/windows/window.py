@@ -8,7 +8,7 @@ import threading
 from collections.abc import Callable, Iterable
 
 from ..contracts import DisplayProvider, Rect, WindowTarget
-from ._win32 import DWORD, POINT, RECT, WINDOWPLACEMENT, last_error, user32
+from ._win32 import DWORD, POINT, RECT, WINDOWPLACEMENT, last_error, report_error, user32
 from .placement import ensure_title_visible, monitor_for_rect, proportional_placement, size
 
 log = logging.getLogger(__name__)
@@ -31,13 +31,7 @@ class WindowsWindowQuery:
         self._drag_position: tuple[int, int] | None = None
 
     def _fail(self, operation: str) -> bool:
-        message = f"{operation} rejected or failed (Win32 error={last_error()})"
-        log.warning(message)
-        if self.on_error:
-            try:
-                self.on_error(message)
-            except Exception:
-                log.exception("Window error callback failed")
+        report_error(log, self.on_error, f"{operation} rejected or failed (Win32 error={last_error()})")
         return False
 
     def _pid(self, hwnd: int) -> int:
@@ -126,8 +120,7 @@ class WindowsWindowQuery:
 
     def drag_begin(self, target: WindowTarget, x: int, y: int) -> bool:
         with self._lock:
-            self._drag = None
-            self._drag_position = None
+            self.cancel_drag()
             rect = self._rect(target)
             if rect is None or self.api.IsIconic(target.hwnd):
                 return self._fail("Drag begin")
@@ -154,8 +147,7 @@ class WindowsWindowQuery:
                 return False
             _, ox, oy, width, height = self._drag
             if not self._position(target, Rect(x - ox, y - oy, x - ox + width, y - oy + height)):
-                self._drag = None
-                self._drag_position = None
+                self.cancel_drag()
                 return False
             self._drag_position = (x - ox, y - oy)
             return True

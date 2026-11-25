@@ -8,7 +8,7 @@ from _fakes import FakeCapture, FakeClock, FakeFrame, Factory, wait_until
 
 from handcontrol.camera import (
     MSG_BUSY, MSG_LOST, MSG_NOT_FOUND, MSG_PERMISSION,
-    Camera, CameraConfig, CameraOpenError, backend_order, list_cameras,
+    Camera, CameraConfig, CameraOpenError, backend_order,
 )
 from handcontrol.contracts import CameraState
 
@@ -200,16 +200,6 @@ def test_start_is_idempotent_and_callback_errors_ignored():
     assert cam.wait_for_state(CameraState.RUNNING)
     cam.stop()
     assert len(f.calls) == 1
-
-
-def test_list_cameras_best_effort():
-    def beh(n, i, b):
-        if i in (0, 2):
-            return FakeCapture()
-        raise CameraOpenError("not_found")
-    f = Factory(beh)
-    assert list_cameras(4, capture_factory=f) == [0, 2]
-    assert all(c.released for c in f.captures if c)
 
 
 @pytest.mark.manual

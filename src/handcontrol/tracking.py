@@ -7,12 +7,12 @@ from __future__ import annotations
 import logging
 import sys
 import threading
-import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .filters import percentile
+from .background import MonotonicClock, Worker
 from .contracts import FrameSample, Handedness, HandSample, Landmark
 
 MODEL_RELATIVE = Path("assets") / "models" / "hand_landmarker.task"
@@ -32,11 +32,6 @@ def project_root() -> Path:
 
 def default_model_path() -> Path:
     return project_root() / MODEL_RELATIVE
-
-
-class _MonotonicClock:
-    def now_ms(self) -> float:
-        return time.monotonic() * 1000.0
 
 
 def _default_image_factory(frame_bgr: Any) -> Any:
@@ -112,7 +107,7 @@ class HandTracker:
         and receives the detection value; only the built-in factory gets all three.
         """
         self.model_path = Path(model_path) if model_path else default_model_path()
-        self._clock = clock or _MonotonicClock()
+        self._clock = clock or MonotonicClock()
         self._landmarker_factory = landmarker_factory or _default_landmarker_factory
         self._image_factory = image_factory or _default_image_factory
         self._num_hands = num_hands
@@ -304,13 +299,15 @@ class TrackingStats:
         }
 
 
-class TrackingLoop:
+class TrackingLoop(Worker):
     """Thread: camera.read_latest -> tracker.process -> callback(FrameSample). Newest frame only.
 
     While `idle()` is True and no hand was seen for `idle_after_ms`, frames that come sooner than
     `idle_interval_ms` after the last processed one are skipped (image tap only). The first frame with a
     hand restores the full rate.
     """
+
+    thread_name = "tracking-loop"
 
     def __init__(
         self,
@@ -327,10 +324,11 @@ class TrackingLoop:
         idle_after_ms: float = 2000.0,
         idle_interval_ms: float = 90.0,     # every third frame at 30 fps: 100 ms, under the 150 ms loss rule
     ) -> None:
+        super().__init__()
         self._camera = camera
         self._tracker = tracker
         self._callback = callback
-        self._clock = clock or _MonotonicClock()
+        self._clock = clock or MonotonicClock()
         self.stats = stats or TrackingStats()
         self._on_error = on_error
         self._max_errors = max_consecutive_errors
@@ -340,31 +338,15 @@ class TrackingLoop:
         self._idle_interval = idle_interval_ms
         self._last_hand_ms: Optional[float] = None
         self._last_processed_ms = 0.0
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
         self.last_error: Optional[str] = None
         # Optional image tap (frame_bgr, capture_ms), called after `callback` on the tracking thread.
         # The Enstrüman window sets it to show the camera image; it must be cheap and must not keep a lock.
         self.on_image: Optional[Callable[[Any, float], None]] = None
 
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self.last_error = None
-        self._thread = threading.Thread(target=self._run, name="tracking-loop", daemon=True)
-        self._thread.start()
-
-    def stop(self, timeout: float = 3.0) -> None:
-        self._stop.set()
-        t = self._thread
-        if t is not None and t is not threading.current_thread():
-            t.join(timeout)
-        self._thread = None
-
-    @property
-    def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        if not self.running:
+            self.last_error = None
+        super().start()
 
     def _fail(self, message: str) -> None:
         self.last_error = message

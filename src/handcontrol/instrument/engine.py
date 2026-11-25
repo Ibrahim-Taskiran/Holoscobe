@@ -389,7 +389,7 @@ class InstrumentEngine:
             self._voice = None
 
         # --- view
-        status = self._status(active, frame, s_cands, p_cands, roles_ok, safe, too_close, swapped, gap)
+        status = self._status(active, frame, s_cands, p_cands, roles_ok, safe, too_close)
         strings: list[StringView] = []
         if layout is not None:
             for ln in sorted(layout.lines, key=lambda x: x.index):
@@ -636,7 +636,7 @@ class InstrumentEngine:
 
     @staticmethod
     def _status(active: bool, frame: FrameFeatures, s_cands: list, p_cands: list, roles_ok: bool,
-                safe: bool, too_close: bool, swapped: bool, gap: bool) -> str:
+                safe: bool, too_close: bool) -> str:
         if not active:
             return STATUS_PAUSED
         if len(s_cands) > 1 or len(p_cands) > 1 or (not roles_ok and len(frame.hands) >= 2):

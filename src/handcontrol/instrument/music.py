@@ -85,16 +85,6 @@ def quantize_pitch(pitch: float, pitches: Sequence[float], current: Optional[flo
     return float(current)
 
 
-def length_to_pitch(length_pu: float, *, low: float, high: float, min_len: float, max_len: float,
-                    quantize: bool = False, pitches: Sequence[float] = (), current: Optional[float] = None,
-                    hysteresis: float = 0.3) -> float:
-    """Continuous pitch, or (quantize=True) the scale degree chosen with hysteresis."""
-    p = continuous_pitch(length_pu, low=low, high=high, min_len=min_len, max_len=max_len)
-    if quantize:
-        return quantize_pitch(p, pitches, current, hysteresis)
-    return p
-
-
 def parse_chord(name: str) -> tuple[int, str]:
     """"F#m7" -> (6, "m7"). ValueError for an unknown root or quality."""
     if not name or name[0] not in _PC:
@@ -149,5 +139,5 @@ _self_check()
 
 __all__ = [
     "CHORD_ROOT_LOW", "NOTE_NAMES", "SCALES", "chord_voicing", "chord_zone", "continuous_pitch",
-    "length_to_pitch", "midi_to_hz", "midi_to_name", "parse_chord", "quantize_pitch", "scale_pitches",
+    "midi_to_hz", "midi_to_name", "parse_chord", "quantize_pitch", "scale_pitches",
 ]

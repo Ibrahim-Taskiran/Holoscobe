@@ -7,6 +7,7 @@ from __future__ import annotations
 import threading
 from typing import Callable, Optional
 
+from handcontrol.background import Worker
 from handcontrol.contracts import Action, ActionKind, ActionSink, Clock
 
 DEFAULT_MAX_AGE_MS = 150.0
@@ -79,13 +80,15 @@ class GuardedSink:
                 self.release_failures += 1
 
 
-class Watchdog:
+class Watchdog(Worker):
     """Fires `on_timeout` once when no usable capture was fed for `timeout_ms`.
 
     Independent of the frame loop: `start()` runs a daemon thread that polls `check()`.
     Tests call `check(now_ms)` with a fake clock. After firing it stays quiet until the next
     `feed()`. `disarm()` stops it until the next feed (use while nothing can be owned).
     """
+
+    thread_name = "handcontrol-watchdog"
 
     def __init__(
         self,
@@ -94,6 +97,7 @@ class Watchdog:
         timeout_ms: float = DEFAULT_LOSS_TIMEOUT_MS,
         poll_ms: float = 10.0,
     ) -> None:
+        super().__init__()
         self._clock = clock
         self._on_timeout = on_timeout
         self.timeout_ms = timeout_ms
@@ -101,8 +105,6 @@ class Watchdog:
         self._lock = threading.Lock()
         self._last_ms: Optional[float] = None
         self._armed = False
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
         self.fired_count = 0
         self.callback_errors = 0
 
@@ -139,23 +141,8 @@ class Watchdog:
             self.callback_errors += 1
         return True
 
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="handcontrol-watchdog", daemon=True)
-        self._thread.start()
-
-    def stop(self, join_timeout_s: float = 1.0) -> None:
-        self._stop.set()
-        t = self._thread
-        if t is not None and t is not threading.current_thread():
-            t.join(join_timeout_s)
-        self._thread = None
-
-    @property
-    def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+    def stop(self, timeout: float = 1.0) -> None:
+        super().stop(timeout)
 
     def _run(self) -> None:
         while not self._stop.wait(self._poll_s):

@@ -7,16 +7,15 @@ import threading
 from collections.abc import Callable, Sequence
 
 from ..contracts import Monitor, Rect
-from ._events import EventWindow
+from ._events import EventOwner, EventWindow
 from ._win32 import DWORD, HANDLE, MONITORENUMPROC, MONITORINFO, bind, last_error, user32
 
 
-class WindowsDisplayProvider:
+class WindowsDisplayProvider(EventOwner):
     def __init__(self, on_change: Callable[[Sequence[Monitor]], None] | None = None) -> None:
         self._lock = threading.RLock()
         self._callbacks = [on_change] if on_change else []
         self._monitors: tuple[Monitor, ...] = ()
-        self._events: EventWindow | None = None
 
     def monitors(self) -> tuple[Monitor, ...]:
         api = user32()
@@ -71,8 +70,3 @@ class WindowsDisplayProvider:
                         logging.getLogger(__name__).exception("Display change callback failed")
             return 0
         return None
-
-    def close(self) -> None:
-        events, self._events = self._events, None
-        if events:
-            events.close()

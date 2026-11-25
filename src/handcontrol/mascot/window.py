@@ -49,7 +49,6 @@ class MascotWindow(QWidget):
         self._previous: Any = None
         self._opacity = 1.0
         self._blink_at, self._blinking = self._start + 2.0, 0.0
-        self._glance, self._glance_at = (0.0, 0.0), 0.0
         self._notes = NoteCloud()
         self._brush_side = brush_side
         self._brush_on, self._brush_until, self._brush_size = False, 0.0, 0.0

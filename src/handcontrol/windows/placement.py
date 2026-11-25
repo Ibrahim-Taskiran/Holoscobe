@@ -39,15 +39,6 @@ def normalize_pointer(x: int, y: int, monitors: Sequence[Monitor]) -> tuple[int,
             round((y - bounds.top) * 65535 / max(1, height - 1)))
 
 
-def fit_rect(rect: Rect, area: Rect) -> Rect:
-    if not valid_rect(rect) or not valid_rect(area):
-        raise ValueError("Nonempty rectangles are required")
-    width, height = (min(a, b) for a, b in zip(size(rect), size(area)))
-    x = max(area.left, min(rect.left, area.right - width))
-    y = max(area.top, min(rect.top, area.bottom - height))
-    return Rect(x, y, x + width, y + height)
-
-
 def proportional_placement(rect: Rect, source: Monitor, destination: Monitor) -> Rect:
     """Preserve logical size and relative position in the available travel range."""
     if not valid_rect(rect) or not valid_rect(source.work_area) or not valid_rect(destination.work_area):

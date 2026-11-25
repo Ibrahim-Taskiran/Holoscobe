@@ -125,3 +125,13 @@ def user32():
 
 def last_error() -> int:
     return getattr(C, "get_last_error", lambda: 0)()
+
+
+def report_error(log, on_error, message: str) -> None:
+    """Log a refused or failed Windows call and tell the optional listener, which must not break the caller."""
+    log.warning(message)
+    if on_error:
+        try:
+            on_error(message)
+        except Exception:
+            log.exception("Windows error callback failed")

@@ -5,11 +5,11 @@ cv2 is imported lazily and can be replaced through ``capture_factory`` so tests 
 from __future__ import annotations
 
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from .background import MonotonicClock, Worker
 from .contracts import CameraState
 
 # Turkish user-facing messages.
@@ -71,26 +71,6 @@ PROP_HEIGHT = 4
 PROP_FPS = 5
 
 
-def list_cameras(
-    max_index: int = 5,
-    backend: str = "msmf",
-    capture_factory: Optional[Callable[[int, str, CameraConfig], Any]] = None,
-) -> list[int]:
-    """Best-effort probe of camera indices. Opens each index briefly: never call while a Camera runs."""
-    factory = capture_factory or default_capture_factory
-    found: list[int] = []
-    for i in range(max_index):
-        try:
-            cap = factory(i, backend_order(backend)[0], CameraConfig(index=i, backend=backend))
-        except Exception:
-            continue
-        try:
-            found.append(i)
-        finally:
-            _safe_release(cap)
-    return found
-
-
 def _safe_release(cap: Any) -> None:
     try:
         cap.release()
@@ -98,17 +78,14 @@ def _safe_release(cap: Any) -> None:
         pass
 
 
-class _MonotonicClock:
-    def now_ms(self) -> float:
-        return time.monotonic() * 1000.0
-
-
-class Camera:
+class Camera(Worker):
     """Threaded capture with a one-slot newest-frame buffer.
 
     start() is non-blocking; the worker thread opens the device (with bounded retries and backoff),
     then reads frames. States: OFF -> STARTING -> RUNNING -> (ERROR | OFF).
     """
+
+    thread_name = "camera-capture"
 
     def __init__(
         self,
@@ -123,8 +100,9 @@ class Camera:
         max_reconnects: int = 2,
         on_state_change: Optional[Callable[[CameraState, Optional[str]], None]] = None,
     ) -> None:
+        super().__init__()
         self.config = config or CameraConfig()
-        self._clock = clock or _MonotonicClock()
+        self._clock = clock or MonotonicClock()
         self._factory = capture_factory or default_capture_factory
         self._max_open_attempts = max(1, max_open_attempts)
         self._backoff_base = backoff_base_s
@@ -142,9 +120,6 @@ class Camera:
         self._latest: Optional[tuple[Any, float, int]] = None   # (frame, capture_ms, seq)
         self._seq = 0
         self._returned_seq = 0
-
-        self._thread: Optional[threading.Thread] = None
-        self._stop = threading.Event()
 
         self._reported = (0, 0, 0.0)
         self._measured_wh: Optional[tuple[int, int]] = None
@@ -204,24 +179,18 @@ class Camera:
 
     # ---------- lifecycle ----------
     def start(self) -> None:
-        with self._state_lock:
-            if self._thread is not None and self._thread.is_alive():
-                return
-        self._stop.clear()
+        if self.running:
+            return
         with self._frame_cond:
             self._latest = None
         self._set_state(CameraState.STARTING, None)
-        self._thread = threading.Thread(target=self._run, name="camera-capture", daemon=True)
-        self._thread.start()
+        super().start()
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
         with self._frame_cond:
             self._frame_cond.notify_all()
-        t = self._thread
-        if t is not None and t is not threading.current_thread():
-            t.join(timeout)
-        self._thread = None
+        super().stop(timeout)
         with self._frame_cond:
             self._latest = None
         self._set_state(CameraState.OFF, None)
@@ -273,14 +242,10 @@ class Camera:
                     return None, message
                 try:
                     cap = self._factory(self.config.index, backend, self.config)
-                except CameraOpenError as exc:
-                    message = _KIND_MESSAGES.get(exc.kind, MSG_NOT_FOUND)
-                    cap = None
-                except Exception:
-                    message = MSG_NOT_FOUND
-                    cap = None
-                if cap is not None:
-                    return cap, ""
+                    if cap is not None:
+                        return cap, ""
+                except Exception as exc:
+                    message = _KIND_MESSAGES.get(getattr(exc, "kind", ""), MSG_NOT_FOUND)
             if attempt < self._max_open_attempts - 1:
                 delay = min(self._backoff_max, self._backoff_base * (2 ** attempt))
                 if delay > 0 and self._stop.wait(delay):

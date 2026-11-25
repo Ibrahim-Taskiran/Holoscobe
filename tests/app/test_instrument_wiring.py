@@ -436,8 +436,8 @@ def test_fixed_area_from_window_or_pinch_is_applied_and_saved(qt):
         ins.set_fixed_rect((0.1, 0.2, 0.5, 0.6))                     # unchanged: nothing saved
         assert rt.store.save.call_count == 1
         # two-hand pinch: saved when the engine reports the end of the adjustment, engine not reset
-        done = SimpleNamespace(adjusting=False, fixed_rect=(0.3, 0.3, 0.9, 0.8))
-        ins._on_view(SimpleNamespace(adjusting=True, fixed_rect=(0.3, 0.3, 0.9, 0.7)))
+        done = SimpleNamespace(layout="fixed", free_strings=None, adjusting=False, fixed_rect=(0.3, 0.3, 0.9, 0.8))
+        ins._on_view(SimpleNamespace(layout="fixed", free_strings=None, adjusting=True, fixed_rect=(0.3, 0.3, 0.9, 0.7)))
         assert rt.store.save.call_count == 1
         ins._on_view(done)
         assert rt.settings.instrument_fixed_rect == [0.3, 0.3, 0.9, 0.8] and rt.store.save.call_count == 2

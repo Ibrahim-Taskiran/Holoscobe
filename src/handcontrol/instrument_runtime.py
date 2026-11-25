@@ -14,6 +14,7 @@ The controller never sees any of this: in INSTRUMENT mode it produces no actions
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
@@ -21,7 +22,8 @@ from PySide6.QtGui import QImage
 
 from handcontrol.contracts import FrameFeatures, Handedness, Mode
 from handcontrol.instrument.engine import InstrumentConfig, InstrumentEngine
-from handcontrol.instrument.events import DEFAULT_FIXED_RECT, DEFAULT_FIXED_STRINGS, NoteOn
+from handcontrol.instrument.events import NoteOn
+from handcontrol.instrument.freeform import normalize_free_strings
 from handcontrol.instrument.geometry import normalize_fixed_rect
 from handcontrol.instrument.session import InstrumentSession
 
@@ -35,17 +37,16 @@ AUDIO_LOAD_FAILED_TR = "Ses motoru yüklenemedi"
 
 def instrument_config(settings: Any) -> InstrumentConfig:
     """Settings (schema 4) -> engine config. The pick hand is the dominant hand."""
-    dominant = Handedness.LEFT if getattr(settings, "dominant_hand", "right") == "left" else Handedness.RIGHT
     return InstrumentConfig(
         layout=settings.instrument_layout,
         scale=settings.instrument_scale,
         quantize=bool(settings.instrument_quantize),
         chords=tuple(settings.instrument_chords),
-        dominant=dominant,
-        fixed_rect=tuple(getattr(settings, "instrument_fixed_rect", DEFAULT_FIXED_RECT)),  # type: ignore[arg-type]
-        fixed_strings=int(getattr(settings, "instrument_fixed_strings", DEFAULT_FIXED_STRINGS)),
-        free_strings=tuple(tuple(s) for s in getattr(settings, "instrument_free_strings", ())),
-        free_snap=bool(getattr(settings, "instrument_free_snap", True)),
+        dominant=Handedness.LEFT if settings.dominant_hand == "left" else Handedness.RIGHT,
+        fixed_rect=tuple(settings.instrument_fixed_rect),  # type: ignore[arg-type]
+        fixed_strings=settings.instrument_fixed_strings,
+        free_strings=tuple(tuple(s) for s in settings.instrument_free_strings),
+        free_snap=settings.instrument_free_snap,
     )
 
 
@@ -156,10 +157,6 @@ class InstrumentRuntime(QObject):
             self._image_seq += 1
 
     # ------------------------------------------------------------ GUI thread
-
-    @property
-    def mode_active(self) -> bool:
-        return self._last_mode is Mode.INSTRUMENT
 
     @Slot(object)
     def _on_mode(self, mode: Mode) -> None:
@@ -287,44 +284,29 @@ class InstrumentRuntime(QObject):
     @Slot(object)
     def _on_view(self, view: Any) -> None:
         """Two-hand placement finished in the engine: keep the new string area in the settings."""
-        adjusting = bool(getattr(view, "adjusting", False))
-        if self._was_adjusting and not adjusting and getattr(view, "fixed_rect", None) is not None:
-            self.set_fixed_rect(view.fixed_rect, reconfigure=False)
-        if getattr(view, "layout", None) == "free" and getattr(view, "free_strings", None) is not None \
-                and not adjusting and self._was_adjusting:
-            self.set_free_strings(view.free_strings, reconfigure=False)
-        self._was_adjusting = adjusting
+        if self._was_adjusting and not view.adjusting:
+            if view.fixed_rect is not None:
+                self.set_fixed_rect(view.fixed_rect, reconfigure=False)
+            if view.layout == "free" and view.free_strings is not None:
+                self.set_free_strings(view.free_strings, reconfigure=False)
+        self._was_adjusting = view.adjusting
 
     @Slot(object)
     def set_fixed_rect(self, rect: Any, reconfigure: bool = True) -> None:
         """New "Sabit teller" area (window drag or two-hand pinch): apply and save it."""
-        if self._closed:
-            return
-        new = list(normalize_fixed_rect(rect, tuple(self.settings.instrument_fixed_rect)))
-        if new == [float(v) for v in self.settings.instrument_fixed_rect]:
-            return
-        from dataclasses import replace
-        self.settings = replace(self.settings, instrument_fixed_rect=new)
-        if reconfigure:            # the engine already holds a rect it placed itself
-            self.session.configure(instrument_config(self.settings))
-            self._push_idle_view()
-        try:
-            self._persist(self.settings)
-        except Exception:
-            log.warning("could not save the string area", exc_info=True)
+        self._place("instrument_fixed_rect", list(normalize_fixed_rect(rect, tuple(self.settings.instrument_fixed_rect))),
+                    reconfigure)
 
     @Slot(object)
     def set_free_strings(self, strings: Any, reconfigure: bool = True) -> None:
         """New "Serbest teller" strings (window mouse edit or hand gesture): apply and save them."""
-        if self._closed:
+        self._place("instrument_free_strings", [list(s) for s in normalize_free_strings(strings)], reconfigure)
+
+    def _place(self, field: str, new: list, reconfigure: bool) -> None:
+        if self._closed or new == getattr(self.settings, field):
             return
-        from handcontrol.instrument.freeform import normalize_free_strings
-        new = [list(s) for s in normalize_free_strings(strings)]
-        if new == [[float(v) for v in s] for s in getattr(self.settings, "instrument_free_strings", [])]:
-            return
-        from dataclasses import replace
-        self.settings = replace(self.settings, instrument_free_strings=new)
-        if reconfigure:
+        self.settings = replace(self.settings, **{field: new})
+        if reconfigure:            # else the engine already holds what it placed itself
             self.session.configure(instrument_config(self.settings))
             self._push_idle_view()
         try:
@@ -375,7 +357,6 @@ class InstrumentRuntime(QObject):
             return bool(audio.play_test_tone())
         self._tests = [t for t in self._tests if getattr(t, "running", False)]
         try:
-            from dataclasses import replace
             temp_settings = replace(self.settings, audio_device=dev)
             tmp = self._audio_factory(self._synth_factory(temp_settings), temp_settings,
                                       lambda text: self._notify(f"Test sesi çalınamadı: {text}"))

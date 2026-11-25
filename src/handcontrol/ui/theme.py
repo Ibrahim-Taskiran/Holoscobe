@@ -53,7 +53,6 @@ CAT_EAR = "#7A6268"
 CAT_IRIS = "#C9C763"
 
 RADIUS_S, RADIUS_M, RADIUS_L, RADIUS_XL = 6, 8, 12, 16
-SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 12, 16, 24
 FAST_MS, NORMAL_MS = 120, 180
 
 TEXT_PX = {"caption": 12, "body": 13, "section": 14, "subtitle": 16, "title": 20, "display": 28}

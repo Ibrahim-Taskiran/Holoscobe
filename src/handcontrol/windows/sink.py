@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 
 from ..contracts import Action, ActionKind, Clock, DisplayProvider, VolumeControl
+from ._win32 import report_error
 from .audio import WindowsVolumeControl
 from .commands import COMMAND_KEYS, parse_command
 from .displays import WindowsDisplayProvider
@@ -81,7 +82,7 @@ class WindowsActionSink:
                 if kind == ActionKind.KEY_COMMAND:
                     command = parse_command(action.command)
                     if command is None:
-                        self._fail(f"Bilinmeyen komut: {action.command!r}")
+                        report_error(log, self.on_error, f"Bilinmeyen komut: {action.command!r}")
                         return False
                     return bool(self.input.key_combo(COMMAND_KEYS[command]))
                 if kind == ActionKind.SET_VOLUME:
@@ -110,20 +111,8 @@ class WindowsActionSink:
             except Exception as exc:
                 log.exception("Windows action failed: %s", action.kind)
                 self.release_all()
-                if self.on_error:
-                    try:
-                        self.on_error(str(exc))
-                    except Exception:
-                        log.exception("Sink error callback failed")
+                report_error(log, self.on_error, str(exc))
                 return False
-
-    def _fail(self, message: str) -> None:
-        log.warning(message)
-        if self.on_error:
-            try:
-                self.on_error(message)
-            except Exception:
-                log.exception("Sink error callback failed")
 
     def release_all(self) -> None:
         try:

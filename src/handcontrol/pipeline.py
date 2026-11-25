@@ -36,9 +36,9 @@ Settings mapping notes:
 from __future__ import annotations
 
 import threading
-import time
 from typing import Any, Callable, Optional
 
+from handcontrol.background import MonotonicClock
 from handcontrol.config import Settings
 from handcontrol.contracts import (
     ActionSink,
@@ -303,11 +303,6 @@ class Pipeline:
 
 
 TWO_HAND_MODES = (Mode.ZOOM, Mode.INSTRUMENT)      # the second hand must be seen on its first frame
-
-
-class MonotonicClock:
-    def now_ms(self) -> float:
-        return time.monotonic() * 1000.0
 
 
 class CameraPipeline:

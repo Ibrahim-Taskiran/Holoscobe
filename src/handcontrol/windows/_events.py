@@ -129,3 +129,14 @@ class EventWindow:
                 log.error("Could not stop event window: %s", last_error())
         if threading.current_thread() is not self._thread:
             self._thread.join(timeout=2)
+
+
+class EventOwner:
+    """Base of the services that listen through one EventWindow."""
+
+    _events: EventWindow | None = None
+
+    def close(self) -> None:
+        events, self._events = self._events, None
+        if events:
+            events.close()

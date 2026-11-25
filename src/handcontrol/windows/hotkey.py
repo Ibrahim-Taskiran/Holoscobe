@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ._events import EventWindow
+from ._events import EventOwner, EventWindow
 from ._win32 import last_error, user32
 
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 1, 2, 4, 0x4000
@@ -15,10 +15,9 @@ class HotkeyConflictError(OSError):
     pass
 
 
-class WindowsHotkey:
+class WindowsHotkey(EventOwner):
     def __init__(self, callback: Callable[[], None]) -> None:
         self.callback = callback
-        self._events: EventWindow | None = None
         self._id = 1
         self._binding: tuple[int, int] | None = None
 
@@ -60,8 +59,3 @@ class WindowsHotkey:
                 raise OSError(last_error(), "Previous hotkey could not be unregistered")
             self._id, self._binding = new_id, (modifiers, key)
         self._events.call(replace)
-
-    def close(self) -> None:
-        events, self._events = self._events, None
-        if events:
-            events.close()

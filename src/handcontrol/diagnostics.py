@@ -1,7 +1,6 @@
 """Diagnostics bundle: settings, logs, recent telemetry, system info. Never images."""
 from __future__ import annotations
 
-import os
 import platform
 import sys
 import zipfile

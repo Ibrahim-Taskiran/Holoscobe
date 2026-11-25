@@ -4,14 +4,13 @@ from __future__ import annotations
 import ctypes as C
 from collections.abc import Callable
 
-from ._events import EventWindow
+from ._events import EventOwner, EventWindow
 from ._win32 import BOOL, DWORD, HANDLE, bind, last_error
 
 
-class WindowsSession:
+class WindowsSession(EventOwner):
     def __init__(self, callback: Callable[[str], None]) -> None:
         self.callback = callback
-        self._events: EventWindow | None = None
         self._wts = None
         self._registered = False
 
@@ -45,8 +44,3 @@ class WindowsSession:
                     raise OSError(last_error(), "WTSUnRegisterSessionNotification failed")
                 self._registered = False
         self._events = EventWindow(self._message, setup, teardown)
-
-    def close(self) -> None:
-        events, self._events = self._events, None
-        if events:
-            events.close()

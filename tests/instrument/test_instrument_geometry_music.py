@@ -103,8 +103,6 @@ def test_continuous_pitch_longer_is_lower_and_clamped():
     assert m.continuous_pitch(3.0, **kw) == pytest.approx(52)
     vals = [m.continuous_pitch(0.35 + i * 0.1, **kw) for i in range(15)]
     assert all(a > b for a, b in zip(vals, vals[1:]))
-    assert m.length_to_pitch(1.0, quantize=True, pitches=m.scale_pitches("e_minor_pentatonic", 52, 76),
-                             **kw) in m.scale_pitches("e_minor_pentatonic", 52, 76)
 
 
 def test_quantize_hysteresis_holds_near_the_boundary():

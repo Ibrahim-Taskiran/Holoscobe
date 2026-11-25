@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from handcontrol.contracts import Monitor, Rect
-from handcontrol.windows.placement import (desktop_bounds, ensure_title_visible, fit_rect,
+from handcontrol.windows.placement import (desktop_bounds, ensure_title_visible,
     monitor_for_rect, nearest_point, normalize_pointer, proportional_placement)
 
 
@@ -48,9 +48,8 @@ def test_proportional_oversize_is_fitted():
     assert proportional_placement(Rect(0, 0, 200, 200), source, dest) == dest.work_area
 
 
-def test_fit_and_title_visibility():
+def test_title_visibility():
     area = Rect(-1000, 40, 0, 800)
-    assert fit_rect(Rect(-1200, -200, 100, 1000), area) == area
     rect = ensure_title_visible(Rect(500, 900, 900, 1200), [area])
     assert rect == Rect(-120, 768, 280, 1068)
     assert ensure_title_visible(rect, [area]) == rect

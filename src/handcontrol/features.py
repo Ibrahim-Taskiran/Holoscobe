@@ -36,14 +36,9 @@ from handcontrol.filters import DwellLatch
 
 WRIST = 0
 PALM_MCPS = (5, 9, 13, 17)
-FINGER_ORDER = (FingerName.THUMB, FingerName.INDEX, FingerName.MIDDLE, FingerName.RING, FingerName.LITTLE)
+FINGER_ORDER = tuple(FingerName)
 FINGER_CHAINS: dict[FingerName, tuple[int, int, int, int]] = {
-    FingerName.THUMB: (1, 2, 3, 4),
-    FingerName.INDEX: (5, 6, 7, 8),
-    FingerName.MIDDLE: (9, 10, 11, 12),
-    FingerName.RING: (13, 14, 15, 16),
-    FingerName.LITTLE: (17, 18, 19, 20),
-}
+    name: tuple(range(4 * i + 1, 4 * i + 5)) for i, name in enumerate(FINGER_ORDER)}      # type: ignore[misc]
 _LOCATING = (WRIST,) + PALM_MCPS
 
 Vec3 = tuple[float, float, float]

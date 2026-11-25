@@ -7,7 +7,7 @@ import threading
 from collections.abc import Callable
 
 from ..contracts import DisplayProvider
-from ._win32 import INPUT, KEYBDINPUT, MOUSEINPUT, last_error, user32
+from ._win32 import INPUT, KEYBDINPUT, MOUSEINPUT, last_error, report_error, user32
 from .placement import normalize_pointer
 
 log = logging.getLogger(__name__)
@@ -50,12 +50,7 @@ class WindowsInput:
             return tuple(self._ledger)
 
     def _report(self, message: str) -> None:
-        log.warning(message)
-        if self.on_error:
-            try:
-                self.on_error(message)
-            except Exception:
-                log.exception("Input error callback failed")
+        report_error(log, self.on_error, message)
 
     def _send(self, event: INPUT) -> bool:
         try:
@@ -89,35 +84,20 @@ class WindowsInput:
             nx, ny = normalize_pointer(x, y, self.displays.monitors())
             return self._send(mouse(MOVE | ABSOLUTE | VIRTUALDESK, nx, ny))
 
-    def left_click(self, x: int, y: int) -> bool:
+    def _click(self, x: int, y: int, token: tuple[str, int], down: int, times: int = 1) -> bool:
         with self._lock:
-            if ("mouse", 1) in self._ledger:
+            if token in self._ledger or not self.move_pointer(x, y):
                 return False
-            if not self.move_pointer(x, y):
-                return False
-            token = ("mouse", 1)
-            if not self._press(token, mouse(LEFTDOWN)):
-                return False
-            return self._release(token)
+            return all(self._press(token, mouse(down)) and self._release(token) for _ in range(times))
+
+    def left_click(self, x: int, y: int) -> bool:
+        return self._click(x, y, ("mouse", 1), LEFTDOWN)
 
     def right_click(self, x: int, y: int) -> bool:
-        with self._lock:
-            token = ("mouse", 2)
-            if token in self._ledger or not self.move_pointer(x, y):
-                return False
-            if not self._press(token, mouse(RIGHTDOWN)):
-                return False
-            return self._release(token)
+        return self._click(x, y, ("mouse", 2), RIGHTDOWN)
 
     def double_click(self, x: int, y: int) -> bool:
-        with self._lock:
-            token = ("mouse", 1)
-            if token in self._ledger or not self.move_pointer(x, y):
-                return False
-            for _ in range(2):
-                if not self._press(token, mouse(LEFTDOWN)) or not self._release(token):
-                    return False
-            return True
+        return self._click(x, y, ("mouse", 1), LEFTDOWN, 2)
 
     def left_down(self, x: int, y: int) -> bool:
         with self._lock:

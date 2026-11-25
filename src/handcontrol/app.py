@@ -14,13 +14,14 @@ from typing import Any, Callable, Optional
 from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
+from handcontrol.background import MonotonicClock
 from handcontrol.config import CalibrationBounds, Settings, SettingsStore, migrate, validate
 from handcontrol.contracts import CANVAS_MODES, CameraState, ControlState, Mode
 from handcontrol.controller import MenuKind
 from handcontrol.dryrun import DryRunSink, FakeVolume
 from handcontrol.gestures import GestureRecognizer
-from handcontrol.pipeline import (MonotonicClock, Pipeline, calibration_rect, controller_config, dominant_of,
-    gesture_config, run_camera_pipeline)
+from handcontrol.pipeline import (Pipeline, calibration_rect, controller_config, dominant_of, gesture_config,
+    run_camera_pipeline)
 from handcontrol.telemetry import SessionRecorder, TelemetrySink
 from handcontrol.ui import (UiBridge, UiState, OverlayState, OverlayMenuKind,
     OverlayMenuItem, VirtualCursorState, HandControlTray,
