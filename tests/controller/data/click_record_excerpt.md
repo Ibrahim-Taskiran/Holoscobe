@@ -2,7 +2,7 @@
 
 `click_record_excerpt.csv` contains 728 untouched rows from the local 5,914-row recording
 `hw_click_20261112-152708-382361.csv`. The JSON manifest records source SHA-256 and zero-based row
-indices. Generate it with `click_record_analysis.write_excerpt()` (requires the uncommitted source).
+indices. The recording and the script that cut the excerpt are in the git history.
 Every fourth frame plus extrema and transition neighborhoods is retained; timestamps and values
 are unchanged. Full recordings and images are not bundled.
 
