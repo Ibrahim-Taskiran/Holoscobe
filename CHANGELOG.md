@@ -19,6 +19,11 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Tek ana pencere (`ui/main_window.py`): mod düğmeleri, durum, kamera görüntüsü; Enstrüman aynı pencerede sayfa olarak açılır. Araç çubuğundan düzen, tel silme, hizalama, tel sayısı, tını ve ses anında değişir.
 - `scripts/holoscobe.pyw`: konsolsuz kaynak başlatıcı; masaüstü kısayolu artık eskimiyor.
 
+### Performance
+- Tek el görünürken izleme tek el modeliyle yapılıyor (`adaptive_hands.py`): gerçek modelle, sentetik karede kare başına 29 ms yerine 14 ms. İkinci el ayrı bir iş parçacığında 125 ms aralıkla aranıyor; ortalama 5 karede (eskiden 1) fark ediliyor. Yakınlaştırma ve Enstrüman modlarında iki el modeli her karede çalışmayı sürdürüyor.
+- Kontrol duraklatılmışken ve 2 saniyedir el görünmüyorken izleme 30 yerine 10 FPS çalışıyor (tek çekirdekte ölçülen yük %57 yerine %27, etkin kontrole göre); el görünen ilk karede tam hıza dönüyor.
+- BGR-RGB çevirme `cv2.cvtColor` ile yapılıyor.
+
 ### Changed
 - Modern koyu grafit ve kayısı arayüz yenilemesi (`ui/theme.py`, `ui/widgets.py`, `ui/icons.py`, `ui/illustrations.py`): solda mod şeridi (mode rail), üstte durum/Ayrıntı/Kedi/Sürdür başlık çubuğu, sol kenar çubuklu ve kart tabanlı 5 kategorili Ayarlar penceresi, yenilenen eğitim, kalibrasyon, tepsi ve katman tasarımı.
 - Enstrümanın varsayılan düzeni "Serbest teller" oldu.

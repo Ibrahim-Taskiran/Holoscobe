@@ -39,11 +39,10 @@ class _MonotonicClock:
 
 
 def _default_image_factory(frame_bgr: Any) -> Any:
+    import cv2  # lazy
     import mediapipe as mp  # lazy
-    import numpy as np  # lazy
 
-    rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])  # BGR -> RGB
-    return mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    return mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
 
 
 DEFAULT_DETECTION_CONFIDENCE = 0.5
@@ -101,8 +100,12 @@ class HandTracker:
         tracking_confidence: Optional[float] = None,
         swap_handedness: bool = False,
         pose_enabled: Optional[Callable[[], bool]] = None,
+        fast_single_hand: Optional[Callable[[], bool]] = None,
     ) -> None:
         """``confidence`` sets all three thresholds; the specific arguments override it.
+
+        fast_single_hand: when given, a lone hand is tracked by a one-hand model while it returns True
+        (see adaptive_hands.py). None keeps the plain two-hand model (the measuring tools).
 
         Injected ``landmarker_factory`` keeps the legacy ``(model_path, num_hands, conf)`` call
         and receives the detection value; only the built-in factory gets all three.
@@ -118,6 +121,7 @@ class HandTracker:
         self._tracking = self._pick(tracking_confidence, confidence, DEFAULT_TRACKING_CONFIDENCE)
         self._swap = swap_handedness
         self._pose_enabled = pose_enabled
+        self._fast_single_hand = fast_single_hand
         self._pose = None
         self._pose_failed = False
         self._landmarker: Any = None
@@ -140,14 +144,24 @@ class HandTracker:
             return
         if not self.model_path.is_file():
             raise ModelNotFoundError(MSG_MODEL_MISSING.format(path=self.model_path))
+        full = self._create(self._num_hands)
+        if self._fast_single_hand is None or self._num_hands < 2:
+            self._landmarker = full
+            return
+        from .adaptive_hands import AdaptiveLandmarker
+        try:
+            single = self._create(1)
+        except Exception:
+            full.close()
+            raise
+        self._landmarker = AdaptiveLandmarker(full, single, allowed=self._fast_single_hand)
+
+    def _create(self, num_hands: int) -> Any:
         if self._custom_factory:
-            self._landmarker = self._landmarker_factory(
-                str(self.model_path), self._num_hands, self._detection
-            )
-        else:
-            self._landmarker = self._landmarker_factory(
-                str(self.model_path), self._num_hands, self._detection, self._presence, self._tracking
-            )
+            return self._landmarker_factory(str(self.model_path), num_hands, self._detection)
+        return self._landmarker_factory(
+            str(self.model_path), num_hands, self._detection, self._presence, self._tracking
+        )
 
     def close(self) -> None:
         if self._pose is not None:
@@ -300,7 +314,12 @@ class TrackingStats:
 
 
 class TrackingLoop:
-    """Thread: camera.read_latest -> tracker.process -> callback(FrameSample). Newest frame only."""
+    """Thread: camera.read_latest -> tracker.process -> callback(FrameSample). Newest frame only.
+
+    While `idle()` is True and no hand was seen for `idle_after_ms`, frames that come sooner than
+    `idle_interval_ms` after the last processed one are skipped (image tap only). The first frame with a
+    hand restores the full rate.
+    """
 
     def __init__(
         self,
@@ -313,6 +332,9 @@ class TrackingLoop:
         on_error: Optional[Callable[[str], None]] = None,
         max_consecutive_errors: int = 5,
         poll_timeout_s: float = 0.05,
+        idle: Optional[Callable[[], bool]] = None,
+        idle_after_ms: float = 2000.0,
+        idle_interval_ms: float = 90.0,     # every third frame at 30 fps: 100 ms, under the 150 ms loss rule
     ) -> None:
         self._camera = camera
         self._tracker = tracker
@@ -322,6 +344,11 @@ class TrackingLoop:
         self._on_error = on_error
         self._max_errors = max_consecutive_errors
         self._poll = poll_timeout_s
+        self._idle = idle
+        self._idle_after = idle_after_ms
+        self._idle_interval = idle_interval_ms
+        self._last_hand_ms: Optional[float] = None
+        self._last_processed_ms = 0.0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.last_error: Optional[str] = None
@@ -356,8 +383,23 @@ class TrackingLoop:
             except Exception:
                 pass
 
+    def _resting(self, capture_ms: float) -> bool:
+        return (self._idle is not None and self._last_hand_ms is not None
+                and capture_ms - self._last_hand_ms >= self._idle_after
+                and capture_ms - self._last_processed_ms < self._idle_interval
+                and self._idle())
+
+    def _tap(self, frame: Any, capture_ms: float) -> None:
+        tap = self.on_image
+        if tap is not None:
+            try:
+                tap(frame, capture_ms)
+            except Exception:
+                pass
+
     def _run(self) -> None:
         errors = 0
+        self._last_hand_ms = None
         try:
             self._tracker.load()
         except ModelNotFoundError as exc:
@@ -372,6 +414,9 @@ class TrackingLoop:
                 if item is None:
                     continue
                 frame, capture_ms = item
+                if self._resting(capture_ms):
+                    self._tap(frame, capture_ms)
+                    continue
                 t0 = self._clock.now_ms()
                 try:
                     sample = self._tracker.process(frame, capture_ms)
@@ -382,16 +427,14 @@ class TrackingLoop:
                         return
                     continue
                 errors = 0
+                self._last_processed_ms = capture_ms
+                if sample.hands or self._last_hand_ms is None:
+                    self._last_hand_ms = capture_ms
                 self.stats.record(sample, sample.inference_done_ms - t0)
                 try:
                     self._callback(sample)
                 except Exception:
                     pass
-                tap = self.on_image
-                if tap is not None:
-                    try:
-                        tap(frame, capture_ms)
-                    except Exception:
-                        pass
+                self._tap(frame, capture_ms)
         finally:
             self._tracker.close()

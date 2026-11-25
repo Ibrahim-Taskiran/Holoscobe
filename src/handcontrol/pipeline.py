@@ -298,6 +298,9 @@ class Pipeline:
 # ---------------------------------------------------------------- camera wiring
 
 
+TWO_HAND_MODES = (Mode.ZOOM, Mode.INSTRUMENT)      # the second hand must be seen on its first frame
+
+
 class _MonotonicClock:
     def now_ms(self) -> float:
         return time.monotonic() * 1000.0
@@ -376,7 +379,8 @@ def run_camera_pipeline(
         camera = Camera(cfg, **kwargs)
     if tracker is None:
         tracker = HandTracker(clock=clk, swap_handedness=swap_handedness,
-                              pose_enabled=lambda: pipeline.controller.snapshot().mode is Mode.DRAWING)
+                              pose_enabled=lambda: pipeline.controller.snapshot().mode is Mode.DRAWING,
+                              fast_single_hand=lambda: pipeline.controller.snapshot().mode not in TWO_HAND_MODES)
 
     def on_loop_error(message: str) -> None:
         pipeline.set_camera_state(CameraState.ERROR)
@@ -386,7 +390,8 @@ def run_camera_pipeline(
             except Exception:
                 pass
 
-    loop = TrackingLoop(camera, tracker, pipeline.process, clock=clk, on_error=on_loop_error)
+    loop = TrackingLoop(camera, tracker, pipeline.process, clock=clk, on_error=on_loop_error,
+                        idle=lambda: pipeline.controller.snapshot().state is ControlState.PAUSED)
     handle = CameraPipeline(pipeline, camera, loop)
     if start:
         handle.start()

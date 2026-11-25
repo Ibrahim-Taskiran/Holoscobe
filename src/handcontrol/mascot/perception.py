@@ -115,10 +115,10 @@ class Perception:
                     pass
 
     def _handle(self, tools: dict[str, Any], frame: Any, stamp: int, now: float, with_body: bool) -> None:
+        import cv2  # lazy
         import mediapipe as mp  # lazy
-        import numpy as np  # lazy
         h, w = frame.shape[:2]
-        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(frame[:, :, ::-1]))
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         for kind in ("face", "body"):
             if kind in self.failed or kind == "body" and not with_body:
                 continue
