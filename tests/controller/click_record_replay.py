@@ -89,15 +89,3 @@ def short_tap(rows: list[dict[str, str]], distance: str) -> list[dict[str, str]]
     after = [i for i in valid if i > contacts[-1] and float(rows[i][key]) >= .48][:4]
     assert len(before) == 4 and len(after) == 4 and len(contacts) == 6
     return [rows[i] for i in before + contacts + after]
-
-
-if __name__ == "__main__":
-    from collections import defaultdict
-    from click_record_analysis import read_rows
-    groups: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
-    for row in read_rows():
-        if row["phase"] in ("left_pinch", "right_pinch", "drag"):
-            groups[row["phase"], row["repeat"]].append(row)
-    for key, rows in groups.items():
-        r = replay(rows)
-        print(key, {kind.value: r.count(kind) for kind in set(r.non_pointer())}, r.ctl.snapshot().notice)

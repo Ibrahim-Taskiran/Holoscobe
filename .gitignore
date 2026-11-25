@@ -8,3 +8,4 @@ build/
 dist/
 *.task
 graphify-out/
+Docs/reports/

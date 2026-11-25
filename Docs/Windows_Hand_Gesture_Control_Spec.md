@@ -1,6 +1,6 @@
 # Windows Hand Gesture Control — Implementation Specification
 
-**Status:** v1.1 reviewed build specification, 2026-11-12. **Target:** Windows 11 x64, HP Victus laptop with its built-in webcam and two monitors. The defaults below are implementation proposals and should be tuned on the owner's actual hardware. No hardware performance or dependency compatibility has yet been verified. See [Turkish implementation roadmap](ROADMAP_TR.md) and [review decisions](DOKUMAN_INCELEME_TR.md).
+**Status:** v1.1 reviewed build specification, 2026-11-12. **Target:** Windows 11 x64, HP Victus laptop with its built-in webcam and two monitors. The defaults below are implementation proposals and should be tuned on the owner's actual hardware. No hardware performance or dependency compatibility has yet been verified. This is the original plan: later decisions (relative pointer, mode wheel, instrument, drawing, mascot) are described in the [README](../README.md) and [CHANGELOG](../CHANGELOG.md), which win where they differ.
 
 ## 1. Assignment for the implementation agent
 

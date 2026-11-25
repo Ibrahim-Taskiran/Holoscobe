@@ -2,7 +2,7 @@
 
 Laptopun mevcut dahili kamerasıyla el hareketi kullanarak Windows 11 masaüstünü kontrol eden uygulama. Harici kamera gerektirmez. İki elin on parmağını ayrı takip eder, iki monitörü destekler, kurulumdan sonra internetsiz çalışır ve ücretli hiçbir araç ya da servis gerektirmez.
 
-> **Durum: 1.1.0 (+ `main` dalında 3B kedi maskot, Çizim modu ve yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1978 otomatik test, 6 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri bir insan tarafından henüz yapılmadı. Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. 1.0 durumu: [manager_status.md](Docs/reports/manager_status.md). Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
+> **Durum: 1.1.0 ve sonrası (3B kedi maskot, Çizim modu, serbest teller, yeni arayüz). Donanım kabulü bekliyor.** Otomatik takım: **1978 otomatik test, 6 manuel test** (offscreen, sahte donanım). Dahili kamera ve gerçek ellerle kabul testleri tamamlanmadı: [ELLE_TEST.md](Docs/ELLE_TEST.md). Varsayılan dry-run Windows komutu göndermez; gerçek komutlar yalnız açık `--live` seçimi ve başarılı acil durdurma kısayolu kaydıyla kullanılabilir. Sürüm notları: [CHANGELOG.md](CHANGELOG.md).
 
 ## Ne yapar
 
@@ -66,30 +66,40 @@ Açık elden başparmakla orta parmağı birleştirmek sağ tıktır (3 sn'ye ka
 kameraya doğru itme" tıklaması varsayılan olarak kapalıdır (kamera z tahmini güvenilir
 değil). Sol el, baskın el ayarı ne olursa olsun imleci/tıklamayı yönetmez. Takip kaybında
 basılı sol tuş en geç 200 ms içinde bırakılır. Tüm hareketler tepsideki **Hareket Rehberi**
-menüsünde listelenir. Ayrıntı ve elle kontrol adımları: [click_controls.md](Docs/reports/click_controls.md).
-Bu hareketlerin gerçek kamera kabulü henüz yapılmadı.
+menüsünde listelenir. Elle kontrol adımları: [ELLE_TEST.md](Docs/ELLE_TEST.md).
 
 Yumruk komutundan önce elini en az 200 ms açık göster, sonra yumruğu yaklaşık 350 ms tut;
 tekrar komut için yeniden aç.
 Beş parmağın da bükülmüş algılanması gerekir. İki yumruk aynı anda komut üretmez. Sağ yumruk
 tutulurken ön plandaki pencere değişirse işlem iptal edilir. Bu özellik tarayıcı içindeki
 tek sekmeyi değil, uygulama penceresini küçültür/geri açar. Dry-run yalnız komut metnini
-gösterir. Önizleme üstündeki **Sürdür / Duraklat** düğmesinden kontrolü etkinleştirebilirsin.
+gösterir. Penceredeki **Sürdür / Duraklat** düğmesi kontrolü açar ve kapatır.
+
+İmleç modu duraklatılmış başlar ve yalnız sen sürdürünce çalışır. Enstrüman ile Çizim seçilince kendiliğinden başlar
+(Windows'a komut göndermezler); bunlardan düğme ya da tepsiyle bir masaüstü moduna dönünce kontrol yeniden duraklar.
+Önceden sen sürdürdüysen etkin kalır. Ana pencere hiçbir modda kendiliğinden küçülmez.
 
 ## Enstrüman modu
 
-Kamera önünde sanal gitar çalarsın. Sol elin başparmak ucu ile işaret ucu arasına bir tel çizilir,
-sağ işaret parmağı tele vurunca gerçek zamanlı gitar sesi çıkar. Bu modda Windows'a **hiçbir**
+Kamera önünde sanal gitar çalarsın. Varsayılan düzende telleri havada kendin çizersin; işaret parmağın tele
+vurunca gerçek zamanlı gitar sesi çıkar. Bu modda Windows'a **hiçbir**
 giriş komutu gitmez (imleç, tık, tuş, ses seviyesi, pencere yok); yalnız ses ve görüntü üretilir.
 Bu yüzden komutsuz denemede (dry-run) de tam çalışır.
 
-Açmak için mod çarkından ya da tepsiden **Enstrüman**'ı seç. Mod seçilince **Enstrüman penceresi**
-açılır (tepsiden de açılır): kamera görüntüsü, el iskeleti, parlayan teller, vuruşta kıvılcımlar,
-köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise roller yer değiştirir.
+Açmak için sol şeritten, mod çarkından ya da tepsiden **Enstrüman**'ı seç. Ana pencerede kendi sahnesi açılır: kamera
+görüntüsü, el iskeleti, parlayan teller, vuruşta kıvılcımlar, köşede çalan nota/akor. Üstteki çubukta düzen, son teli
+sil, hepsini sil, hizala, tel sayısı, tını ve ses bulunur. Baskın el ayarı "sol" ise roller yer değiştirir.
+
+Düzenler: **Serbest teller** (varsayılan), **Sabit teller**, **Solo**, **Akor**.
+
+**Serbest tellerde notayı telin boyu belirler.** 0,15 kare yüksekliği en ince notayı (E5), 1,0 en kalın notayı (E3)
+verir; arası seçili dizinin notalarına eşit bölünür (Mi minör pentatonikte 11 nota). Telin yeri ve yönü notayı
+değiştirmez. Tel çizilirken, boyutlandırılırken ya da taşınırken **nota telin üstünde büyük yazar**; parmaklar açılmaya
+başlayınca tel donar ve gördüğün notada kalır.
 
 | Hareket | Sonuç |
 |---|---|
-| Sol el: başparmak ile işaret parmağını aç (tel) | Tel çizilir. Uzunluk avuç birimiyle ölçülür; kameraya uzaklık etkilemez |
+| Solo ve Akor: sol elin başparmak ile işaret parmağını aç (tel) | Tel çizilir. Uzunluk avuç birimiyle ölçülür; kameraya uzaklık etkilemez |
 | Sağ işaret parmağıyla teli geç | Nota çalar. Hızlı vuruş daha yüksek ve parlak ses verir; çok yavaş geçiş sayılmaz |
 | Solo: teli uzat / kısalt | Perde değişir (uzun tel = kalın ses). Varsayılan dizi Mi minör pentatonik, 2 oktav |
 | Solo: nota çalarken teli uzat / kısalt | ±2 yarım tona kadar perde bükme; elin titremesi doğal vibrato verir |
@@ -100,7 +110,7 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 | Sabit teller: herhangi bir elin işaret parmağıyla tellerin üstünden geç | Teller ekranda durur (3-8 tel, üstteki en kalın). İki el de çalar |
 | Sabit teller: iki elle çimdikle, 0,4 sn tut, ellerini aç/kapat, bırak | Tel alanı iki çimdik noktası arasına taşınır ve boyutlanır; kaydedilir |
 | Sabit teller: pencerede fareyle sürükle (köşeden boyutlandır) | Aynı ayar fareyle |
-| Serbest teller: boş yerde çimdikle, 0,4 sn tut, çekerek bırak | Yeni tel çizilir (en çok 10). Notayı telin boyu belirler: uzun kalın, kısa ince; çekerken nota telin üstünde yazar |
+| Serbest teller: boş yerde çimdikle, 0,4 sn tut, çekerek bırak | Yeni tel çizilir (en çok 10). Uzun tel kalın, kısa tel ince ses verir |
 | Serbest teller: telin ucunu / ortasını çimdikle, tut, sürükle | Uç: boyutlandır ve döndür. Orta: taşı. Çok kısaltıp bırakınca silinir |
 | Serbest teller: iki elle bir telin iki ucunu tut (ya da boş yerde iki elle gerdir) | Tel iki çimdik arasında yeniden kurulur |
 | Serbest teller: pencerede fareyle çiz / uçtan ya da ortadan sürükle, sağ tık sil, Delete hepsini sil | Aynı düzenleme fareyle |
@@ -109,16 +119,16 @@ köşede çalan nota/akor ve düzen (Solo/Akor). Baskın el ayarı "sol" ise rol
 - Teli göğüs hizasında, kameraya yan değil düz tut. İki elin de tam görünmesi gerekir.
 - Takip belirsizleşince (eller üst üste, kimlik karışması, kalite düşüşü) yeni nota çıkmaz; çalan notalar doğal söner.
 - Duraklatma, acil durdurma (`Ctrl+Alt+Shift+F12`), mod değişimi, kamera hatası ve oturum kilidinde tüm ses ~20 ms içinde kesilir.
-- Ses cihazı hatasında Türkçe bildirim çıkar, kontrol duraklar ve mod İşaretçi'ye döner.
+- Ses cihazı hatasında Türkçe bildirim çıkar; teller ekranda kalır, ses 3 saniyede bir yeniden denenir.
 
-Ayarlar → **Enstrüman** sekmesi: düzen (Solo/Akor/Sabit teller/Serbest teller), sabit tel sayısı, serbest tel hizalama yardımı (yakın getirilen tel düzleşir, öbür telin üstüne aynı uçlarla ve aynı aralıkla oturur; kapalıysa tel bırakıldığı yerde kalır), dizi, diziye kilitle (kapalıysa kesintisiz perde),
+Ayarlar → **Enstrüman** sekmesi: düzen (Solo/Akor/Sabit teller/Serbest teller), sabit tel sayısı, serbest tel hizalama yardımı (yakın getirilen tel düzleşir, öbür telin yakın ucuyla ve aynı aralıkla hizalanır; boyu, dolayısıyla notası değişmez; kapalıysa tel bırakıldığı yerde kalır), dizi, diziye kilitle (kapalıysa Solo'da kesintisiz perde, serbest tellerde bütün yarım tonlar),
 4 akor, ses düzeyi (varsayılan %50), tını (Temiz/Elektro), ses cihazı, gecikme (Düşük/Normal),
 kıvılcım efektleri ve **Test sesi çal** düğmesi.
 
 **Gecikme notu:** Ses WASAPI paylaşımlı modda 48 kHz, 128 (Düşük) ya da 256 (Normal) örneklik blokla
 çalınır; açılamazsa DirectSound, sonra MME denenir. Toplam gecikme kamera (~33 ms kare) + izleme +
 ses çıkışı (bu makinede WASAPI ~22 ms) toplamıdır. Bluetooth kulaklık 100 ms'den fazla ekleyebilir;
-kablolu kulaklık ya da hoparlör önerilir. Tasarım ve ölçümler: [instrument.md](Docs/reports/instrument.md).
+kablolu kulaklık ya da hoparlör önerilir. Tasarım ve ölçümler: [ENSTRUMAN.md](Docs/ENSTRUMAN.md).
 
 ## Çizim modu
 
@@ -132,13 +142,12 @@ hiçbir komut gitmez; komutsuz denemede de tam çalışır. **Çizim** düğmesi
 | Sağ el: yumruk | Silgi. İlk değdiği yüzeyi siler (önde mürekkep varsa ön). Arkadakini silmek için yumruğu açıp o izin üstünde yeniden kapat |
 | Sağ el: başparmakla işareti birleştir (en az iki parmak açık), tut | Renk çarkı açılır. Elini bir renge götür, parmaklarını ayır: seçilir. Ortada ayırmak vazgeçer. 8 renk |
 | Sol el: dört parmak açık, sağa ya da sola yatır | Sahneyi o yöne döndürür; çok yatırmak hızlandırır, dik tutmak durdurur. Aynı anda çizersen sarmal oluşur |
-| Ön kolları göğüs önünde X yapıp yaklaşık yarım saniye tut (ya da pencerede **Temizle**) | Bütün mürekkep aşağı akıp silinir |
+| Ön kolları göğüs önünde X yapıp tut (ya da pencerede **Temizle**) | Sol üstteki yüzde dolunca bütün mürekkep aşağı akıp silinir. Kollar birbirini kapatsa da sayılır; kalemle öbür kolun üstüne uzanmak silmez |
 | El çırpma, `Ctrl+Alt+Shift+F12` | Duraklatır. Mürekkep ekranda kalır |
 
 X hareketi `pose_landmarker_lite.task` modelini ister (`scripts\setup.ps1` indirir). Model yoksa çizim çalışır,
 yalnız X ile temizleme kapalı kalır ve ekranda bildirilir. Çizim bellekte tutulur, dosyaya kaydedilmez; çok uzun
-çizimlerde (yaklaşık 18 kamera genişliği iz) en eski mürekkep silinir. Yol haritası ve sonuçlar:
-[CIZIM_MODU_TR.md](Docs/CIZIM_MODU_TR.md).
+çizimlerde (yaklaşık 18 kamera genişliği iz) en eski mürekkep silinir. Tasarım ve ölçümler: [CIZIM.md](Docs/CIZIM.md).
 
 ## 3B Kedi Maskot
 
@@ -146,7 +155,8 @@ Kamera açıkken bütün modlarda ekranın sağ alt köşesinde şeffaf, tıklam
 çalmayan 3B tüylü bir kedi penceresi gösterilir. Gri, sarı gözlü ve tek dişli kedi proje sahibinin kendi modelidir.
 
 - **Gerçek zamanlı taklit:** Baş dönüşü, bakış yönü, göz kırpma, çene, gülümseme ve kaş hareketlerini (`face_landmarker.task`),
-  kolları (`pose_landmarker_lite.task`) ve patileri (mevcut el takibi) ayna görüntüsü gibi kopyalar.
+  kolları (`pose_landmarker_lite.task`) ve patileri (mevcut el takibi) ayna görüntüsü gibi kopyalar. Kollarını X yapınca
+  kedi de yapar; pati yüze ve gövdeye gömülmez, önünden geçer.
 - **El takibine öncelik:** Yüz ve poz algılama ayrı bir arka plan iş parçacığında düşük hızda çalışır; kedi gizliyken
   tamamen durur.
 - **Masaüstü dostu:** İmleç kedinin üstüne gelince yarı saydamlaşır, tıklamaları altındaki pencereye geçirir. Kimse
@@ -156,15 +166,10 @@ Kamera açıkken bütün modlarda ekranın sağ alt köşesinde şeffaf, tıklam
 - **Enstrüman modunda** kedinin arkasından küçük notalar yükselir; tele her vuruş yeni nota çıkarır (`mascot/notes.py`).
 - **Çizim modunda** kalem çizerken (ya da renk çarkı açıkken) sağ eli taklit eden patiye seçili renkte bir fırça gelir.
 - **Ana pencere** kendiliğinden küçülmez; küçültmek tamamen kullanıcıya aittir.
-- **Modeli yeniden üretme:** Blender 5.1 gerekir (uygulamayı çalıştırmak için gerekmez). `scripts/cat_model.py` modeli
-  kurar, `scripts/build_mascot.py` onu `assets/mascot/cat.npz` dosyasına aktarır. Kollar ayrı mesh'tir ve yarı açık
-  pozda üretilir; böylece dirsek ve bilek bükülürken boğum oluşmaz.
-
-  ```
-  blender -b --python scripts/cat_model.py --python scripts/build_mascot.py
-  ```
 - **Gereksinim:** Offscreen OpenGL 3.3 gerekir. Desteklenmeyen sistemlerde kedi devre dışı kalır, masaüstü kontrolü
   normal çalışmaya devam eder.
+
+Veri akışı, çarpışma kuralları ve modeli Blender ile yeniden üretme: [KEDI_MASKOT.md](Docs/KEDI_MASKOT.md).
 
 ## İlk açılış eğitimi
 
@@ -199,7 +204,8 @@ Yukarı kaydırma (Görev görünümü) ve aşağı kaydırma (Masaüstünü gö
 ## Geri bildirim
 
 - **İmleç halkası:** Basılı tutma sırasında imlecin yanında ilerleme halkası dolar. Ayarlardan kapatılabilir (`cursor_feedback`).
-- **Komut bildirimi:** Gönderilen komut kısa bir bildirimle gösterilir (ör. "Sonraki parça"). Ayar: "Kısa durum bildirimlerini göster".
+- **Komut bildirimi:** Gönderilen komut imlecin yanında kısa süre yazar (ör. "Sonraki parça").
+- **İptal bildirimi:** Tık, sağ tık ya da sürükleme iptal olunca nedeni yazar.
 - **Tık sesi:** Tık ve komutta kısa sistem sesi. Varsayılan kapalı (`click_sound`).
 
 ## Ayarlar
@@ -261,7 +267,7 @@ powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 
 **SmartScreen:** Exe imzasız. İlk açılışta "Windows bilgisayarınızı korudu" uyarısı çıkabilir. **Ek bilgi > Yine de çalıştır** seçilir. İmzalama henüz yok.
 
-Paket yaklaşık 390 MB açık, 156 MB zip. Sürümü kendin üretmek için: `scripts\release.ps1` (`dist\Holoscobe-<sürüm>-win64.zip` ve `.sha256` üretir). Ayrıntı: [release_packaging.md](Docs/reports/release_packaging.md).
+Paket yaklaşık 390 MB açık, 156 MB zip. Sürümü kendin üretmek için: `scripts\release.ps1` (`dist\Holoscobe-<sürüm>-win64.zip` ve `.sha256` üretir). Ayrıntı: [PAKETLEME.md](Docs/PAKETLEME.md).
 
 ## Kurulum (kaynaktan)
 
@@ -281,7 +287,7 @@ $env:PYTHONPATH = "$PWD\src"
 .venv\Scripts\python.exe -m handcontrol.app --live   # gerçek Windows komutları
 ```
 
-Seçenekler: `--live` (gerçek komutlar), `--telemetry` (oturum telemetrisini yerel CSV'ye yazar, görüntü kaydetmez), `--log-level DEBUG|INFO|WARNING|ERROR` (günlük düzeyi, varsayılan `INFO`).
+Seçenekler: `--live` (gerçek komutlar), `--telemetry` (oturum telemetrisini yerel CSV'ye yazar, görüntü kaydetmez; ayrıntı: [TELEMETRI.md](Docs/TELEMETRI.md)), `--log-level DEBUG|INFO|WARNING|ERROR` (günlük düzeyi, varsayılan `INFO`).
 
 Alternatif: `powershell -ExecutionPolicy Bypass -File scripts\launch.ps1` (dry-run); aynı komuta `--live` eklenebilir. Normal kullanımda `QT_QPA_PLATFORM=offscreen` ayarlı olmamalıdır.
 
@@ -330,7 +336,8 @@ Fareyi oynatan, sesi değiştiren ya da pencere açan testler `manual` olarak i�
 
 ### Gerçek kamera kabul testleri
 
-Bunları bir insan, gerçek elleriyle çalıştırır. Sonuçlar `Docs/reports/hw_*` altına yazılır.
+Bunları bir insan, gerçek elleriyle çalıştırır. Sonuçlar `Docs/reports/hw_*` altına yazılır ve depoya girmez.
+Tam liste: [ELLE_TEST.md](Docs/ELLE_TEST.md).
 
 ```powershell
 .venv\Scripts\python.exe -m handcontrol.tools.finger_test      # on parmak, 400 sunum
@@ -338,6 +345,12 @@ Bunları bir insan, gerçek elleriyle çalıştırır. Sonuçlar `Docs/reports/h
 .venv\Scripts\python.exe -m handcontrol.tools.clap_test        # el çırpma
 .venv\Scripts\python.exe -m handcontrol.tools.profile_compare  # 480p ve 720p karşılaştırma
 ```
+
+## Performans
+
+- **Tek el hızlı yolu** (`adaptive_hands.py`): tek el görünürken kare başına 29 ms yerine 14 ms (sentetik kare, Ryzen 5 5600H). İkinci el ayrı iş parçacığında aranır; Yakınlaştırma ve Enstrüman'da kapalıdır.
+- **Boşta bekleme:** kontrol duraklatılmışken ve 2 saniyedir el yokken izleme 30 yerine 10 FPS çalışır; el görünen ilk karede tam hıza döner.
+- **Kedi:** yüz ve gövde takibi ayrı iş parçacığında, düşük hızda; kedi gizliyken tamamen durur.
 
 ## Yapı
 
@@ -347,8 +360,10 @@ src/handcontrol/
   contracts.py         Modüller arası ortak tipler
   camera.py            Kamera yaşam döngüsü, en yeni kare tamponu
   tracking.py          MediaPipe Hand Landmarker sarmalayıcısı
+  adaptive_hands.py    Tek el görünürken tek el modeli
+  background.py        Ortak iş parçacığı tabanı ve saat
   features.py          Parmak durumu, avuç ölçeği, el kimliği
-  filters.py           One Euro filtresi, histerezis
+  filters.py           One Euro filtresi, durum kilidi, yüzdelik
   gestures.py          Pinch, el çırpma, yumruk tanıyıcıları
   mode_wheel.py        Sol V mod çarkı ve çizim renk çarkı geometrisi
   relative_pointer.py  Göreli imleç (debriyaj ve ivme)
@@ -368,18 +383,19 @@ src/handcontrol/
   drawing.py           3B dönen mürekkep sahnesi ve derinlikli silme
   drawing_gestures.py  Çizim modu el/poz hareketleri (X temizleme, renk çarkı)
   drawing_raster.py    NumPy tabanlı hızlı mürekkep çizici
-  instrument/          Sanal gitar motoru (geometri, teller, müzik, Karplus-Strong sentez, WASAPI ses)
+  instrument/          Sanal gitar motoru (geometri, serbest teller, müzik, Karplus-Strong sentez, WASAPI ses)
   instrument_runtime.py Enstrüman oturumu, ses ve pencere yaşam döngüsü
-  mascot/              3B tüylü kedi maskot (OpenGL 3.3, yüz/poz takibi, retarget, şeffaf pencere)
+  mascot/              3B tüylü kedi maskot (OpenGL 3.3, yüz/poz takibi, retarget, kemikler, notalar, şeffaf pencere)
   windows/             Win32 bağdaştırıcıları (giriş, pencere, ses, kısayol, oturum, tuş komutları, başlangıç)
   ui/                  PySide6 ana pencere, koyu tema, kart ayarlar, tepsi, önizleme, kalibrasyon, eğitim, katmanlar, Enstrüman/Çizim görünümleri
-  tools/               Konsol kabul testi ve ölçüm araçları
+                       (ui/painted.py: boyanan pencerelerin ortak gövdesi, ui/widgets.py: ortak bileşenler)
+  tools/               Konsol kabul testi ve ölçüm araçları (common.py: ortak ToolRun)
 assets/                İkon, model manifesti, 3B kedi varlıkları (cat.npz)
 tests/                 Her modülün kendi test klasörü
 scripts/               Kurulum, test, başlatma, kısayol, maskot üretimi, derleme, install/uninstall, release betikleri
 packaging/             PyInstaller spec ve giriş noktası
 .github/workflows/     CI (ci.yml) ve sürüm (release.yml)
-Docs/                  Şartname, yol haritası, çizim modu planı, raporlar
+Docs/                  Şartname, mod belgeleri, paketleme, elle test listeleri
 ```
 
 Akış: kamera → en yeni kare → takip → özellikler → jestler → denetleyici → eylem → Windows bağdaştırıcısı.
@@ -391,15 +407,14 @@ Camera Mouse, eViacam, Project Gameface ve Ultraleap TouchFree incelendi. Bu inc
 ## Belgeler
 
 - [Sürüm notları](CHANGELOG.md)
-- [1.0 durumu ve elle test listesi](Docs/reports/manager_status.md)
-- [Paketleme ve sürüm](Docs/reports/release_packaging.md)
-- [Teknik şartname](Docs/Windows_Hand_Gesture_Control_Spec.md)
-- [Yol haritası](Docs/ROADMAP_TR.md)
-- [Doküman incelemesi ve kararlar](Docs/DOKUMAN_INCELEME_TR.md)
-- [Aşama 0 raporu](Docs/reports/phase0_report.md)
+- [Enstrüman modu: tasarım ve ölçümler](Docs/ENSTRUMAN.md)
+- [Çizim modu: tasarım ve ölçümler](Docs/CIZIM.md)
+- [3B kedi maskot](Docs/KEDI_MASKOT.md)
+- [Elle test listesi](Docs/ELLE_TEST.md) ve [Windows senaryoları](Docs/WINDOWS_TESTLERI.md)
+- [Paketleme ve sürüm](Docs/PAKETLEME.md)
+- [Oturum telemetrisi](Docs/TELEMETRI.md)
+- [Teknik şartname (v1.1, ilk plan)](Docs/Windows_Hand_Gesture_Control_Spec.md)
 - [Üçüncü taraf lisans bildirimleri](THIRD_PARTY_NOTICES.md)
-- [Enstrüman modu: tasarım, ölçümler, elle test listesi](Docs/reports/instrument.md)
-- [Çizim modu: yol haritası ve sonuçlar](Docs/CIZIM_MODU_TR.md)
 
 ## Bilinen sınırlar
 
@@ -408,10 +423,11 @@ Camera Mouse, eViacam, Project Gameface ve Ultraleap TouchFree incelendi. Bu inc
 - Yakınlaştırma, hedef uygulamanın Ctrl + tekerlek desteğine bağlıdır.
 - Komutlar modundaki kısayollar (masaüstü değiştirme, medya tuşları) hedef uygulamanın ve Windows'un o kısayolu desteklemesine bağlıdır.
 - Enstrüman modunun eşikleri (vuruş hızı, histerezis bandı, el yakınlığı, menü sabitliği) yalnız sentetik verilerle ayarlandı; gerçek kamerada ayar bekliyor.
-- Çizim modunun eşikleri (X tutma süresi, silgi derinliği, dönme hızı) yalnız sentetik verilerle ayarlandı; gerçek kamerada ikinci deneme bekliyor.
+- Çizim modunun eşikleri (X kanıtı, silgi derinliği, dönme hızı) sentetik verilerle ayarlandı; gerçek kamerada deneme bekliyor.
+- Ayarlar'daki Yumuşatma oranı, Algılama ve Takip güven eşikleri, Kısa durum bildirimleri ve Dry-run paneli seçenekleri henüz hiçbir şeyi etkilemez ve kaydedilmez.
 - 3B kedi maskot için OpenGL 3.3 gerekir; desteklenmeyen sistemlerde kedi gizlenir, masaüstü kontrolü etkilenmez.
 - Gerçek kamera ve ellerle kabul testi bekliyor.
 
 ## Lisans
 
-Projenin kendi kaynak lisansı henüz belirlenmedi. Bu depo özeldir; kamuya dağıtımdan önce lisans netleştirilecektir. Kullanılan üçüncü taraf bileşenlerin lisansları `THIRD_PARTY_NOTICES.md` dosyasındadır.
+Projenin kendi kaynak lisansı henüz belirlenmedi; lisans eklenene kadar bütün hakları saklıdır. Kullanılan üçüncü taraf bileşenlerin lisansları `THIRD_PARTY_NOTICES.md` dosyasındadır.

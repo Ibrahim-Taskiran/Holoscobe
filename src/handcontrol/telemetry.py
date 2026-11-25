@@ -1,7 +1,7 @@
 """Opt-in session telemetry: one numeric CSV row per processed frame, local file only.
 
 No images and no landmarks are stored. The recorder never raises into the pipeline: on any I/O
-error it disables itself. See Docs/reports/telemetry.md.
+error it disables itself. See Docs/TELEMETRI.md.
 """
 from __future__ import annotations
 

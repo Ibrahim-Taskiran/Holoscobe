@@ -25,6 +25,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - BGR-RGB çevirme `cv2.cvtColor` ile yapılıyor.
 
 ### Changed
+- Belgeler sadeleşti: `Docs/` altında şartname, mod belgeleri (`ENSTRUMAN.md`, `CIZIM.md`, `KEDI_MASKOT.md`), `PAKETLEME.md`, `TELEMETRI.md` ve elle test listeleri kaldı. Eski tur raporları, koordinasyon notları ve ham ölçüm kayıtları silindi; ölçüm araçlarının çıktısı (`Docs/reports/`) artık depoya girmez.
 - Serbest teller: notayı telin boyu belirliyor (0,15–1,0 kare yüksekliği, seçili dizinin notalarına eşit bölünür). Tel çizilirken ya da boyutlandırılırken nota üstünde büyük yazılır. Hizalama telin boyunu değiştirmez, parmaklar açılırken tel kaymaz.
 - Çizimde X ile silme: eldeki kanıt yarım karelerde görülse de birikiyor; bilekler üst üste geldiğinde ya da kollar birbirini kapattığında eklem ve el modeli birlikte kullanılıyor. Kalemle öbür kolun üstüne uzanmak silmez.
 - Kod sadeleşti: kaynak 27.354 satırdan 24.700 satırın altına indi, davranış aynı. Ortak gövdeler: `ui/painted.py` (boyanan pencereler), `background.py` (iş parçacığı ve saat), `tools/common.py` `ToolRun` (ölçüm araçları), enstrüman motorunda tek vuruş yolu, tablo ile yürüyen ayar doğrulama ve ayar penceresi. Uygulamada hiç çağrılmayan kod (`ui/demo.py`, eski katman ve bildirim işlevleri) silindi.

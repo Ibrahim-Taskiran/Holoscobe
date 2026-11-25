@@ -1,7 +1,7 @@
-# Enstrüman modu: tasarım, ölçümler, elle test listesi
+# Enstrüman modu: tasarım ve ölçümler
 
-Tarih: 2026-11-22. Sürüm: 1.1.0. Dal: `feature/instrument-mode`.
-Durum: otomatik testler geçti. **Gerçek kamera ve elle kabul: bekliyor.**
+Güncelleme: 2026-11-26. Durum: otomatik testler geçti; gerçek kamera kabulü bekliyor ([ELLE_TEST.md](ELLE_TEST.md)).
+Hareket tablosu: [README](../README.md#enstrüman-modu).
 
 ## 1. Tasarım
 
@@ -12,7 +12,7 @@ kamera -> TrackingLoop -> Pipeline.process -> FeatureExtractor -> GestureRecogni
                                                   |
                                                   +-> frame observer: InstrumentSession.on_frame (tracking thread)
                                                         -> InstrumentEngine.update -> NoteOn/Bend -> AudioOutput kuyruğu (deque)
-                                                        -> InstrumentView -> Qt sinyali -> InstrumentWindow (GUI thread)
+                                                        -> InstrumentView -> Qt sinyali -> InstrumentWindow (ana pencerenin sayfası, GUI thread)
 Controller listener (her thread) -> InstrumentSession.on_snapshot -> etkin değilse anında AllOff(20 ms)
 ses thread'i: PortAudio callback -> kuyruğu boşalt -> GuitarSynth.render -> çıkış
 ```
@@ -25,6 +25,26 @@ ses thread'i: PortAudio callback -> kuyruğu boşalt -> GuitarSynth.render -> ç
 - Ses akışı yalnız mod Enstrüman iken açıktır; moddan çıkınca ve uygulama kapanınca kapanır.
 - Qt nesnelerine yalnız GUI thread dokunur. Kamera görüntüsü `TrackingLoop.on_image` kancasıyla yalnız
   pencere açıkken referans olarak tutulur; GUI zamanlayıcısı en yeni kareyi en çok bir kez `QImage`'a çevirir.
+
+### Düzenler
+
+| Düzen | Tel | Nota |
+|---|---|---|
+| Serbest (varsayılan) | Kullanıcı çizer, en çok 10 | Telin boyu: 0,15–1,0 kare yüksekliği, seçili dizinin E5–E3 notalarına eşit bölünür |
+| Sabit | Ekranda 3–8 yatay tel | Üstteki en kalın; alan çimdikle ya da fareyle taşınır |
+| Solo | Sol elin başparmak-işaret arası | Tel uzunluğu (avuç birimi), perde bükme |
+| Akor | Sol elin yanında 4 paralel tel | Sol elin yüksekliği akoru seçer |
+
+Serbest teller (`instrument/freeform.py`, `engine.free_pitch`):
+
+- Çimdik 400 ms tutulunca başlar (0,35 avuç altı), 0,55 üstünde biter. 0,45'i geçince tel artık hareket etmez; böylece
+  bırakırken nota değişmez.
+- Düzenlenen telin notası `StringView.label` ile gelir ve telin üstünde büyük yazılır. Fareyle düzenlemede aynı hesap
+  `free_note` ile yapılır.
+- Hizalama yardımı: 7° içinde yatay/dikeye düzleştirir, paralel telin yakın ucuna ve var olan aralığa oturtur. Telin
+  boyunu değiştirmez.
+- "Diziye kilitle" kapalıysa bütün yarım tonlar kullanılır. 0,06 kare yüksekliğinden kısa bırakılan tel silinir.
+- Çimdikleyen el vurmaz; tel düzenlenirken hiçbir tel çalmaz. 250 ms'ye kadar takip kaybı düzenlemeyi bölmez.
 
 ### Motor (saf, deterministik; yalnız stdlib + contracts)
 
@@ -62,7 +82,7 @@ ses thread'i: PortAudio callback -> kuyruğu boşalt -> GuitarSynth.render -> ç
 | Kural | Değer |
 |---|---|
 | El çırpma | Kurulmada ve aday girişinde iki elde de ≥ 4 başparmak dışı parmak açık |
-| Mod menüsü | 5 parmak açık ve el sabit (≤ 0,12 avuç kayma; diğer modlarda 0,15) |
+| Mod çarkı | Sol elle V, sabit tutma (≤ 0,12 avuç kayma; diğer modlarda 0,15). Çimdiklerken açılmaz |
 | Diğer modlar | Davranış değişmedi; profil her karede moddan uygulanır |
 
 ## 2. Ölçümler (bu makine, otomatik)
@@ -87,49 +107,7 @@ Gerçek cihazda bir kez açılan akış (ses kalitesi dinlenmedi, ölçüm yaln�
 çıkış gecikmesi. Kamera pozlama süresi ve hoparlör dahil değildir. Not: Python 3.11'de Windows
 `time.monotonic()` ~15,6 ms adımla ilerler; bu değer ~16 ms çözünürlüklüdür.
 
-## 3. Otomatik testler
-
-Başlangıç: 1455 geçti, 3 manuel. Bitiş: **1750 geçti, 7 manuel seçilmedi**.
-
-| Klasör | Yeni test | Kapsam |
-|---|---|---|
-| `tests/instrument` | 130 | geometri, süpürülen kesişim (tek karede 4 tel), çift tetik yok, yön, hız eşiği, sıfır avuç, kalite/kimlik/boşluk, tüm dizi/akor adları, bölge ve dizi histerezisi, bükme sınırı ve yönü, oturum AllOff, performans |
-| `tests/audio` | 71 (+4 manuel) | FFT perde, sönüm, NaN/Inf, limiter tavanı, bükme, ses çalma, AllOff solması, gecikmeli başlama, sahte akış: WASAPI/DirectSound/MME yedeği, cihaz hatası, istatistik |
-| `tests/gestures` | 24 | zamanlı landmark fikstürleri: strum, çalarken yaklaşma, açık avuç clap, menü açma, el çaprazlanması, kimlik takası |
-| `tests/controller` | 20 | Enstrüman modunda sink'e yalnız RELEASE_ALL; clap, menü, otomatik duraklatma, acil durdurma |
-| `tests/integration` | 6 | Pipeline üzerinden dry-run oturum, profilin mod değişimini izlemesi, diğer modlar aynı |
-| `tests/ui` | 17 | kıvılcım sınırı, pencere çizimi, ayna, ayarlar sekmesi, tepsi |
-| `tests/app` | 15 | ses/pencere yaşam döngüsü, her durdurma yolunda tek AllOff, cihaz hatası, ayar uygulama, test sesi, görüntü kancası |
-| `tests/config`, `tests/camera`, `tests/packaging` | 2 + 2 + 8 | şema 3 -> 4 kayıpsız taşıma, görüntü kancası, paket |
-
-Değişen mevcut testler (zorunlu): şema sürümü sabiti (`== 3` -> `== 4`), 7 satırlı menüde satır konumu
-(`test_ctrl_windows.py`, `test_integ_menus.py`), `Mode` üzerinde dolaşan yumruk testinden INSTRUMENT
-durumunun çıkarılması, ayarlar penceresinde yeni sekme ve yeni alanlar (`test_round6_ui.py`, `test_ui_components.py`).
-
-## 4. Elle test listesi (gerçek kamera; durum: bekliyor)
-
-Komutsuz denemede (dry-run) yapılabilir. Kablolu kulaklık ya da hoparlör kullanın.
-
-| # | Test | Ölçüt | Sonuç |
-|---|---|---|---|
-| 1 | Ayarlar → Enstrüman → Test sesi çal | Temiz, çıtırtısız arpej | bekliyor |
-| 2 | Solo: 20 tek vuruş, farklı tel uzunlukları | 20 vuruşta 20 nota; kaçan ve çift nota sayısı | bekliyor |
-| 3 | Akor: 20 strum (10 aşağı, 10 yukarı), 4 bölge | Her strumda 4 nota, doğru akor; kaçan tel sayısı | bekliyor |
-| 4 | 5 dakika serbest çalma | Yanlış el çırpma (duraklatma) sayısı = 0, yanlış menü açılışı sayısı = 0 | bekliyor |
-| 5 | Çalarken açık avuçla el çırpma | Kontrol duraklar, ses ~20 ms içinde kesilir | bekliyor |
-| 6 | Sol el 5 parmak açık, sabit 600 ms | Mod menüsü açılır; başka moda geçince ses kesilir | bekliyor |
-| 7 | Çalarken Ctrl+Alt+Shift+F12 | Ses anında kesilir | bekliyor |
-| 8 | Çalarken Win+L | Ses anında kesilir | bekliyor |
-| 9 | Çalarken USB kulaklığı çıkar | Türkçe bildirim, kontrol duraklar, mod İşaretçi | bekliyor |
-| 10 | Solo: nota çalarken teli uzat/kısalt | Duyulur perde bükme, en çok ±2 yarım ton | bekliyor |
-| 11 | Gecikme hissi (Düşük ve Normal) | Vuruş ile ses arası "anlık" mı; 1–5 puan | bekliyor |
-| 12 | Enstrüman modunda imleç/klavye | İmleç kıpırdamaz, hiçbir tuş gitmez | bekliyor |
-| 13 | Ayna açık/kapalı | Teller ve el iskeleti görüntüyle hizalı | bekliyor |
-
-Önce ayarlanacak eşikler: vuruş alt hızı (2,0 avuç/s), histerezis bandı (0,06 avuç), el yakınlığı (0,5 avuç),
-menü sabitliği (0,12 avuç).
-
-## 5. Bilinen sınırlar
+## 3. Bilinen sınırlar
 
 - Eşikler yalnız sentetik ellerle ayarlandı.
 - Solo düzende tek tel tek sestir (gerçek tel gibi): yeni vuruş önceki notayı keser.

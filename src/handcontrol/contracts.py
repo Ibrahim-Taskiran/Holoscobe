@@ -1,6 +1,5 @@
-"""Shared contracts between all modules. FROZEN: only the project manager edits this file.
+"""Shared contracts between all modules. Change them deliberately: everything depends on this file.
 
-Need a change? Write it to Docs/coordination/REQUESTS_<your-name>.md and work around it locally.
 Stdlib only. No camera, Qt, MediaPipe or Win32 imports here.
 
 Units:
