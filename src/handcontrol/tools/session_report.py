@@ -7,7 +7,7 @@ import math
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Optional, Sequence
 
 from .report import default_reports_dir
 
@@ -217,6 +217,12 @@ def _pointer(header: list[str], rows: list[Row]) -> list[str]:
     return out
 
 
+def _changes(rows: list[Row], column: str) -> Counter[str]:
+    """How often each text appeared anew (a text that stays counts once)."""
+    texts = [(r.get(column) or "").strip() for r in rows]
+    return Counter(b for a, b in zip(["", *texts], texts) if b and a != b)
+
+
 def _clicks(header: list[str], rows: list[Row]) -> list[str]:
     out = ["## Tıklamalar", ""]
     if _has(header, "pinch_pu"):
@@ -244,15 +250,8 @@ def _clicks(header: list[str], rows: list[Row]) -> list[str]:
     else:
         out.append(f"- Gönderilen eylemler: {NO_DATA}")
     if _has(header, "last_cancel"):
-        cancels: Counter[str] = Counter()
-        prev = ""
-        for r in rows:
-            cur = (r.get("last_cancel") or "").strip()
-            if cur and cur != prev:
-                cancels[cur] += 1
-            prev = cur
         out.append("- İptaller (son iptal nedeni değişimlerine göre):")
-        out.extend([f"  - {text}: {c}" for text, c in cancels.most_common()] or ["  - yok"])
+        out.extend([f"  - {text}: {c}" for text, c in _changes(rows, "last_cancel").most_common()] or ["  - yok"])
     else:
         out.append(f"- İptaller: {NO_DATA}")
     out.append("")
@@ -277,14 +276,7 @@ def _notices(header: list[str], rows: list[Row], top: int = 8) -> list[str]:
     out = ["## En sık uyarılar", ""]
     if "notice" not in header:
         return out + [NO_DATA, ""]
-    counts: Counter[str] = Counter()
-    prev = ""
-    for r in rows:
-        cur = (r.get("notice") or "").strip()
-        if cur and cur != prev:
-            counts[cur] += 1
-        prev = cur
-    out.extend([f"- {text}: {c}" for text, c in counts.most_common(top)] or ["- yok"])
+    out.extend([f"- {text}: {c}" for text, c in _changes(rows, "notice").most_common(top)] or ["- yok"])
     out.append("")
     return out
 

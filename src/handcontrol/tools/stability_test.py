@@ -11,19 +11,20 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..contracts import FrameFeatures, Handedness, Quality
+from ..filters import percentile
 from . import report as rp
 from .common import (
     Console,
     FrameSource,
-    LiveSource,
     Observation,
     RealConsole,
-    ToolError,
+    ToolRun,
     add_camera_args,
     ask_conditions,
-    percentile,
+    frames,
+    live_source,
     pump_source,
-    run_main,
+    run_tool,
 )
 
 TOOL = "stability_test"
@@ -138,36 +139,26 @@ def decide(stats: StabilityStats, seconds: float, requested: float, interrupted:
     )
 
 
-class StabilityRun:
+class StabilityRun(ToolRun):
+    tool = TOOL
+
     def __init__(
         self, source: FrameSource, console: Console, *, seconds: float = FULL_SECONDS,
         out_dir: Optional[Path] = None, software: Optional[dict[str, Any]] = None,
     ) -> None:
-        self.source, self.console, self.seconds, self.out_dir = source, console, seconds, out_dir
+        super().__init__(source, console, out_dir, software)
+        self.seconds = seconds
         self.stats = StabilityStats()
-        self.conditions: dict[str, str] = {}
-        self.error: Optional[str] = None
-        self._software = software
-        self.stem = rp.timestamp_stem(TOOL)
-        self.md_path: Optional[Path] = None
-        self.json_path: Optional[Path] = None
 
     def build_report(self, interrupted: bool) -> rp.Report:
         st = self.stats
         status, karar, note = decide(st, st.total_time_ms / 1000.0, self.seconds, interrupted)
-        if self.error:
-            note = f"{note} Hata: {self.error}"
-        sw = self._software if self._software is not None else rp.collect_software()
-        self._software = sw
         s = st.summary()
-        try:
-            cam = self.source.camera_info()
-        except Exception:
-            cam = {}
+        cam = self.camera_info()
         return rp.Report(
             tool=TOOL,
             title="İki el kararlılık kapısı" + (" - PROVA" if self.seconds < FULL_SECONDS else ""),
-            stem=self.stem, status=status, environment=rp.collect_environment(cam), software=sw,
+            stem=self.stem, status=status, environment=rp.collect_environment(cam), software=self.software(),
             conditions=self.conditions,
             experiment=[
                 f"{self.seconds:.0f} sn boyunca iki el görünür; parmaklar bağımsız oynatılır.",
@@ -183,68 +174,33 @@ class StabilityRun:
                 f"Boşluk: {s['bosluk_sayisi']} (en uzun {s['en_uzun_bosluk_ms']} ms); kimlik belirsiz: {s['kimlik_belirsiz']}",
             ],
             raw={"requested_seconds": self.seconds, "stats": s},
-            decision=karar, decision_note=note,
+            decision=karar, decision_note=self.with_error(note),
         )
 
-    def _save(self, interrupted: bool) -> rp.Report:
-        r = self.build_report(interrupted)
-        self.md_path, self.json_path = rp.save_report(r, self.out_dir)
-        return r
-
-    def execute(self) -> rp.Report:
-        say = self.console.say
-        interrupted = True
-        try:
-            self.source.open()
-            self.conditions = ask_conditions(self.console)
-            self.console.ask(
-                f"İki elinizi de kameraya gösterin; {self.seconds:.0f} sn parmaklarınızı bağımsız oynatın. Hazırsanız Enter: ",
-                pump_source(self.source),
-            )
-            start = self.source.now_ms()
-            next_note = start + 30000.0
-            while self.source.now_ms() - start < self.seconds * 1000.0:
-                obs = self.source.next(0.2)
-                if obs is not None and obs.frame.capture_ms >= start:
-                    self.stats.add(obs)
-                now = self.source.now_ms()
-                if now >= next_note:
-                    next_note += 30000.0
-                    say(f"  {int((now - start) / 1000)} sn, kapsama %{self.stats.sample_coverage_pct:.1f}")
-            interrupted = False
-        except KeyboardInterrupt:
-            say("\nDurduruldu (Ctrl+C). Kısmi sonuç kaydediliyor...")
-        except ToolError as exc:
-            self.error = str(exc)
-            say(f"HATA: {exc}")
-        finally:
-            try:
-                self.source.close()
-            except Exception:
-                pass
-        report = self._save(interrupted)
-        say(f"Karar: {report.decision} ({report.status})")
-        say(f"Rapor: {self.md_path}")
-        return report
+    def measure(self) -> bool:
+        self.source.open()
+        self.conditions = ask_conditions(self.console)
+        self.console.ask(
+            f"İki elinizi de kameraya gösterin; {self.seconds:.0f} sn parmaklarınızı bağımsız oynatın. Hazırsanız Enter: ",
+            pump_source(self.source),
+        )
+        start = self.source.now_ms()
+        next_note = start + 30000.0
+        for obs in frames(self.source, self.seconds):
+            self.stats.add(obs)
+            now = self.source.now_ms()
+            if now >= next_note:
+                next_note += 30000.0
+                self.console.say(f"  {int((now - start) / 1000)} sn, kapsama %{self.stats.sample_coverage_pct:.1f}")
+        return True
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="handcontrol.tools.stability_test", description="İki el kararlılık kapısı")
     p.add_argument("--seconds", type=float, default=FULL_SECONDS, help="süre (300 altı = prova)")
-    p.add_argument("--swap-handedness", action="store_true")
     add_camera_args(p)
     args = p.parse_args(argv)
-    run = StabilityRun(
-        LiveSource(index=args.camera_index, backend=args.backend, swap_handedness=args.swap_handedness),
-        RealConsole(), seconds=args.seconds, out_dir=Path(args.out_dir) if args.out_dir else None,
-    )
-
-    def go() -> int:
-        run.execute()
-        return 2 if run.error else 0
-
-    run_main(go)
-    return 0
+    run_tool(lambda: StabilityRun(live_source(args), RealConsole(), seconds=args.seconds, out_dir=args.out_dir))
 
 
 if __name__ == "__main__":

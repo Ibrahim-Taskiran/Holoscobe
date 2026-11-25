@@ -13,19 +13,23 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..contracts import FrameFeatures, Quality
+from ..filters import percentile
 from . import report as rp
 from .common import (
     Console,
     FrameSource,
-    LiveSource,
     Observation,
     RealConsole,
     ToolError,
+    ToolRun,
     add_camera_args,
     ask_conditions,
-    percentile,
+    close_quietly,
+    frames,
+    live_source,
+    md_table,
     pump_source,
-    run_main,
+    run_tool,
 )
 
 TOOL = "profile_compare"
@@ -82,6 +86,9 @@ class ProfileStats:
         if self.samples < 2 or self.first_ms is None or self.last_ms is None or self.last_ms <= self.first_ms:
             return 0.0
         return 1000.0 * (self.samples - 1) / (self.last_ms - self.first_ms)
+
+    def pose_break(self) -> None:
+        """A new pose starts after the user pressed Enter."""
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -155,92 +162,77 @@ class GapStats(ProfileStats):
 
 
 def confidence_table(rows: list[dict[str, Any]]) -> str:
-    cols = [
+    return md_table("Güven profili karşılaştırması", [
         ("Profil (alg/varlık/izleme)", "profil"), ("Kullanılabilir kare oranı", "kullanilabilir_kare_orani"),
         ("Eli olmayan kare oranı", "bos_kare_orani"), ("En uzun boşluk ms", "en_uzun_bosluk_ms"),
         ("İşlenen FPS", "islenen_fps"), ("Örnek", "ornek"),
-    ]
-    head = "| " + " | ".join(c[0] for c in cols) + " |"
-    body = ["| " + " | ".join(str(r.get(c[1], "-")) for c in cols) + " |" for r in rows]
-    return "\n".join(["## Güven profili karşılaştırması", "", head, "|" + "---|" * len(cols), *body])
+    ], rows)
 
 
 def comparison_table(rows: list[dict[str, Any]]) -> str:
-    cols = [
+    return md_table("Yan yana karşılaştırma", [
         ("İstenen", "istenen"), ("Gerçek çözünürlük", "gercek_cozunurluk"), ("Kamera FPS", "kamera_fps"),
         ("İşlenen FPS", "islenen_fps"), ("Çıkarım p50 ms", "cikarim_ms_p50"),
         ("Çıkarım p95 ms", "cikarim_ms_p95"), ("Kullanılabilir kapsama %", "kullanilabilir_kapsama_yuzde"),
-    ]
-    head = "| " + " | ".join(c[0] for c in cols) + " |"
-    sep = "|" + "---|" * len(cols)
-    body = ["| " + " | ".join(str(r.get(c[1], "-")) for c in cols) + " |" for r in rows]
-    return "\n".join(["## Yan yana karşılaştırma", "", head, sep, *body])
+    ], rows)
 
 
-class ProfileRun:
+class ProfileRun(ToolRun):
+    tool = TOOL
+
     def __init__(
         self, source_factory: Callable[[int, int], FrameSource], console: Console, *,
         seconds_per_pose: float = 5.0, profiles: tuple[tuple[int, int], ...] = PROFILES,
         out_dir: Optional[Path] = None, software: Optional[dict[str, Any]] = None,
     ) -> None:
-        self.factory, self.console, self.seconds = source_factory, console, seconds_per_pose
-        self.profiles, self.out_dir = profiles, out_dir
+        super().__init__(None, console, out_dir, software)      # one source per profile, closed after it
+        self.factory, self.seconds, self.profiles = source_factory, seconds_per_pose, profiles
         self.rows: list[dict[str, Any]] = []
         self.pose_rows: list[dict[str, Any]] = []
-        self.conditions: dict[str, str] = {}
-        self.error: Optional[str] = None
-        self._software = software
         self._cam_info: dict[str, Any] = {}
-        self.stem = rp.timestamp_stem(TOOL)
-        self.md_path: Optional[Path] = None
-        self.json_path: Optional[Path] = None
 
-    def _run_profile(self, w: int, h: int) -> None:
-        say = self.console.say
-        say(f"\n=== Profil {w}x{h} ===")
-        source = self.factory(w, h)
-        stats = ProfileStats(w, h)
+    def _run_poses(self, label: str, source: FrameSource, stats: ProfileStats) -> dict[str, Any]:
+        """Whole checklist on one source; the summary row of the profile."""
         try:
             source.open()
             for idx, (text, expected) in enumerate(CHECKLIST, 1):
                 self.console.ask(f"  [{idx}/{len(CHECKLIST)}] {text} - hazırsanız Enter: ", pump_source(source))
-                start = source.now_ms()
+                stats.pose_break()
                 before = (stats.usable, stats.samples)
-                while source.now_ms() - start < self.seconds * 1000.0:
-                    obs = source.next(0.1)
-                    if obs is not None and obs.frame.capture_ms >= start:
-                        stats.add(obs, expected)
+                for obs in frames(source, self.seconds, 0.1):
+                    stats.add(obs, expected)
                 stats.per_pose.append((stats.usable - before[0], stats.samples - before[1]))
             info = source.camera_info()
         finally:
-            try:
-                source.close()
-            except Exception:
-                pass
-        row = stats.summary()
-        row["kamera_fps"] = info.get("kamera_fps", "-")
-        self._cam_info[f"{w}x{h}"] = info
+            close_quietly(source)
+        row = {**stats.summary(), "kamera_fps": info.get("kamera_fps", "-")}
+        self._cam_info[label] = info
         self.rows.append(row)
-        for (text, expected), (u, n) in zip(CHECKLIST, stats.per_pose):
-            self.pose_rows.append({"profil": f"{w}x{h}", "poz": text, "kullanilabilir": u, "ornek": n})
+        return row
 
-    def build_report(self, complete: bool) -> rp.Report:
-        sw = self._software if self._software is not None else rp.collect_software()
-        self._software = sw
-        status = rp.STATUS_TAMAM if complete else rp.STATUS_YARIM
-        karar = rp.KARAR_GECTI if complete else rp.KARAR_YAPILMADI
-        note = (
-            "Ölçüm tamamlandı (bilgi amaçlı; kabul kapısı yok)."
-            if complete else "Ölçüm yarım kaldı."
-        )
-        if self.error:
-            note += f" Hata: {self.error}"
+    def _run_profile(self, w: int, h: int) -> None:
+        label = f"{w}x{h}"
+        self.console.say(f"\n=== Profil {label} ===")
+        stats = ProfileStats(w, h)
+        self._run_poses(label, self.factory(w, h), stats)
+        for (text, _), (u, n) in zip(CHECKLIST, stats.per_pose):
+            self.pose_rows.append({"profil": label, "poz": text, "kullanilabilir": u, "ornek": n})
+
+    def _verdict(self, interrupted: bool) -> dict[str, Any]:
+        """Report fields that only tell whether the measurement is complete (there is no gate)."""
+        note = "Ölçüm yarım kaldı." if interrupted else "Ölçüm tamamlandı (bilgi amaçlı; kabul kapısı yok)."
+        return {
+            "status": rp.STATUS_YARIM if interrupted else rp.STATUS_TAMAM,
+            "decision": rp.KARAR_YAPILMADI if interrupted else rp.KARAR_GECTI,
+            "decision_note": self.with_error(note), "stem": self.stem, "software": self.software(),
+            "environment": rp.collect_environment({"profiller": self._cam_info}), "conditions": self.conditions,
+        }
+
+    def build_report(self, interrupted: bool) -> rp.Report:
         pose_md = ["", "## Poz bazında kullanılabilir örnek", "", "| Profil | Poz | Kullanılabilir/Örnek |", "|---|---|---|"]
         pose_md += [f"| {r['profil']} | {r['poz']} | {r['kullanilabilir']}/{r['ornek']} |" for r in self.pose_rows]
         return rp.Report(
-            tool=TOOL, title="Kamera profili karşılaştırması", stem=self.stem, status=status,
-            environment=rp.collect_environment({"profiller": self._cam_info}), software=sw,
-            conditions=self.conditions,
+            tool=TOOL, title="Kamera profili karşılaştırması", **self._verdict(interrupted),
             experiment=[
                 f"Sabit poz listesi ({len(CHECKLIST)} poz) x {self.seconds:.0f} sn, her profilde aynı sırayla.",
                 "Profiller: " + ", ".join(f"{w}x{h}" for w, h in self.profiles),
@@ -253,32 +245,14 @@ class ProfileRun:
             ] or ["veri yok"],
             raw={"profiller": self.rows, "pozlar": self.pose_rows, "checklist": [c[0] for c in CHECKLIST]},
             details_md=comparison_table(self.rows) + "\n" + "\n".join(pose_md),
-            decision=karar, decision_note=note,
         )
 
-    def _save(self, complete: bool) -> rp.Report:
-        r = self.build_report(complete)
-        self.md_path, self.json_path = rp.save_report(r, self.out_dir)
-        return r
-
-    def execute(self) -> rp.Report:
-        say = self.console.say
-        complete = False
-        try:
-            self.conditions = ask_conditions(self.console)
-            for w, h in self.profiles:
-                self._run_profile(w, h)
-                self._save(False)
-            complete = True
-        except KeyboardInterrupt:
-            say("\nDurduruldu (Ctrl+C). Kısmi sonuç kaydediliyor...")
-        except ToolError as exc:
-            self.error = str(exc)
-            say(f"HATA: {exc}")
-        report = self._save(complete)
-        say(f"Karar: {report.decision} ({report.status})")
-        say(f"Rapor: {self.md_path}")
-        return report
+    def measure(self) -> bool:
+        self.conditions = ask_conditions(self.console)
+        for w, h in self.profiles:
+            self._run_profile(w, h)
+            self.save(True)
+        return True
 
 
 class ConfidenceRun(ProfileRun):
@@ -298,41 +272,11 @@ class ConfidenceRun(ProfileRun):
     def _run_conf(self, det: float, pres: float, trk: float) -> None:
         label = f"{det:g}/{pres:g}/{trk:g}"
         self.console.say(f"\n=== Güven profili {label} ===")
-        source = self.cfactory(det, pres, trk)
-        stats = GapStats(*self.resolution)
-        try:
-            source.open()
-            for idx, (text, expected) in enumerate(CHECKLIST, 1):
-                self.console.ask(f"  [{idx}/{len(CHECKLIST)}] {text} - hazırsanız Enter: ", pump_source(source))
-                stats.pose_break()
-                start = source.now_ms()
-                while source.now_ms() - start < self.seconds * 1000.0:
-                    obs = source.next(0.1)
-                    if obs is not None and obs.frame.capture_ms >= start:
-                        stats.add(obs, expected)
-            info = source.camera_info()
-        finally:
-            try:
-                source.close()
-            except Exception:
-                pass
-        row = stats.summary()
-        row["profil"] = label
-        row["kamera_fps"] = info.get("kamera_fps", "-")
-        self._cam_info[label] = info
-        self.rows.append(row)
+        self._run_poses(label, self.cfactory(det, pres, trk), GapStats(*self.resolution))["profil"] = label
 
-    def build_report(self, complete: bool) -> rp.Report:
-        sw = self._software if self._software is not None else rp.collect_software()
-        self._software = sw
-        note = "Ölçüm tamamlandı (bilgi amaçlı; kabul kapısı yok)." if complete else "Ölçüm yarım kaldı."
-        if self.error:
-            note += f" Hata: {self.error}"
+    def build_report(self, interrupted: bool) -> rp.Report:
         return rp.Report(
-            tool=TOOL, title="İzleyici güven profili karşılaştırması", stem=self.stem,
-            status=rp.STATUS_TAMAM if complete else rp.STATUS_YARIM,
-            environment=rp.collect_environment({"profiller": self._cam_info}), software=sw,
-            conditions=self.conditions,
+            tool=TOOL, title="İzleyici güven profili karşılaştırması", **self._verdict(interrupted),
             experiment=[
                 f"Sabit poz listesi ({len(CHECKLIST)} poz) x {self.seconds:.0f} sn, her güven profilinde aynı sırayla.",
                 "Profil: algılama/varlık/izleme eşiği. Çözünürlük: " + "x".join(map(str, self.resolution)),
@@ -343,33 +287,20 @@ class ConfidenceRun(ProfileRun):
                 for r in self.rows
             ] or ["veri yok"],
             raw={"profiller": self.rows, "checklist": [c[0] for c in CHECKLIST]},
-            details_md=confidence_table(self.rows), decision=rp.KARAR_GECTI if complete else rp.KARAR_YAPILMADI,
-            decision_note=note,
+            details_md=confidence_table(self.rows),
         )
 
-    def execute(self) -> rp.Report:
-        complete = False
-        try:
-            self.conditions = ask_conditions(self.console)
-            for det, pres, trk in self.confidences:
-                self._run_conf(det, pres, trk)
-                self._save(False)
-            complete = True
-        except KeyboardInterrupt:
-            self.console.say("\nDurduruldu (Ctrl+C). Kısmi sonuç kaydediliyor...")
-        except ToolError as exc:
-            self.error = str(exc)
-            self.console.say(f"HATA: {exc}")
-        report = self._save(complete)
-        self.console.say(f"Karar: {report.decision} ({report.status})")
-        self.console.say(f"Rapor: {self.md_path}")
-        return report
+    def measure(self) -> bool:
+        self.conditions = ask_conditions(self.console)
+        for confidence in self.confidences:
+            self._run_conf(*confidence)
+            self.save(True)
+        return True
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="handcontrol.tools.profile_compare", description="Kamera profili karşılaştırması")
     p.add_argument("--seconds-per-pose", type=float, default=5.0)
-    p.add_argument("--swap-handedness", action="store_true")
     p.add_argument("--confidence-profiles", default=None,
                    help='izleyici güven profilleri "alg/varlık/izleme,..." (ör. "0.55/0.55/0.55,0.5/0.35/0.35")')
     add_camera_args(p)
@@ -383,31 +314,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             tracker = HandTracker(detection_confidence=det, presence_confidence=pres,
                                   tracking_confidence=trk, swap_handedness=args.swap_handedness)
-            return LiveSource(*PROFILES[0], index=args.camera_index, backend=args.backend,
-                              swap_handedness=args.swap_handedness, tracker=tracker)
+            return live_source(args, *PROFILES[0], tracker=tracker)
 
-        crun = ConfidenceRun(conf_factory, RealConsole(), confs, seconds_per_pose=args.seconds_per_pose,
-                             out_dir=Path(args.out_dir) if args.out_dir else None)
+        run_tool(lambda: ConfidenceRun(conf_factory, RealConsole(), confs, seconds_per_pose=args.seconds_per_pose,
+                                       out_dir=args.out_dir))
 
-        def go_conf() -> int:
-            crun.execute()
-            return 2 if crun.error else 0
-
-        run_main(go_conf)
-        return 0
-
-    def factory(w: int, h: int) -> FrameSource:
-        return LiveSource(w, h, index=args.camera_index, backend=args.backend, swap_handedness=args.swap_handedness)
-
-    run = ProfileRun(factory, RealConsole(), seconds_per_pose=args.seconds_per_pose,
-                     out_dir=Path(args.out_dir) if args.out_dir else None)
-
-    def go() -> int:
-        run.execute()
-        return 2 if run.error else 0
-
-    run_main(go)
-    return 0
+    run_tool(lambda: ProfileRun(lambda w, h: live_source(args, w, h), RealConsole(),
+                                seconds_per_pose=args.seconds_per_pose, out_dir=args.out_dir))
 
 
 if __name__ == "__main__":

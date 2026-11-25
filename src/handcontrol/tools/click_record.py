@@ -13,7 +13,8 @@ from statistics import mean, median
 from typing import Any, Sequence
 
 from ..contracts import FingerName, FingerState, FrameFeatures, Handedness, Quality
-from .common import Console, FrameSource, LiveSource, RealConsole, add_camera_args, percentile, pump_source
+from ..filters import percentile
+from .common import Console, FrameSource, RealConsole, add_camera_args, live_source, pump_source
 from .report import default_reports_dir
 
 Row = dict[str, Any]
@@ -379,7 +380,6 @@ class ClickRecordRun:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Gerçek el verisiyle tıklama ölçümü (girdi göndermez).")
     add_camera_args(parser)
-    parser.add_argument("--swap-handedness", action="store_true", help="Sağ/sol etiketlerini değiştir")
     for name, default in vars(RecordConfig()).items():
         parser.add_argument("--" + name.replace("_", "-"), type=int if name.endswith("repeats") else float, default=default)
     args = parser.parse_args(argv)
@@ -388,9 +388,7 @@ def main(argv: list[str] | None = None) -> int:
         config.validate()
     except ValueError as exc:
         parser.error(str(exc))
-    run = ClickRecordRun(LiveSource(index=args.camera_index, backend=args.backend, swap_handedness=args.swap_handedness),
-                         RealConsole(), config=config, out_dir=Path(args.out_dir) if args.out_dir else None)
-    result = run.execute()
+    result = ClickRecordRun(live_source(args), RealConsole(), config=config, out_dir=args.out_dir).execute()
     return 2 if result["interrupted"] or not result["usable_frames"] else 0
 
 

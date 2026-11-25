@@ -16,13 +16,13 @@ from . import report as rp
 from .common import (
     Console,
     FrameSource,
-    LiveSource,
     Observation,
     RealConsole,
-    ToolError,
+    ToolRun,
     add_camera_args,
     ask_conditions,
-    run_main,
+    live_source,
+    run_tool,
 )
 
 TOOL = "clap_test"
@@ -107,7 +107,9 @@ def decide(
     return rp.STATUS_TAMAM, rp.KARAR_KALDI, "; ".join(why) + ". Ayar sonrası farklı dizide yeniden test."
 
 
-class ClapRun:
+class ClapRun(ToolRun):
+    tool = TOOL
+
     def __init__(
         self, source: FrameSource, console: Console, *, claps: int = FULL_CLAPS,
         seconds: float = FULL_SECONDS, out_dir: Optional[Path] = None,
@@ -118,18 +120,12 @@ class ClapRun:
             from ..gestures import GestureRecognizer
 
             recognizer = GestureRecognizer()
-        self.source, self.console, self.claps, self.seconds = source, console, claps, seconds
-        self.out_dir, self.recognizer, self.window_ms = out_dir, recognizer, window_ms
+        super().__init__(source, console, out_dir, software)
+        self.claps, self.seconds, self.recognizer, self.window_ms = claps, seconds, recognizer, window_ms
         self.stats = ClapStats()
-        self.conditions: dict[str, str] = {}
-        self.error: Optional[str] = None
         self.phase1_done = False
         self.phase2_done = False
-        self._software = software
         self._last_capture = -1.0
-        self.stem = rp.timestamp_stem(TOOL)
-        self.md_path: Optional[Path] = None
-        self.json_path: Optional[Path] = None
         self._idle_stray = True       # pump counts strays only while waiting for Enter
 
     # one unique frame -> gesture events; repeated capture times are ignored
@@ -190,20 +186,13 @@ class ClapRun:
     def build_report(self, interrupted: bool) -> rp.Report:
         st = self.stats
         status, karar, note = decide(st, self.claps, self.seconds, self.phase1_done, self.phase2_done, interrupted)
-        if self.error:
-            note = f"{note} Hata: {self.error}"
-        sw = self._software if self._software is not None else rp.collect_software()
-        self._software = sw
-        try:
-            cam = self.source.camera_info()
-        except Exception:
-            cam = {}
         s = st.summary()
         rehearsal = self.claps < FULL_CLAPS or self.seconds < FULL_SECONDS
         return rp.Report(
             tool=TOOL,
             title="Alkış kapısı" + (" - PROVA" if rehearsal else ""),
-            stem=self.stem, status=status, environment=rp.collect_environment(cam), software=sw,
+            stem=self.stem, status=status, environment=rp.collect_environment(self.camera_info()),
+            software=self.software(),
             conditions=self.conditions,
             experiment=[
                 f"Aşama 1: {self.claps} kasıtlı alkış, tek tek istemli; her pencere {self.window_ms / 1000:.1f} sn.",
@@ -219,58 +208,25 @@ class ClapRun:
             ],
             raw={"claps": self.claps, "seconds": self.seconds, "per_clap": st.per_clap, "stats": s,
                  "phase1_done": self.phase1_done, "phase2_done": self.phase2_done},
-            decision=karar, decision_note=note,
+            decision=karar, decision_note=self.with_error(note),
         )
 
-    def _save(self, interrupted: bool) -> rp.Report:
-        r = self.build_report(interrupted)
-        self.md_path, self.json_path = rp.save_report(r, self.out_dir)
-        return r
-
-    def execute(self) -> rp.Report:
-        say = self.console.say
-        interrupted = True
-        try:
-            self.source.open()
-            self.conditions = ask_conditions(self.console)
-            self._prompted_phase()
-            self._session_phase()
-            interrupted = False
-        except KeyboardInterrupt:
-            say("\nDurduruldu (Ctrl+C). Kısmi sonuç kaydediliyor...")
-        except ToolError as exc:
-            self.error = str(exc)
-            say(f"HATA: {exc}")
-        finally:
-            try:
-                self.source.close()
-            except Exception:
-                pass
-        report = self._save(interrupted)
-        say(f"Karar: {report.decision} ({report.status})")
-        say(f"Rapor: {self.md_path}")
-        return report
+    def measure(self) -> bool:
+        self.source.open()
+        self.conditions = ask_conditions(self.console)
+        self._prompted_phase()
+        self._session_phase()
+        return True
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="handcontrol.tools.clap_test", description="Alkış kabul kapısı")
     p.add_argument("--claps", type=int, default=FULL_CLAPS, help="alkış sayısı (20 altı = prova)")
     p.add_argument("--seconds", type=float, default=FULL_SECONDS, help="sıradan oturum süresi (300 altı = prova)")
-    p.add_argument("--swap-handedness", action="store_true")
     add_camera_args(p)
     args = p.parse_args(argv)
-    run = ClapRun(
-        LiveSource(index=args.camera_index, backend=args.backend, swap_handedness=args.swap_handedness),
-        RealConsole(), claps=args.claps, seconds=args.seconds,
-        out_dir=Path(args.out_dir) if args.out_dir else None,
-    )
-
-    def go() -> int:
-        run.execute()
-        return 2 if run.error else 0
-
-    run_main(go)
-    return 0
+    run_tool(lambda: ClapRun(live_source(args), RealConsole(), claps=args.claps, seconds=args.seconds,
+                             out_dir=args.out_dir))
 
 
 if __name__ == "__main__":

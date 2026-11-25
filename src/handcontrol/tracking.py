@@ -12,6 +12,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .filters import percentile
 from .contracts import FrameSample, Handedness, HandSample, Landmark
 
 MODEL_RELATIVE = Path("assets") / "models" / "hand_landmarker.task"
@@ -250,16 +251,6 @@ class HandTracker:
         return tuple(hands)
 
 
-def _percentile(values: list[float], q: float) -> float:
-    if not values:
-        return 0.0
-    s = sorted(values)
-    k = (len(s) - 1) * q
-    lo = int(k)
-    hi = min(lo + 1, len(s) - 1)
-    return s[lo] + (s[hi] - s[lo]) * (k - lo)
-
-
 def _longest_gap_ms(times: list[float], empty: list[bool]) -> float:
     """Longest zero-hand run: from the last frame that had a hand (or the run start) to the run's last frame."""
     best = 0.0
@@ -298,15 +289,15 @@ class TrackingStats:
         intervals = [b - a for a, b in zip(done, done[1:]) if b > a]
         rates = [1000.0 / d for d in intervals]
         return {
-            "capture_age_ms_p50": _percentile(age, 0.5),
-            "capture_age_ms_p95": _percentile(age, 0.95),
-            "inference_ms_p50": _percentile(infer, 0.5),
-            "inference_ms_p95": _percentile(infer, 0.95),
+            "capture_age_ms_p50": percentile(age, 0.5),
+            "capture_age_ms_p95": percentile(age, 0.95),
+            "inference_ms_p50": percentile(infer, 0.5),
+            "inference_ms_p95": percentile(infer, 0.95),
             "output_fps": (len(done) - 1) * 1000.0 / (done[-1] - done[0])
             if len(done) > 1 and done[-1] > done[0]
             else 0.0,
-            "output_fps_p50": _percentile(rates, 0.5),
-            "output_fps_p95": _percentile(rates, 0.95),
+            "output_fps_p50": percentile(rates, 0.5),
+            "output_fps_p95": percentile(rates, 0.95),
             "samples": float(len(done)),
             "no_hand_ratio": (sum(empty) / len(empty)) if empty else 0.0,
             "no_hand_longest_ms": _longest_gap_ms(done, empty),

@@ -1,4 +1,4 @@
-"""Time-aware smoothing and hysteresis helpers. Stdlib only.
+"""Time-aware smoothing, hysteresis and percentile helpers. Stdlib only.
 
 All timestamps are monotonic milliseconds (float), matching handcontrol.contracts.
 """
@@ -13,6 +13,17 @@ T = TypeVar("T")
 def _alpha(cutoff_hz: float, dt_s: float) -> float:
     tau = 1.0 / (2.0 * math.pi * cutoff_hz)
     return 1.0 / (1.0 + tau / dt_s)
+
+
+def percentile(values: list[float], q: float) -> float:
+    """Linear interpolation between the sorted values; 0 without values."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    k = (len(s) - 1) * q
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (k - lo)
 
 
 class OneEuroFilter2D:

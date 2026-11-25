@@ -18,13 +18,13 @@ from . import report as rp
 from .common import (
     Console,
     FrameSource,
-    LiveSource,
     RealConsole,
-    ToolError,
+    ToolRun,
     add_camera_args,
     ask_conditions,
+    live_source,
     pump_source,
-    run_main,
+    run_tool,
 )
 
 TOOL = "finger_test"
@@ -307,7 +307,9 @@ def check_handedness(
 # ------------------------------------------------------------------ runner
 
 
-class FingerTestRun:
+class FingerTestRun(ToolRun):
+    tool = TOOL
+
     def __init__(
         self,
         source: FrameSource,
@@ -322,21 +324,13 @@ class FingerTestRun:
         software: Optional[dict[str, Any]] = None,
         evaluator_kwargs: Optional[dict[str, Any]] = None,
     ) -> None:
-        self.source = source
-        self.console = console
-        self.out_dir = out_dir
+        super().__init__(source, console, out_dir, software)
         self.swap = swap_handedness
         self.evaluator_kwargs = evaluator_kwargs or {}
         self.current_trial: Optional[Trial] = None
-        self.error: Optional[str] = None
         self.handedness: dict[str, Any] = {}
-        self.conditions: dict[str, str] = {}
         self.results: list[dict[str, Any]] = []
-        self._interrupted = False
         self._stopped_note = ""
-        self._software = software
-        self.md_path: Optional[Path] = None
-        self.json_path: Optional[Path] = None
 
         if resume:
             raw = resume["raw"]
@@ -353,7 +347,6 @@ class FingerTestRun:
         else:
             self.hands, self.trials, self.seed = hands, trials, seed
             self.plan = build_plan(hands, trials, seed)
-            self.stem = rp.timestamp_stem(TOOL)
         self.rehearsal = is_rehearsal(self.trials, self.hands)
 
     # ---- report assembly (called after every trial so a crash loses nothing)
@@ -362,27 +355,19 @@ class FingerTestRun:
         status, karar, note = decide(gate, interrupted)
         if self._stopped_note:
             status, karar, note = rp.STATUS_YARIM, rp.KARAR_YAPILMADI, self._stopped_note
-        if self.error:
-            note = f"{note} Hata: {self.error}".strip()
-        try:
-            cam = self.source.camera_info()
-        except Exception:
-            cam = {}
-        sw = self._software if self._software is not None else rp.collect_software()
-        self._software = sw
         done = len(self.results)
         fails: dict[str, int] = {}
         for r in self.results:
             if r["outcome"] != OUTCOME_OK:
                 fails[r["outcome"]] = fails.get(r["outcome"], 0) + 1
         label = self.handedness.get("sonuc", "yapılmadı")
-        report = rp.Report(
+        return rp.Report(
             tool=TOOL,
             title="On parmak doğruluk kapısı (kamera)" + (" - PROVA" if self.rehearsal else ""),
             stem=self.stem,
             status=status,
-            environment=rp.collect_environment(cam),
-            software=sw,
+            environment=rp.collect_environment(self.camera_info()),
+            software=self.software(),
             conditions=self.conditions,
             experiment=[
                 f"Eller: {', '.join(HAND_TR[h] for h in self.hands)}; parmak x durum x {self.trials} deneme "
@@ -418,9 +403,8 @@ class FingerTestRun:
             },
             details_md=self._details(gate),
             decision=karar,
-            decision_note=note,
+            decision_note=self.with_error(note),
         )
-        return report
 
     def _details(self, gate: GateResult) -> str:
         lines = ["## Grup sonuçları", "", "| El | Parmak | Durum | Doğru/Toplam | Gerekli | Sonuç |", "|---|---|---|---|---|---|"]
@@ -435,11 +419,6 @@ class FingerTestRun:
             rows = [r for r in self.results if r["distance"] == dist and r["view"] == view]
             lines.append(f"| {dist} | {view} | {sum(1 for r in rows if r['outcome'] == OUTCOME_OK)}/{len(rows)} |")
         return "\n".join(lines)
-
-    def _save(self, interrupted: bool) -> rp.Report:
-        report = self.build_report(interrupted)
-        self.md_path, self.json_path = rp.save_report(report, self.out_dir)
-        return report
 
     # ---- trial loop
     def _wait_enter(self, prompt: str) -> float:
@@ -459,65 +438,42 @@ class FingerTestRun:
             if self.source.now_ms() - enter_ms > limit:
                 return TrialOutcome("yerlesmedi", "-", None)
 
-    def execute(self) -> rp.Report:
+    def measure(self) -> bool:
         say = self.console.say
-        try:
-            self.source.open()
-            if not self.conditions:
-                self.conditions = ask_conditions(self.console)
-            self.handedness = check_handedness(self.source, self.console, swap_used=self.swap)
-            outcome = self.handedness["sonuc"]
-            if outcome != "dogru":
-                if outcome == "ters":
-                    hint = (
-                        "Sağ el SOL olarak okundu. Etiketler ters. Yeniden çalıştırın: "
-                        "python -m handcontrol.tools.finger_test --swap-handedness"
-                        if not self.swap
-                        else "Sağ el hâlâ SOL okunuyor. --swap-handedness olmadan yeniden deneyin."
-                    )
-                else:
-                    hint = "El etiketi doğrulanamadı. Işığı/mesafeyi düzeltip yeniden deneyin."
-                say(hint)
-                self._stopped_note = f"El etiketi kontrolü başarısız ({outcome}). {hint}"
-                return self._finish(True)
+        self.source.open()
+        if not self.conditions:
+            self.conditions = ask_conditions(self.console)
+        self.handedness = check_handedness(self.source, self.console, swap_used=self.swap)
+        outcome = self.handedness["sonuc"]
+        if outcome != "dogru":
+            if outcome != "ters":
+                hint = "El etiketi doğrulanamadı. Işığı/mesafeyi düzeltip yeniden deneyin."
+            elif self.swap:
+                hint = "Sağ el hâlâ SOL okunuyor. --swap-handedness olmadan yeniden deneyin."
+            else:
+                hint = ("Sağ el SOL olarak okundu. Etiketler ters. Yeniden çalıştırın: "
+                        "python -m handcontrol.tools.finger_test --swap-handedness")
+            say(hint)
+            self._stopped_note = f"El etiketi kontrolü başarısız ({outcome}). {hint}"
+            return False
 
-            say(f"Başlıyoruz: {len(self.plan) - len(self.results)} sunum kaldı. Durdurmak için Ctrl+C (kısmi sonuç kaydedilir).")
-            if self.rehearsal:
-                say("UYARI: Bu bir PROVA; kabul sayılmaz.")
-            for trial in self.plan[len(self.results):]:
-                self.current_trial = trial
-                if trial.index == 0 or trial.block != self.plan[trial.index - 1].block:
-                    say("")
-                    say(f"=== BLOK {trial.block + 1}/{self.trials}: mesafe {trial.distance.upper()}, görünüm {trial.view.upper()} ===")
-                    self._wait_enter("  Bu konuma geçtiyseniz Enter: ")
-                say(f"[{trial.index + 1}/{len(self.plan)}] {instruction(trial)}")
-                out = self._run_trial(trial)
-                rec = asdict(trial)
-                rec.update(outcome=out.outcome, observed=out.observed, settle_ms=out.settle_ms, correct=out.correct)
-                self.results.append(rec)
-                say("  -> " + ("DOĞRU" if out.correct else f"HATA: {OUTCOME_TR[out.outcome]}"))
-                self._save(True)
-            self.current_trial = None
-            return self._finish(False)
-        except KeyboardInterrupt:
-            say("\nDurduruldu (Ctrl+C). Kısmi sonuç kaydediliyor...")
-            return self._finish(True)
-        except ToolError as exc:
-            self.error = str(exc)
-            say(f"HATA: {exc}")
-            return self._finish(True)
-        finally:
-            try:
-                self.source.close()
-            except Exception:
-                pass
-
-    def _finish(self, interrupted: bool) -> rp.Report:
-        self._interrupted = interrupted
-        report = self._save(interrupted)
-        self.console.say(f"Karar: {report.decision} ({report.status})")
-        self.console.say(f"Rapor: {self.md_path}")
-        return report
+        say(f"Başlıyoruz: {len(self.plan) - len(self.results)} sunum kaldı. Durdurmak için Ctrl+C (kısmi sonuç kaydedilir).")
+        if self.rehearsal:
+            say("UYARI: Bu bir PROVA; kabul sayılmaz.")
+        for trial in self.plan[len(self.results):]:
+            self.current_trial = trial
+            if trial.index == 0 or trial.block != self.plan[trial.index - 1].block:
+                say("")
+                say(f"=== BLOK {trial.block + 1}/{self.trials}: mesafe {trial.distance.upper()}, görünüm {trial.view.upper()} ===")
+                self._wait_enter("  Bu konuma geçtiyseniz Enter: ")
+            say(f"[{trial.index + 1}/{len(self.plan)}] {instruction(trial)}")
+            out = self._run_trial(trial)
+            self.results.append({**asdict(trial), "outcome": out.outcome, "observed": out.observed,
+                                 "settle_ms": out.settle_ms, "correct": out.correct})
+            say("  -> " + ("DOĞRU" if out.correct else f"HATA: {OUTCOME_TR[out.outcome]}"))
+            self.save(True)
+        self.current_trial = None
+        return True
 
 
 # ------------------------------------------------------------------ CLI
@@ -528,7 +484,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--trials", type=int, default=FULL_TRIALS, help="grup başına deneme (20 altı = prova)")
     p.add_argument("--hand", choices=("left", "right", "both"), default="both")
     p.add_argument("--resume", default=None, help="yarım kalan sonuç dosyası (.json)")
-    p.add_argument("--swap-handedness", action="store_true", help="sağ/sol etiketi ters okunuyorsa")
     p.add_argument("--seed", type=int, default=None)
     add_camera_args(p)
     args = p.parse_args(argv)
@@ -540,19 +495,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         p.error("--resume dosyası finger_test sonucu değil")
     hands = HANDS if args.hand == "both" else (args.hand,)
     swap = args.swap_handedness or bool(resume and resume["raw"]["config"].get("swap_handedness"))
-    source = LiveSource(index=args.camera_index, backend=args.backend, swap_handedness=swap)
-    run = FingerTestRun(
-        source, RealConsole(), hands=hands, trials=args.trials, seed=args.seed,
-        out_dir=Path(args.out_dir) if args.out_dir else None,
-        swap_handedness=swap, resume=resume,
-    )
-
-    def go() -> int:
-        run.execute()
-        return 2 if run.error else 0
-
-    run_main(go)
-    return 0
+    run_tool(lambda: FingerTestRun(
+        live_source(args, swap=swap), RealConsole(), hands=hands, trials=args.trials, seed=args.seed,
+        out_dir=args.out_dir, swap_handedness=swap, resume=resume,
+    ))
 
 
 if __name__ == "__main__":

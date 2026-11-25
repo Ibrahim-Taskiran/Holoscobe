@@ -9,9 +9,11 @@ import argparse
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Protocol
+from pathlib import Path
+from typing import Any, Callable, Iterator, Optional, Protocol
 
 from ..contracts import CameraState, FrameFeatures
+from . import report as rp
 
 
 class ToolError(Exception):
@@ -77,16 +79,6 @@ def monotonic_ms() -> float:
     return time.monotonic() * 1000.0
 
 
-def percentile(values: list[float], q: float) -> float:
-    if not values:
-        return 0.0
-    s = sorted(values)
-    k = (len(s) - 1) * q
-    lo = int(k)
-    hi = min(lo + 1, len(s) - 1)
-    return s[lo] + (s[hi] - s[lo]) * (k - lo)
-
-
 class LiveSource:
     """Real camera -> HandTracker -> FeatureExtractor. Never reuses a frame (Camera guarantees it)."""
 
@@ -112,7 +104,6 @@ class LiveSource:
         self.camera = camera or Camera(self.config)
         self.tracker = tracker or HandTracker(swap_handedness=swap_handedness)
         self.extractor = extractor or FeatureExtractor()
-        self._opened = False
 
     def now_ms(self) -> float:
         return monotonic_ms()
@@ -131,7 +122,6 @@ class LiveSource:
         except FileNotFoundError as exc:
             self.close()
             raise ToolError(str(exc)) from exc
-        self._opened = True
 
     def next(self, timeout_s: float = 0.2) -> Optional[Observation]:
         if self.camera.state == CameraState.ERROR:
@@ -151,7 +141,6 @@ class LiveSource:
                 fn()
             except Exception:
                 pass
-        self._opened = False
 
     def camera_info(self) -> dict[str, Any]:
         cam = self.camera
@@ -167,7 +156,14 @@ class LiveSource:
 def add_camera_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--camera-index", type=int, default=0, help="kamera numarası")
     p.add_argument("--backend", choices=("msmf", "dshow", "auto"), default="msmf")
-    p.add_argument("--out-dir", default=None, help="rapor klasörü (varsayılan Docs/reports)")
+    p.add_argument("--out-dir", type=Path, default=None, help="rapor klasörü (varsayılan Docs/reports)")
+    p.add_argument("--swap-handedness", action="store_true", help="sağ/sol etiketi ters okunuyorsa")
+
+
+def live_source(args: argparse.Namespace, *size: int, swap: bool = False, tracker: Any = None) -> LiveSource:
+    """Camera source of the parsed camera arguments."""
+    return LiveSource(*size, index=args.camera_index, backend=args.backend,
+                      swap_handedness=swap or args.swap_handedness, tracker=tracker)
 
 
 def ask_conditions(console: Console) -> dict[str, str]:
@@ -189,10 +185,96 @@ def pump_source(source: FrameSource) -> Callable[[], None]:
     return pump
 
 
-def run_main(fn: Callable[[], int]) -> None:
-    """Shared entry point: Turkish camera/tool errors print cleanly, exit code 2."""
+def frames(source: FrameSource, seconds: float, poll_s: float = 0.2) -> Iterator[Observation]:
+    """Observations captured from now on, for `seconds`."""
+    start = source.now_ms()
+    while source.now_ms() - start < seconds * 1000.0:
+        obs = source.next(poll_s)
+        if obs is not None and obs.frame.capture_ms >= start:
+            yield obs
+
+
+def close_quietly(source: FrameSource) -> None:
     try:
-        code = fn()
+        source.close()
+    except Exception:
+        pass
+
+
+def md_table(title: str, columns: list[tuple[str, str]], rows: list[dict[str, Any]]) -> str:
+    """Markdown section with one table; columns are (heading, row key)."""
+    def line(cells) -> str:
+        return "| " + " | ".join(cells) + " |"
+    return "\n".join([f"## {title}", "", line(c[0] for c in columns), "|" + "---|" * len(columns),
+                      *(line(str(r.get(c[1], "-")) for c in columns) for r in rows)])
+
+
+class ToolRun:
+    """One measurement: run it, keep the partial result on Ctrl+C or a camera error, report and close."""
+
+    tool = ""
+
+    def __init__(self, source: Optional[FrameSource], console: Console, out_dir: Optional[Path],
+                 software: Optional[dict[str, Any]]) -> None:
+        self.source, self.console, self.out_dir, self._software = source, console, out_dir, software
+        self.conditions: dict[str, str] = {}
+        self.error: Optional[str] = None
+        self.stem = rp.timestamp_stem(self.tool)
+        self.md_path: Optional[Path] = None
+        self.json_path: Optional[Path] = None
+
+    def measure(self) -> bool:
+        """The measurement itself; True when it ran to the end."""
+        raise NotImplementedError
+
+    def build_report(self, interrupted: bool) -> rp.Report:
+        raise NotImplementedError
+
+    def software(self) -> dict[str, Any]:
+        if self._software is None:
+            self._software = rp.collect_software()
+        return self._software
+
+    def camera_info(self) -> dict[str, Any]:
+        try:
+            return self.source.camera_info()  # type: ignore[union-attr]
+        except Exception:
+            return {}
+
+    def with_error(self, note: str) -> str:
+        return f"{note} Hata: {self.error}".strip() if self.error else note
+
+    def save(self, interrupted: bool) -> rp.Report:
+        report = self.build_report(interrupted)
+        self.md_path, self.json_path = rp.save_report(report, self.out_dir)
+        return report
+
+    def execute(self) -> rp.Report:
+        say = self.console.say
+        interrupted = True
+        try:
+            try:
+                interrupted = not self.measure()
+            except KeyboardInterrupt:
+                say("\nDurduruldu (Ctrl+C). Kısmi sonuç kaydediliyor...")
+            except ToolError as exc:
+                self.error = str(exc)
+                say(f"HATA: {exc}")
+            report = self.save(interrupted)
+        finally:
+            if self.source is not None:
+                close_quietly(self.source)
+        say(f"Karar: {report.decision} ({report.status})")
+        say(f"Rapor: {self.md_path}")
+        return report
+
+
+def run_tool(make: Callable[[], ToolRun]) -> None:
+    """Entry point: Turkish camera/tool errors print cleanly, exit code 2."""
+    try:
+        run = make()
+        run.execute()
+        code = 2 if run.error else 0
     except ToolError as exc:
         print(f"HATA: {exc}", file=sys.stderr)
         code = 2
