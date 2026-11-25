@@ -12,6 +12,8 @@ from typing import Any, Optional, Sequence
 from handcontrol.mascot.rig import MascotPose, PawTarget
 
 FACE_TIMEOUT_S, BODY_TIMEOUT_S, HAND_TIMEOUT_S = 0.7, 0.8, 0.35
+COVERED_S = 1.5                              # a hand that vanished behind or beside the other one stays this long
+WRONG_LABEL = 0.6                            # shoulder widths of travel a wrong left/right label weighs
 SIDE_KEEP = 0.35                             # a lone hand keeps its paw until it is this far (shoulder widths) over the middle
 Point = tuple[float, float]
 
@@ -48,6 +50,7 @@ class HandInfo:
     curl: float
     lean: float
     right: bool = False                      # the user's right hand, the one that draws
+    left: bool = False                       # the user's left hand; neither: not known
 
 
 def face_info(landmarks: Sequence[Any], shapes: dict[str, float], matrix: Any, aspect: float) -> FaceInfo:
@@ -93,15 +96,20 @@ def body_info(landmarks: Sequence[Any], aspect: float) -> Optional[BodyInfo]:
     shoulders = tuple(((1.0 - p.x) * aspect, p.y) for p in raw)
     if abs(shoulders[0][0] - shoulders[1][0]) < 0.05:              # side view: no usable shoulder line
         return None
-    return BodyInfo(shoulders, (point(13, 0.5), point(14, 0.5)), (point(15, 0.6), point(16, 0.6)))
+    wrists = point(15, 0.6), point(16, 0.6)
+    faint = point(15, 0.3), point(16, 0.3)
+    if None not in faint and faint[0][0] - faint[1][0] > -0.3 * abs(shoulders[0][0] - shoulders[1][0]):
+        wrists = faint                                             # crossed or touching arms hide each other
+    return BodyInfo(shoulders, (point(13, 0.5), point(14, 0.5)), wrists)
 
 
-def hand_info(landmarks: Sequence[Any], curls: Sequence[float], aspect: float, right: bool = False) -> HandInfo:
+def hand_info(landmarks: Sequence[Any], curls: Sequence[float], aspect: float, right: bool = False,
+              left: bool = False) -> HandInfo:
     w, m = landmarks[0], landmarks[9]
     dx, dy = (w.x - m.x) * aspect, w.y - m.y                       # mirrored x, y up
     fingers = [float(c) for c in curls]
     return HandInfo(((1.0 - w.x) * aspect, w.y), clamp((sum(fingers) / max(1, len(fingers)) - 0.15) / 0.6),
-                    math.atan2(dx, max(1e-6, abs(dy))) if dy > 0 else 0.0, right)
+                    math.atan2(dx, max(1e-6, abs(dy))) if dy > 0 else 0.0, right, left)
 
 
 @dataclass
@@ -118,6 +126,7 @@ class Retargeter:
     _pitch0: float = 0.0
     _yaw0: float = 0.0
     _sides: dict[int, Point] = field(default_factory=dict)
+    _last: dict[int, tuple[HandInfo, float]] = field(default_factory=dict)
 
     def set_face(self, face: Optional[FaceInfo], now: float) -> None:
         if face is None:
@@ -151,9 +160,10 @@ class Retargeter:
 
     def _assign(self, hands: Sequence[HandInfo], middle: float, span: float) -> dict[int, HandInfo]:
         if len(hands) == 2:
-            a, b = sorted(hands, key=lambda h: h.wrist[0])
-            return {0: a, 1: b}
+            return min(({0: hands[0], 1: hands[1]}, {0: hands[1], 1: hands[0]}), key=lambda p: self._cost(p, span))
         hand = hands[0]
+        if hand.right != hand.left and len(self._sides) == 2:      # the other one of two hands is covered
+            return {int(hand.right): hand}
         wrists = self.body.wrists if self.body is not None else (None, None)
         near = {s: math.dist(w, hand.wrist) for s, w in enumerate(wrists) if w is not None}
         if len(near) == 2 and abs(near[0] - near[1]) > 0.5 * span:
@@ -164,6 +174,33 @@ class Retargeter:
                 if over < SIDE_KEEP or len(self._sides) == 1 and over < 1.2:
                     return {s: hand}
         return {0 if hand.wrist[0] < middle else 1: hand}
+
+    def _cost(self, placed: dict[int, HandInfo], span: float) -> float:
+        """How unlikely it is that paw 0 (screen left, the user's left) and paw 1 copy these two hands."""
+        labels = sum(h.left if s == 1 else h.right for s, h in placed.items())
+        if len(self._sides) == 2:                                  # hands move continuously, also while they cross
+            travel = sum(math.dist(self._sides[s], h.wrist) for s, h in placed.items()) / span
+            return travel + WRONG_LABEL * labels
+        order = float(placed[0].wrist[0] > placed[1].wrist[0])
+        known = all(h.left != h.right for h in placed.values()) and placed[0].right != placed[1].right
+        return 2.0 * labels + (0.5 if known else 3.0) * order
+
+    def _covered(self, placed: dict[int, HandInfo], span: float, now: float) -> dict[int, HandInfo]:
+        """Adds the paw of a hand that was just beside the other one and is not seen any more."""
+        for s, h in placed.items():
+            self._last[s] = h, now
+        for s in (0, 1):
+            other = placed.get(1 - s)
+            if s in placed or other is None or s not in self._last:
+                continue
+            h, seen = self._last[s]
+            wrist = self.body.wrists[s] if self.body is not None and now - self.body_at < BODY_TIMEOUT_S else None
+            if wrist is not None:
+                h = replace(h, wrist=wrist)
+            elif now - seen > COVERED_S or math.dist(h.wrist, other.wrist) > 1.1 * span:
+                continue
+            placed = {**placed, s: h}
+        return placed
 
     def pose(self, now: float) -> MascotPose:
         face = self.face if self.face is not None and now - self.face_at < FACE_TIMEOUT_S else None
@@ -178,7 +215,7 @@ class Retargeter:
         span = max(0.08, math.dist(left, right))
         middle = (left[0] + right[0]) / 2
         paws = [PawTarget(), PawTarget()]
-        placed = self._assign(hands, middle, span) if hands else {}
+        placed = self._covered(self._assign(hands, middle, span), span, now) if hands else {}
         self._sides = {s: h.wrist for s, h in placed.items()}
         self.right_side = next((s for s, h in placed.items() if h.right), self.right_side)
         for s, origin in enumerate((left, right)):

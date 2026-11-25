@@ -210,7 +210,7 @@ class Mascot:
         aspect = features.width / max(1, features.height)
         self.retarget.aspect = aspect
         self.retarget.set_hands([hand_info(h.landmarks, [f.curl for f in h.fingers[1:]], aspect,
-                                           h.handedness is Handedness.RIGHT)
+                                           h.handedness is Handedness.RIGHT, h.handedness is Handedness.LEFT)
                                  for h in features.hands if len(h.landmarks) == 21], self._clock())
 
     def set_enabled(self, on: bool) -> None:

@@ -19,6 +19,13 @@ JAW_PIVOT = np.array([0.0, 1.58, 0.46])
 EYE_CENTERS = np.array([[-0.41, 2.10, 0.555], [0.41, 2.10, 0.555]])
 EAR_PIVOTS = np.array([[-0.56, 2.60, -0.04], [0.56, 2.60, -0.04]])
 PALM_UP = (np.array([0.0, 0.97, 0.25]), np.array([0.0, -0.25, 0.97]))     # toes and sole of the modelled paws
+# Ellipsoids (centre, radii) a paw stays in front of; measured on the mesh.
+HEAD_SOLID = np.array([0.0, 2.0, .06]), np.array([1.0, .92, 1.06])
+BODY_SOLID = np.array([0.0, .25, -.25]), np.array([.82, 1.25, .86])
+WRIST_R, PAW_R, PAW_UP = .24, .33, .25       # thickness of the wrist and the paw, paw centre above a raised wrist
+STRETCH, SHRUG = 1.18, .28                   # how much an arm may grow and its shoulder may move to get around the face
+CROSS_GAP, CROSS_UP = .75, .34                # short arms exaggerate an X to show it
+PAW_GAP = .52                                # two paws at the same height need this much room next to each other
 
 
 @dataclass(frozen=True)
@@ -91,6 +98,17 @@ def frame(toes, sole) -> np.ndarray:
     return np.column_stack((np.cross(y, z), y, z))
 
 
+def front_of(solid, m: np.ndarray, x: float, y: float, margin: float) -> float:
+    """z of the front side, at x, y, of an ellipsoid that moves with bone m; -inf beside it."""
+    centre, radii = solid
+    radii = radii + margin
+    at = ((np.array([x, y, 0.0]) - m[:3, 3]) @ m[:3, :3] - centre) / radii
+    along = m[2, :3] / radii
+    a, b, c = float(along @ along), float(at @ along), float(at @ at) - 1.0
+    root = b * b - a * c
+    return (math.sqrt(root) - b) / a if root > 0.0 else -math.inf
+
+
 def partial(r: np.ndarray, k: float) -> np.ndarray:
     """The rotation r, only the fraction k of it."""
     angle = math.acos(float(np.clip((np.trace(r) - 1) / 2, -1, 1)))
@@ -105,12 +123,13 @@ class CatRig:
         # Shoulder, elbow, wrist: the resting pose, and the half open arm of the mesh (see cat_model.py).
         self.arm_pose = [np.array([(side * .66, .72, -.10), (side * 1.0, -.12, 0.0), (side * .86, .16, .58)])
                          for side in (-1, 1)]
-        self.arm_rest, self.fore_bind, self.hand_bind = [], [], []
+        self.arm_rest, self.fore_bind, self.hand_bind, self.reach = [], [], [], []
         for shoulder, elbow, wrist in self.arm_pose:
             fore = rot(np.cross(elbow - shoulder, wrist - elbow), math.radians(-56))
             self.fore_bind.append(fore)
             self.hand_bind.append(fore @ rot(np.cross(wrist - elbow, PALM_UP[0]), math.radians(-25)))
             self.arm_rest.append(np.array([shoulder, elbow, elbow + fore @ (wrist - elbow)]))
+            self.reach.append(float(np.linalg.norm(elbow - shoulder) + np.linalg.norm(wrist - elbow)) * .97)
 
     def solve(self, pose: MascotPose, t: float) -> np.ndarray:
         skin = np.tile(np.eye(4), (BONES, 1, 1))
@@ -129,9 +148,56 @@ class CatRig:
             turn = rot((0, 1, 0), side * (0.45 * frown + twitch))
             flat = rot((0, 0, 1), -side * (0.30 * frown + 0.10 * pose.smile - 0.10 * raised))
             skin[bone] = head @ about(EAR_PIVOTS[s], flat @ turn @ rx(-6.0 * raised))
+        wanted, cross = self._wanted(pose.paws, skin)
         for s in (0, 1):
-            self._arm(s, pose.paws[s], skin)
+            self._arm(s, pose.paws[s], wanted[s], cross, skin)
         return skin
+
+    def _wanted(self, paws: tuple[PawTarget, PawTarget], skin: np.ndarray) -> tuple[list[np.ndarray], float]:
+        """Where the wrists of raised paws go: in front of the body and the head, beside or across each other.
+        Second value: 0 = side by side, 1 = crossed."""
+        roots = [apply(skin[SPINE], p[0]) for p in self.arm_pose]
+        flat = []
+        for s, paw in enumerate(paws):
+            side = -1.0 if s == 0 else 1.0
+            reach = self.reach[s]
+            x = float(np.clip(paw.x, -1.0, 1.5))
+            v = np.array([side * x * 1.2, float(np.clip(paw.y, -.9, 1.4)) * 1.25])
+            n = float(np.linalg.norm(v))
+            flat.append(v * min(1.0, reach * .92 / max(n, 1e-6)))
+        at = [roots[s][:2] + flat[s] for s in (0, 1)]
+        both = min(paw.weight for paw in paws)
+        gap = float(at[1][0] - at[0][0])
+        near = max(0.0, 1.0 - abs(float(at[1][1] - at[0][1])) / .7) * both
+        k = min(1.0, max(0.0, (.3 - gap) / .6))
+        cross = k * k * (3 - 2 * k)                      # 0 side by side .. 1 crossed
+        apart = (max(0.0, PAW_GAP - gap) * (1 - cross) - max(0.0, CROSS_GAP + gap) * cross) / 2 * near
+        out = []
+        for s in (0, 1):
+            side = -1.0 if s == 0 else 1.0
+            x, y = float(at[s][0]) + side * apart, float(at[s][1]) + CROSS_UP * cross * near
+            n = min(float(np.linalg.norm(flat[s])), self.reach[s] * .92)
+            free = float(roots[s][2]) + max(.35, .85 * math.sqrt(self.reach[s] ** 2 - n * n))
+            over = (.45 if s == 1 else 0.0) * min(1.0, 2 * cross) * near     # the right arm of an X passes in front
+
+            def point(y: float) -> np.ndarray:
+                up = y + PAW_UP
+                z = max(free, front_of(HEAD_SOLID, skin[HEAD], x, up, PAW_R) - .07, front_of(HEAD_SOLID, skin[HEAD], x, y, WRIST_R),
+                        front_of(BODY_SOLID, skin[SPINE], x, y, WRIST_R))
+                return np.array([x, y, z + over])
+            limit = self.reach[s] * STRETCH + SHRUG
+            p = point(y)
+            if np.linalg.norm(p - roots[s]) > limit:             # too far around the face: lower the paw until it fits
+                low, high = min(y, .8), y
+                for _ in range(8):
+                    middle = (low + high) / 2
+                    if np.linalg.norm(point(middle) - roots[s]) > limit:
+                        high = middle
+                    else:
+                        low = middle
+                p = point(low)
+            out.append(p)
+        return out, cross * near
 
     def hand(self, skin: np.ndarray, s: int) -> np.ndarray:
         """Frame of a paw: origin at the wrist, +Z towards the toes, -Y out of the pads."""
@@ -140,25 +206,25 @@ class CatRig:
         m[:3, 3] = apply(skin[ARMS[s][2]], self.arm_rest[s][2])
         return m
 
-    def _arm(self, s: int, paw: PawTarget, skin: np.ndarray) -> None:
+    def _arm(self, s: int, paw: PawTarget, wanted: np.ndarray, cross: float, skin: np.ndarray) -> None:
         side = -1.0 if s == 0 else 1.0
         spine, arm, rest = skin[SPINE], ARMS[s], self.arm_rest[s]
         root, elbow, resting = (apply(spine, p) for p in self.arm_pose[s])
         upper, lower = (float(n) for n in np.linalg.norm(np.diff(rest, axis=0), axis=1))
-        reach = (upper + lower) * .97
+        reach = self.reach[s]
         w = float(np.clip(paw.weight, 0, 1))
         w = w * w * (3 - 2 * w)
-        flat = np.array([side * np.clip(paw.x, -.45, 1.5) * 1.2, np.clip(paw.y, -.9, 1.4) * 1.25])
-        n = float(np.linalg.norm(flat))
-        if n > reach * .92:
-            flat *= reach * .92 / n
-            n = reach * .92
-        # Paws stay in front of the body; a stretched arm has no depth left.
-        wanted = root + np.array([*flat, max(.35, .85 * math.sqrt(reach ** 2 - n * n))])
         arc = math.sin(math.pi * w)
         target = resting + (wanted - resting) * w + np.array([0, 0, .25 * arc])
         natural = elbow - root
+        way = target - root
+        far = float(np.linalg.norm(way))
+        shrug = way / far * min(SHRUG, max(0.0, far - reach) * .6)
+        root = root + shrug
+        size = min(STRETCH, max(1.0 + .12 * cross * w, float(np.linalg.norm(target - root)) / reach))
+        upper, lower, reach = upper * size, lower * size, reach * size
         free = np.array([side * (.75 + .25 * paw.elbow), -.85 + .75 * paw.elbow, -.15])
+        free = free * (1 - cross) + np.array([side * 1.3, -1.0, .1]) * cross          # elbows of an X stay low
         pole = natural / np.linalg.norm(natural) * (1 - w) + free / np.linalg.norm(free) * w
         delta = target - root
         d = float(np.clip(np.linalg.norm(delta), abs(upper - lower) + .05, reach))
@@ -171,7 +237,9 @@ class CatRig:
         for i in range(2):
             m = np.eye(4)
             m[:3, :3] = between(base[:3, :3] @ (rest[i + 1] - rest[i]), joints[i + 1] - joints[i]) @ base[:3, :3]
-            m[:3, 3] = apply(base, rest[i]) - m[:3, :3] @ rest[i]
+            if i == 0:
+                m[:3, :3] *= size
+            m[:3, 3] = joints[i] - m[:3, :3] @ rest[i]
             skin[arm[i]] = base = m
         # A raised paw shows its pads, a low one points forward and down.
         fore = (joints[2] - joints[1]) / lower
@@ -180,7 +248,7 @@ class CatRig:
         sole = PALM_UP[1] * up + np.array([0, -1.0, 0]) * (1 - up)
         shown = rot((0, 0, 1), -paw.lean * up * .8) @ frame(toes, sole) @ rx(55 * paw.curl)
         m = np.eye(4)
-        m[:3, :3] = partial(shown @ frame(*PALM_UP).T @ spine[:3, :3].T, w) @ spine[:3, :3] @ self.hand_bind[s].T
+        m[:3, :3] = partial(shown @ frame(*PALM_UP).T @ spine[:3, :3].T, w) @ spine[:3, :3] @ self.hand_bind[s].T * size
         m[:3, 3] = apply(base, rest[2]) - m[:3, :3] @ rest[2]
         skin[arm[2]] = m
 

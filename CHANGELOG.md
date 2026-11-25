@@ -39,6 +39,7 @@ Not: Gerçek kamera ve ellerle donanım kabulü her iki sürümde de bir insan t
 - Maskot modeli değişti: Fripouille (CC BY 4.0) yerine proje sahibinin gri kedisi. Kabuk kürk yerine gerçek tüy geometrisi, göz küresi etrafında dönen kapaklar; uygulama simgesi (`assets/icon.ico`) ve arayüz kedisi aynı renklere geçti.
 
 ### Fixed
+- Kedi: patiler artık yüze ve gövdeye gömülmüyor, yüzün önünden geçiyor; yan yana gelen patiler birleşmiyor. Kollar çapraz yapılınca kedi de X yapıyor: eller etikete ve harekete göre kendi patisinde kalıyor, örtülen el kısa süre korunuyor.
 - Pencere menüsünde "Büyüt" ve "Diğer ekrana taşı" satırları artık kendi simgeleriyle görünüyor.
 - "Sürdür" düğmesi ve tepsi öğesi tek tıkta hem sürdürüp hem duraklatıyordu (kontrol duraklatılmış kalıyor, pencere yine de küçülüyordu); kamera düğmesi de açtığı kamerayı hemen kapatıyordu.
 - Maskot: kol kalkınca dirsek ve bilekte oluşan boğum giderildi; kol mesh'i yarı açık pozda üretiliyor.

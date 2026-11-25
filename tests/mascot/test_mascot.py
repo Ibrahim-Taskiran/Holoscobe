@@ -18,7 +18,10 @@ from handcontrol.app import fan_out
 from handcontrol.contracts import CameraState, ControlState, Mode
 from handcontrol.mascot.renderer import CatRenderer, RendererError, asset_dir, load_cat
 from handcontrol.mascot.retarget import BodyInfo, FaceInfo, HandInfo, Retargeter, body_info, face_info, hand_info
-from handcontrol.mascot.rig import ARMS, BONES, EYE_CENTERS, HEAD, SPINE, CatRig, MascotPose, PawTarget, PoseSmoother, apply, pack, unpack
+from handcontrol.mascot.rig import (
+    ARMS, BONES, EYE_CENTERS, HEAD, HEAD_SOLID, PAW_R, PAW_UP, SPINE, CatRig, MascotPose, PawTarget, PoseSmoother, apply,
+    pack, unpack,
+)
 from handcontrol.mascot.window import Mascot, MascotWindow
 
 FACE = FaceInfo((0.9, 0.35), 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, (0.0, 0.0), (0.0, 0.0))
@@ -71,6 +74,48 @@ def test_two_hands_keep_their_sides_and_a_single_hand_does_not_jump():
     r.pose(0.03)
     r.set_hands([HandInfo((0.85, 0.4), 0, 0)], 0.04)       # slightly over the middle: still the right paw
     assert r.pose(0.05).paws[1].weight == 1
+
+
+def hands_at(right, left, label=True):
+    return [HandInfo(right, 0, 0, label, False), HandInfo(left, 0, 0, False, label)]
+
+
+@pytest.mark.parametrize("label", [True, False])
+def test_crossing_hands_keep_their_paws(label):
+    r = Retargeter()
+    r.set_body(BODY, 0.0)
+    for i in range(21):
+        k = i / 20
+        hands = hands_at((1.15 - .5 * k, .45), (.65 + .5 * k, .47), label)
+        r.set_body(BODY, i / 30)
+        r.set_hands(hands if i % 2 else hands[::-1], i / 30)
+        left, right = r.pose(i / 30 + .01).paws
+    assert left.x < -.8 and right.x < -.8                  # both far over the middle: an X
+    for i in range(21, 24):                                # one wrong pair of labels does not swap them
+        r.set_hands([HandInfo((.65, .45), 0, 0, False, True), HandInfo((1.15, .47), 0, 0, True, False)], i / 30)
+        assert r.pose(i / 30).paws[1].x < -.8
+
+
+def test_arms_that_are_already_crossed_when_first_seen_are_crossed():
+    r = Retargeter()
+    r.set_body(BODY, 0.0)
+    r.set_hands(hands_at((.65, .45), (1.15, .47)), 0.0)
+    left, right = r.pose(0.01).paws
+    assert left.x < -.8 and right.x < -.8
+
+
+def test_a_hand_hidden_by_the_other_one_stays_up_for_a_moment():
+    r = Retargeter()
+    r.set_body(BODY, 0.0)
+    right, left = hands_at((.8, .45), (1.0, .47))
+    r.set_hands([right, left], 0.0)
+    r.pose(0.01)
+    r.set_hands([right], 0.3)
+    paws = r.pose(0.31).paws
+    assert paws[0].weight == 1 and paws[0].x == pytest.approx(-.4 / .6)
+    r.set_body(BODY, 2.5)
+    r.set_hands([right], 2.5)
+    assert r.pose(2.51).paws[0].weight == 0                # gone for good
 
 
 def test_body_wrists_are_used_when_the_hand_tracker_sees_nothing():
@@ -154,6 +199,40 @@ def test_paw_follows_the_wrist_and_limbs_stay_connected(rig):
         return apply(skin[arm[2]], rest[2])
     low, high = paw(-0.6), paw(0.9)
     assert high[1] > low[1] + 1.2 and low[0] > 0 and high[0] > 0
+
+
+def wrists(rig, *paws, **pose):
+    skin = rig.solve(MascotPose(paws=paws, **pose), 0.0)
+    return [apply(skin[ARMS[s][2]], rig.arm_rest[s][2]) for s in (0, 1)], skin
+
+
+@pytest.mark.parametrize("yaw", [0.0, 0.5, -0.5])
+def test_raised_paws_stay_outside_the_head(rig, yaw):
+    other = PawTarget(.5, -.5, 0, 0, 1)
+    for x in np.arange(-.9, 1.3, .2):
+        for y in np.arange(-.6, 1.4, .2):
+            (_, w), skin = wrists(rig, other, PawTarget(x, y, 0, 0, 1, .5), yaw=yaw)
+            paw = w + [0, PAW_UP, .07]                              # middle of the raised paw
+            local = (paw - skin[HEAD][:3, 3]) @ skin[HEAD][:3, :3] - HEAD_SOLID[0]
+            assert np.linalg.norm(local / (HEAD_SOLID[1] + PAW_R)) > .97, (x, y)
+
+
+def test_paws_do_not_merge_side_by_side_and_make_an_x_when_crossed(rig):
+    def both(x):
+        (left, right), _ = wrists(rig, PawTarget(x, .35, 0, 0, 1), PawTarget(x, .35, 0, 0, 1))
+        return left, right
+    left, right = both(-.4)                                          # almost touching
+    assert right[0] - left[0] > .5
+    left, right = both(-.75)                                         # wrists swapped
+    assert left[0] - right[0] > .6 and right[2] - left[2] > .3       # crossed, one arm in front of the other
+    path = [both(-.3 - .5 * i / 300) for i in range(301)]
+    assert max(np.linalg.norm(b[s] - a[s]) for a, b in zip(path, path[1:]) for s in (0, 1)) < .05
+
+
+def test_resting_and_low_paws_ignore_each_other(rig):
+    alone, _ = wrists(rig, PawTarget(), PawTarget(.4, .3, 0, 0, 1))
+    high, _ = wrists(rig, PawTarget(-.4, -.8, 0, 0, 1), PawTarget(-.4, .9, 0, 0, 1))
+    assert alone[1][0] > .9 and abs(high[0][0] - high[1][0]) < .5    # far apart in height: not pushed aside
 
 
 def test_head_turns_to_the_same_side_as_the_mirror(rig):
